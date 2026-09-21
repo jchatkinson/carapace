@@ -45,14 +45,20 @@ to be in 1997.
 
 ## Status
 
-M1 and M2 done. Real `Domain`/`Node`/`Element::{Truss,ZeroLength}`/
+M1–M3 done. Real `Domain`/`Node`/
+`Element::{Truss,ZeroLength,ElasticBeamColumn}`/
 `Material::{Elastic,ElasticPP,Gap,Ent}` types and a typestate-composed
 `Analysis` (`LoadControl` + `Linear` + a real linear solve) replace the M0
 closed-form placeholder, verified against known values on both native and
-wasm32 + Node. The M2 materials are stateless (reversible) simplifications —
-real path-dependent plasticity lands with the M7 stateful materials, after M4
-adds Newton iteration. See `docs/implementation-plan.md` for the milestone
-roadmap, starting at M3 (`ElasticBeamColumn` + `geomTransf` + element loads).
+wasm32 + Node. `ElasticBeamColumn` (M3) brought `NDF` up to 3 (2D translation
++ rotation), a `GeomTransf` (`Linear`/`PDelta`) local↔global transform, and
+element loads (uniform transverse). The M2 materials are stateless
+(reversible) simplifications — real path-dependent plasticity lands with the
+M7 stateful materials, after M4 adds Newton iteration; `PDelta` is likewise a
+first-order, non-path-following approximation until then. See
+`docs/implementation-plan.md` for the milestone roadmap, starting at M4
+(analysis composition generalization: `DisplacementControl`, `NewtonRaphson`,
+more `ConvergenceTest` variants).
 
 ## Workspace layout
 

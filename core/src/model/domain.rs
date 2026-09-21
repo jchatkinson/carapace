@@ -1,7 +1,7 @@
 use nalgebra::{DMatrix, DVector};
 use slotmap::SlotMap;
 
-use super::{Element, ElementId, Node, NodeId, NDF};
+use super::{Element, ElementId, Node, NodeId, ELEMENT_DOF, NDF};
 
 /// Owns all nodes and elements. No serialization/broker machinery (§3.3) —
 /// this is the whole model, in memory, for one worker.
@@ -77,17 +77,15 @@ impl Domain {
             let node_i = &self.nodes[id_i];
             let node_j = &self.nodes[id_j];
             let (k_local, r_local) = element.form_tangent_and_resistance(node_i, node_j);
+            let load_local = element.form_load_vector(node_i, node_j);
 
-            let equations: [Option<usize>; 4] = [
-                node_i.equation[0],
-                node_i.equation[1],
-                node_j.equation[0],
-                node_j.equation[1],
-            ];
+            let mut equations = [None; ELEMENT_DOF];
+            equations[..NDF].copy_from_slice(&node_i.equation);
+            equations[NDF..].copy_from_slice(&node_j.equation);
 
             for (a, eq_a) in equations.iter().enumerate() {
                 let Some(eq_a) = eq_a else { continue };
-                residual[*eq_a] -= r_local[a];
+                residual[*eq_a] += load_factor * load_local[a] - r_local[a];
                 for (b, eq_b) in equations.iter().enumerate() {
                     let Some(eq_b) = eq_b else { continue };
                     k[(*eq_a, *eq_b)] += k_local[(a, b)];

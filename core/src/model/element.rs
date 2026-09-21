@@ -1,7 +1,7 @@
 use nalgebra::{SMatrix, SVector};
 use slotmap::new_key_type;
 
-use super::{Material, Node, NodeId, NDF};
+use super::{ElasticBeamColumn, Material, Node, NodeId, ELEMENT_DOF, NDF};
 
 new_key_type! {
     /// Generational index into `Domain`'s element store (§3.2).
@@ -9,12 +9,13 @@ new_key_type! {
 }
 
 /// Element catalog. Closed enum, `match`-based dispatch, no `Box<dyn Trait>`
-/// (§3.1). `ElasticBeamColumn` / `DispBeamColumn` / ... land at later
+/// (§3.1). `DispBeamColumn` / `ForceBeamColumn` / ... land at later
 /// milestones per the plan's §4.1 table.
 #[derive(Debug, Clone)]
 pub enum Element {
     Truss(Truss),
     ZeroLength(ZeroLength),
+    ElasticBeamColumn(ElasticBeamColumn),
 }
 
 impl Element {
@@ -22,28 +23,46 @@ impl Element {
         match self {
             Element::Truss(t) => [t.node_i, t.node_j],
             Element::ZeroLength(z) => [z.node_i, z.node_j],
+            Element::ElasticBeamColumn(b) => [b.node_i, b.node_j],
         }
     }
 
     /// Form this element's contribution to the global tangent stiffness and
     /// internal resisting force, given its two nodes' current state.
-    /// Returned in element-local DOF order `[ux_i, uy_i, ux_j, uy_j]`; the
-    /// caller (`Domain::form_tangent_and_residual`) scatters these into the
-    /// global system using each node's equation numbers.
+    /// Returned in element-local DOF order
+    /// `[ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]`; the caller
+    /// (`Domain::form_tangent_and_residual`) scatters these into the global
+    /// system using each node's equation numbers.
     pub fn form_tangent_and_resistance(
         &self,
         node_i: &Node,
         node_j: &Node,
-    ) -> (SMatrix<f64, 4, 4>, SVector<f64, 4>) {
+    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
         match self {
             Element::Truss(t) => t.form_tangent_and_resistance(node_i, node_j),
             Element::ZeroLength(z) => z.form_tangent_and_resistance(node_i, node_j),
+            Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
+        }
+    }
+
+    /// This element's equivalent nodal load vector (global coordinates,
+    /// same DOF order as above) from any element load applied to it (§4.4)
+    /// — e.g. a beam-column's distributed transverse load. Zero for
+    /// elements with no element-load support (`Truss`, `ZeroLength`).
+    pub fn form_load_vector(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+        match self {
+            Element::Truss(_) | Element::ZeroLength(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
+            Element::ElasticBeamColumn(b) => b.form_load_vector(node_i, node_j),
         }
     }
 }
 
 /// A 2-node axial truss: fixed-size element-local linear algebra (§3.4), no
-/// heap allocation in the hot path.
+/// heap allocation in the hot path. Only ever populates the translational
+/// DOF entries of the (now 3-DOF-per-node) local/global matrices — the
+/// rotation entries stay zero, so a node connected only to `Truss`/
+/// `ZeroLength` elements needs its rotation DOF fixed by the model, or the
+/// global system is singular in that DOF.
 #[derive(Debug, Clone)]
 pub struct Truss {
     pub node_i: NodeId,
@@ -73,7 +92,7 @@ impl Truss {
         &self,
         node_i: &Node,
         node_j: &Node,
-    ) -> (SMatrix<f64, 4, 4>, SVector<f64, 4>) {
+    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
         let (length, cx, cy) = self.geometry(node_i, node_j);
 
         // Axial elongation from current nodal displacements, projected onto
@@ -83,8 +102,9 @@ impl Truss {
             / length;
         let (stress, tangent_modulus) = self.material.stress_tangent(strain);
 
-        // Direction cosine vector, local DOF order [ux_i, uy_i, ux_j, uy_j].
-        let b = SVector::<f64, 4>::from_column_slice(&[-cx, -cy, cx, cy]);
+        // Local DOF order [ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]; rotation
+        // entries (2, 5) stay zero — a truss carries no moment.
+        let b = SVector::<f64, ELEMENT_DOF>::from_column_slice(&[-cx, -cy, 0.0, cx, cy, 0.0]);
 
         let k = (tangent_modulus * self.area / length) * (b * b.transpose());
         let resistance = (stress * self.area) * b;
@@ -99,7 +119,8 @@ impl Truss {
 /// the two nodes to a force along that same (global) direction. No
 /// orientation vectors (unlike OpenSees' general `ZeroLength`, which can
 /// evaluate materials along arbitrary local axes) — directions are the
-/// global DOF axes, which is all M2's scope needs.
+/// global DOF axes (including rotation, since M3's DOF bump), which is all
+/// the current scope needs.
 #[derive(Debug, Clone)]
 pub struct ZeroLength {
     pub node_i: NodeId,
@@ -125,9 +146,9 @@ impl ZeroLength {
         &self,
         node_i: &Node,
         node_j: &Node,
-    ) -> (SMatrix<f64, 4, 4>, SVector<f64, 4>) {
-        let mut k = SMatrix::<f64, 4, 4>::zeros();
-        let mut resistance = SVector::<f64, 4>::zeros();
+    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
+        let mut k = SMatrix::<f64, ELEMENT_DOF, ELEMENT_DOF>::zeros();
+        let mut resistance = SVector::<f64, ELEMENT_DOF>::zeros();
 
         for (dof, material) in self.materials.iter().enumerate() {
             let Some(material) = material else { continue };
@@ -135,9 +156,10 @@ impl ZeroLength {
             let relative = node_j.displacement[dof] - node_i.displacement[dof];
             let (force, tangent_modulus) = material.stress_tangent(relative);
 
-            // Local DOF order [ux_i, uy_i, ux_j, uy_j]; this direction only
-            // couples node_i's and node_j's copy of the same dof.
-            let mut b = SVector::<f64, 4>::zeros();
+            // Local DOF order [ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]; this
+            // direction only couples node_i's and node_j's copy of the same
+            // dof.
+            let mut b = SVector::<f64, ELEMENT_DOF>::zeros();
             b[dof] = -1.0;
             b[NDF + dof] = 1.0;
 

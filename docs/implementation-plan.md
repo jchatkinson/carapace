@@ -426,9 +426,40 @@ wasm-specific wrong" still applies).
   `Algorithm::Linear`-is-exact condition M1's truss case relied on.
 
 - **M3 — ElasticBeamColumn + geomTransf (Linear, PDelta) + element loads.**
-  First multi-DOF-per-node element, first coordinate transformation, first
-  distributed element load (as opposed to nodal load). Establishes the
-  pattern for all subsequent frame elements.
+  ✅ Done. `Element::ElasticBeamColumn` (`core/src/model/beam.rs`): a
+  prismatic 2D Euler-Bernoulli beam-column with closed-form local stiffness
+  (no `Material` dispatch — unlike `Truss`/`ZeroLength`, its response is
+  fully determined by `e`/`a`/`iz`, no nonlinear stress-strain law), a
+  `GeomTransf` (`Linear` / `PDelta`) resolving local↔global via the
+  standard 2D block-rotation transform, and a uniform transverse
+  `w_transverse` element load converted to consistent (virtual-work)
+  equivalent nodal loads. **This bumped `NDF` from 2 to 3** (added in-plane
+  rotation) — `Truss`/`ZeroLength` only populate translational DOF entries
+  of the now-6×6 element matrices, so any node connected only to those
+  needs its rotation DOF fixed explicitly (M1/M2's tests and wasm exports
+  were updated accordingly).
+
+  `GeomTransf::PDelta` adds a linearized geometric-stiffness correction
+  from the current axial force to the *tangent* only — the resisting-force
+  recovery stays purely elastic. This is a **first-order, non-path-
+  following** approximation: within a single `Algorithm::Linear` solve from
+  a zero initial state the axial force it reacts to is read from the
+  pre-step (usually zero) displacement, so the correction only does
+  anything across multiple `LoadControl` increments (see
+  `core/tests/m3_beam.rs`'s two-increment test). Full path-consistent
+  P-Delta needs M4's Newton iteration; revisit then.
+
+  **Acceptance verified:** `core/tests/m3_beam.rs`
+  (native) + `wasm-bridge`'s `simply_supported_beam_end_rotation` (wasm32 +
+  Node) — a single-element simply-supported beam under a uniform transverse
+  load matches the closed-form end rotation `theta = w*L^3/(24*E*I)`
+  *exactly* (not approximately: a single 2-node beam element with
+  consistent equivalent nodal loads reproduces the continuous beam's nodal
+  DOFs exactly whenever there's no interior point load — the same identity
+  behind the classical fixed-end-moment method). A second native test
+  confirms `PDelta` matches `Linear` exactly at zero axial force and
+  softens a cantilever's tip deflection under compressive axial force, in
+  the intended direction.
 
 - **M4 — Analysis composition generalization.** Add `DisplacementControl`
   integrator, `NewtonRaphson` algorithm, and the remaining `ConvergenceTest`
