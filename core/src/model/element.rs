@@ -1,7 +1,7 @@
 use nalgebra::{SMatrix, SVector};
 use slotmap::new_key_type;
 
-use super::{ElasticBeamColumn, Material, Node, NodeId, ELEMENT_DOF, NDF};
+use super::{DispBeamColumn, ElasticBeamColumn, Material, Node, NodeId, ELEMENT_DOF, NDF};
 
 new_key_type! {
     /// Generational index into `Domain`'s element store (§3.2).
@@ -9,13 +9,13 @@ new_key_type! {
 }
 
 /// Element catalog. Closed enum, `match`-based dispatch, no `Box<dyn Trait>`
-/// (§3.1). `DispBeamColumn` / `ForceBeamColumn` / ... land at later
-/// milestones per the plan's §4.1 table.
+/// (§3.1). `ForceBeamColumn` lands at M8 per the plan's §4.1 table.
 #[derive(Debug, Clone)]
 pub enum Element {
     Truss(Truss),
     ZeroLength(ZeroLength),
     ElasticBeamColumn(ElasticBeamColumn),
+    DispBeamColumn(DispBeamColumn),
 }
 
 impl Element {
@@ -24,6 +24,7 @@ impl Element {
             Element::Truss(t) => [t.node_i, t.node_j],
             Element::ZeroLength(z) => [z.node_i, z.node_j],
             Element::ElasticBeamColumn(b) => [b.node_i, b.node_j],
+            Element::DispBeamColumn(b) => [b.node_i, b.node_j],
         }
     }
 
@@ -42,31 +43,35 @@ impl Element {
             Element::Truss(t) => t.form_tangent_and_resistance(node_i, node_j),
             Element::ZeroLength(z) => z.form_tangent_and_resistance(node_i, node_j),
             Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
+            Element::DispBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
         }
     }
 
     /// This element's equivalent nodal load vector (global coordinates,
     /// same DOF order as above) from any element load applied to it (§4.4)
     /// — e.g. a beam-column's distributed transverse load. Zero for
-    /// elements with no element-load support (`Truss`, `ZeroLength`).
+    /// elements with no element-load support (`Truss`, `ZeroLength`,
+    /// `DispBeamColumn` — see its doc comment for why).
     pub fn form_load_vector(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         match self {
-            Element::Truss(_) | Element::ZeroLength(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
+            Element::Truss(_) | Element::ZeroLength(_) | Element::DispBeamColumn(_) => {
+                SVector::<f64, ELEMENT_DOF>::zeros()
+            }
             Element::ElasticBeamColumn(b) => b.form_load_vector(node_i, node_j),
         }
     }
 
     /// This element's lumped-mass contribution (diagonal only — see §4.4:
     /// "lumped, to start") in the same local DOF order, geometry-dependent
-    /// (`length`) for `Truss`/`ElasticBeamColumn` so it needs both nodes.
-    /// Zero for `ZeroLength` (a spring/connector, not a mass-bearing
-    /// member) and for `Truss`/`ElasticBeamColumn` with the default
-    /// `density = 0.0`.
+    /// (`length`) so it needs both nodes. Zero for `ZeroLength` (a spring/
+    /// connector, not a mass-bearing member) and for any element with the
+    /// default `density = 0.0`.
     pub fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         match self {
             Element::Truss(t) => t.form_mass(node_i, node_j),
             Element::ZeroLength(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
             Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
+            Element::DispBeamColumn(b) => b.form_mass(node_i, node_j),
         }
     }
 
@@ -80,6 +85,7 @@ impl Element {
             Element::Truss(t) => t.commit(node_i, node_j),
             Element::ZeroLength(z) => z.commit(node_i, node_j),
             Element::ElasticBeamColumn(_) => {}
+            Element::DispBeamColumn(b) => b.commit(node_i, node_j),
         }
     }
 }
@@ -189,7 +195,7 @@ impl ZeroLength {
         ZeroLength {
             node_i,
             node_j,
-            materials: [None; NDF],
+            materials: std::array::from_fn(|_| None),
         }
     }
 

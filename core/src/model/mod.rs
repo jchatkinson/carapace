@@ -1,13 +1,19 @@
 mod beam;
+mod disp_beam_column;
 mod domain;
 mod element;
+mod fiber_section;
+mod integration;
 mod material;
 mod node;
 mod transform;
 
 pub use beam::ElasticBeamColumn;
+pub use disp_beam_column::DispBeamColumn;
 pub use domain::Domain;
 pub use element::{Element, ElementId, Truss, ZeroLength};
+pub use fiber_section::{Fiber, FiberSection};
+pub use integration::BeamIntegration;
 pub use material::Material;
 pub use node::{Node, NodeId};
 pub use transform::GeomTransf;

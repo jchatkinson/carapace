@@ -692,13 +692,171 @@ wasm-specific wrong" still applies).
   rather than partially applied.
 
 - **M7 — DispBeamColumn + fiber sections + full standard material catalog.**
-  `BeamIntegration` (Gauss-Legendre/Lobatto), fiber section stress-resultant
-  integration, and the remaining leaf materials (Hysteretic, Pinching4,
-  Concrete01/02, Steel01/02) plus the **recursive** composite materials
-  (Parallel, Series, MinMax — §4.2). This is the milestone where the
-  `Material` enum's recursive-composition design (decided at M2, not
-  deferred) gets exercised for real, now that the trial/commit state
-  mechanism it needs is already in place.
+  Being landed in stages (agreed with the project owner given this
+  milestone's unusual size relative to every other one — six new
+  materials, several genuinely complex hysteretic state machines, plus the
+  recursive composites, all bundled together in the original scoping).
+
+  **Stage 1 — `BeamIntegration` + fiber sections + `DispBeamColumn`.** ✅
+  Done. `BeamIntegration::{Legendre, Lobatto}` (`core/src/model/
+  integration.rs`) — point/weight tables copied directly from OpenSees's
+  own source (`xara/SRC/quadrature/Frame/{Legendre,Lobatto}
+  BeamIntegration.cpp`), not computed via a general-purpose quadrature
+  crate: domain-specific numerics are copied from the reference
+  implementation, the same policy already applied to element/material
+  formulations — heavily-optimized linear algebra (`nalgebra`/`faer`) is
+  the one place a library is preferred over hand-rolling. `FiberSection`
+  (`core/src/model/fiber_section.rs`): given section deformation
+  `(eps0, kappa)`, each fiber's strain is `eps0 - y*kappa`; the
+  work-conjugate stress resultants `(N, M)` and section tangent are
+  derived directly from virtual work (documented in the module), not
+  assumed. `DispBeamColumn` (`core/src/model/disp_beam_column.rs`): the
+  same cubic-Hermite/linear-axial local shape functions
+  `ElasticBeamColumn` uses give the strain-displacement field directly
+  from nodal displacements (a single evaluation, no Newton loop of its
+  own — unlike M8's `ForceBeamColumn`), integrated over `BeamIntegration`
+  points, each owning an independent `FiberSection` (prismatic-member
+  assumption: same fiber layout everywhere, but independent material
+  history per point, since each point's strain path differs). `Linear`
+  transform only, no element loads yet — both explicitly deferred, not
+  silently unsupported (see the type's doc comment).
+
+  **Acceptance verified:** a 2-fiber elastic section
+  (`y = ±sqrt(Iz/A)`, area `A/2` each) reproduces `EA`/`EI` exactly
+  (`FiberSection`'s unit test), and — because the underlying integrand is
+  then a low-degree polynomial any >=2-point Gauss rule integrates
+  exactly — a cantilever `DispBeamColumn` built from it matches
+  `ElasticBeamColumn`'s closed-form tip deflection *exactly* (1e-9,
+  `core/tests/m7_disp_beam_column.rs`, native + wasm32/Node via
+  `disp_beam_column_cantilever_tip_deflection`), and Legendre vs. Lobatto
+  integration give the identical exact answer — not an approximation
+  that happens to be close, a real equivalence.
+
+  **Stage 2 — `Steel01`, `Concrete01`, `Parallel`/`Series`/`MinMax`.** ✅
+  Done. `Material` (`core/src/model/material.rs`) gained five new
+  variants, all following the trial/commit purity recipe from the type's
+  doc comment — every `evaluate` is still a pure `&self` function of the
+  committed state, never mutating anything. `Steel01`: bilinear kinematic
+  hardening with isotropic hardening on load reversal (Filippou 1983),
+  ported from `Steel01::determineTrialState` — the `Steel01Loading`
+  history field is a real 3-state enum, not OpenSees' sentinel `-1/0/1`.
+  `Concrete01`: Kent-Scott-Park compression envelope with the
+  Karsan-Jirsa degrading unload/reload rule and zero tensile strength,
+  ported from `Concrete01::setTrialStrain` (the version actually driving
+  the state machine — `determineTrialState` is dead code in the OpenSees
+  source, never called). `Parallel(Vec<(Material, f64)>)`: same strain to
+  every child, factor-weighted stress/tangent sum. `Series`: same stress
+  across children, total strain = sum of individual strains — not
+  directly invertible, so `evaluate` runs its own small internal
+  flexibility-based Newton loop entirely within one call (a deliberate,
+  documented deviation from OpenSees' `SeriesMaterial`, which instead
+  carries a warm-started trial state across many *external* Newton calls
+  — see the type's doc comment for why applying the stress correction
+  every inner iteration, instead of once at the end, is necessary here).
+  `MinMax`: wraps one material with strain bounds; once a committed
+  strain exits them, `failed` permanently latches `true`, stress reads
+  `0.0`, and tangent reads `1e-8 * inner.initial_tangent()` (not exactly
+  zero, matching OpenSees — a structurally zero tangent risks a singular
+  global tangent). New `Material::initial_tangent()` method supports
+  `MinMax`'s post-failure tangent and the composites' propagation of it.
+
+  **Structural ripple:** `Material` dropped `#[derive(Copy)]` (kept
+  `Clone`) now that `Parallel`/`Series`/`MinMax` hold a `Vec`/`Box` of
+  children — `Fiber` (`core/src/model/fiber_section.rs`) lost `Copy` too,
+  and `ZeroLength`'s `[Option<Material>; NDF]` array-repeat initializer
+  became `std::array::from_fn(|_| None)`. No other call sites needed
+  changes (every other site already used `.clone()` or read-only
+  references).
+
+  **Acceptance verified:** unit tests per variant in `material.rs`
+  (bilinear hardening, isotropic-hardening shift on reversal, the
+  Kent-Scott-Park envelope, Karsan-Jirsa unload degradation, `Parallel`
+  of two `Elastic`s exactly equaling one `Elastic` with the summed
+  stiffness, `Series` of two equal `Elastic`s halving the stiffness and
+  splitting strain for equal child stress, `MinMax` latching failure and
+  its `1e-8`-scaled tangent). Plus the suggested composite-section
+  acceptance test (`core/src/model/fiber_section.rs`): a `FiberSection`
+  built from one `Steel01` rebar layer and two `Concrete01` layers,
+  pushed past first yield/cracking, deeper into the nonlinear range, then
+  partially unloaded — checked at each state against a hand computation
+  (each fiber's `Material` evaluated independently at its own strain and
+  summed into `N`/`M`, outside `FiberSection`'s own code path). No closed
+  form exists for a nonlinear composite section, so this is what
+  "verified" means for this stage, unlike stage 1's exact elastic match.
+
+  **Remaining stages not yet landed** — see §7.1 immediately below for the
+  full handoff (source locations, algorithms, state fields, gotchas): 3)
+  `Steel02`/`Concrete02`; 4) `Hysteretic`/`Pinching4`.
+
+### 7.1 M7 handoff: remaining stages
+
+Written for a session with no memory of the ones that did stages 1-2 —
+read this before opening any OpenSees source yourself; it's the distilled
+result of already having read the relevant files once.
+
+**The general porting recipe** (applies to every material below): OpenSees
+implements each as `setTrialStrain`/`determineTrialState` mutating
+parallel `T*`/`C*` field pairs (see `xara/SRC/material/uniaxial/
+UniaxialMaterial.h` and e.g. `Steel01.h`). Carapace's `Material` (§
+"Pre-M7" entry above) does **not** carry that duplication — every method
+you port becomes a pure `fn evaluate(&self, strain: f64) -> (stress,
+tangent, next_self)` where `self` is *always* the committed state (there
+is only one copy of each history field, not a `T`/`C` pair). The
+mechanical translation:
+
+1. Read the C++ `determineTrialState`/`setTrialStrain`. Every place it
+   reads a `C*` field, read `self`'s corresponding field instead. Every
+   place it reads/writes a `T*` field, use a local variable instead (never
+   write to `self` — `evaluate` takes `&self`, not `&mut self`).
+2. Wherever the algorithm references `Cstrain`/`Cstress` directly (not
+   just `CminStrain`/`Cloading`-style history), your `Material` variant
+   needs to carry the **last committed strain and stress as explicit
+   fields**, not just the "obvious" history variables — `Steel01` and
+   `Concrete01` both do this (see below) and it's easy to miss if you
+   only skim for the fields declared as "History Variables" in the header,
+   since `Cstrain`/`Cstress` are filed separately as "State Variables" in
+   `Steel01.h` but are just as load-bearing for the algorithm.
+3. The function's return value is `(Tstress, Ttangent, Self { ..committed
+   fields updated.. })`. `trial_stress_tangent` discards the third
+   element; `commit` discards the first two — exactly the same split
+   `ElasticPP` already uses (`core/src/model/material.rs`).
+4. Port the *math* faithfully (it's validated, published research — see
+   each material's `// References` comment in its `.cpp`), but the
+   *state-machine mechanics* (trial/commit, no field duplication) always
+   follow the recipe above, not the C++ structure.
+
+Stage 2 already went through this ripple (`Material` is `Clone`-only as
+of stage 2 — see the M7 entry in §7 above); stages 3-4 only add more leaf
+variants and shouldn't need any further structural changes on this front.
+
+#### Stage 3: `Steel02`, `Concrete02`
+
+- **`Steel02`** — `xara/SRC/material/uniaxial/Steel02.{h,cpp}`. Menegotto-
+  Pinto with isotropic hardening (params `R0`, `cR1`, `cR2` controlling
+  the transition-curve sharpness, plus `Steel01`-style `a1..a4`). Not read
+  in detail yet — budget more time than `Steel01`; the transition-curve
+  evaluation (`R` as a function of accumulated plastic excursion) is a
+  genuinely more involved rule than `Steel01`'s piecewise-linear one, not
+  just more parameters.
+- **`Concrete02`** — `xara/SRC/material/uniaxial/Concrete02.{h,cpp}`.
+  Adds linear tension softening on top of `Concrete01`'s compression
+  envelope (params `ft`, `Ets`) plus a stiffer reloading rule. Smaller
+  increment over `Concrete01` than `Steel02` is over `Steel01` — read
+  `Concrete01`'s stage-2 implementation first, since `Concrete02` is
+  structured as a direct extension of it in the OpenSees source too.
+
+#### Stage 4: `Hysteretic`, `Pinching4`
+
+Not read in any detail — budget the most time here of any stage.
+`HystereticMaterial` (`xara/SRC/material/uniaxial/HystereticMaterial.{h,cpp}`)
+is a multi-linear backbone (up to 3 points per side) with pinching and
+stiffness/strength degradation parameters. `Pinching4Material`
+(`xara/SRC/material/uniaxial/Pinching4Material.{h,cpp}`) is a
+quadrilinear backbone with substantially more extensive pinching/damage
+rules — one of the most complex uniaxial materials OpenSees ships. Read
+both fully, in the same "trace `determineTrialState`, apply the porting
+recipe" style as stages 2-3, before writing any code — do not assume
+either is a small extension of what's already landed by that point.
 
 - **M8 — ForceBeamColumn.** Its own milestone per §2/§4.1 — nested
   element-level equilibrium iteration, architecturally distinct from every

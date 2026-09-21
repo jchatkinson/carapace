@@ -4,7 +4,10 @@ use carapace_core::analysis::{
     modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, RayleighDamping,
     TransientAnalysis,
 };
-use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Material, Node, Truss, ZeroLength};
+use carapace_core::model::{
+    BeamIntegration, Domain, DispBeamColumn, ElasticBeamColumn, Element, Fiber, GeomTransf, Material, Node, Truss,
+    ZeroLength,
+};
 
 #[wasm_bindgen]
 pub fn axial_displacement(load: f64, length: f64, area: f64, modulus: f64) -> f64 {
@@ -190,4 +193,38 @@ pub fn damped_sdof_free_vibration_displacement(steps: usize, dt: f64) -> f64 {
         analysis.step().expect("linear damped SDOF should solve every step");
     }
     analysis.domain().node(mass_node).displacement[0]
+}
+
+/// M7 stage-1 wiring check: a `DispBeamColumn` (fiber-discretized,
+/// displacement-based) cantilever with a 2-fiber elastic section that
+/// reproduces `E*A`/`E*Iz` exactly — must match `ElasticBeamColumn`'s
+/// closed-form tip deflection exactly, not approximately. See
+/// `core/tests/m7_disp_beam_column.rs` for the native equivalent.
+#[wasm_bindgen]
+pub fn disp_beam_column_cantilever_tip_deflection(e: f64, area: f64, iz: f64, length: f64, tip_load: f64) -> f64 {
+    let h = (iz / area).sqrt();
+    let fibers = vec![
+        Fiber::new(h, area / 2.0, Material::Elastic { e }),
+        Fiber::new(-h, area / 2.0, Material::Elastic { e }),
+    ];
+
+    let mut domain = Domain::new();
+    let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let node_j = domain.add_node(Node::new([length, 0.0]).with_load(1, tip_load));
+    domain.add_element(Element::DispBeamColumn(DispBeamColumn::new(
+        node_i,
+        node_j,
+        fibers,
+        BeamIntegration::Legendre { points: 3 },
+    )));
+
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::LoadControl { increment: 1.0 })
+        .algorithm(Algorithm::Linear)
+        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .build(domain);
+
+    analysis.step().expect("cantilever DispBeamColumn should solve");
+    analysis.domain().node(node_j).displacement[1]
 }

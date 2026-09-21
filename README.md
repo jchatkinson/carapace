@@ -93,10 +93,26 @@ snapshot-and-restore on a failed step — closing a real pre-existing gap
 where a `FailedToConverge` step left displacement partway through its
 discarded Newton iterations, for every milestone back to M4. See
 `docs/implementation-plan.md`'s "Pre-M7" entry for the full design
-reasoning. The milestone roadmap continues at M7 (`DispBeamColumn` + fiber
-sections + full standard material catalog, including the recursive
-composite materials — `Parallel`/`Series`/`MinMax` — which get correct
-commit/revert for free from the mechanism just landed).
+reasoning.
+
+M7 (`DispBeamColumn` + fiber sections + full standard material catalog) is
+large enough — six new hysteretic materials plus three recursive
+composites — that it's being landed in stages rather than one pass.
+**Stage 1 done:** `BeamIntegration::{Legendre,Lobatto}` (point/weight
+tables copied directly from OpenSees's own source, not a quadrature
+crate — domain-specific FEM numerics are copied from the reference
+implementation, the same policy as element/material formulations;
+`nalgebra`/`faer` remain the exception, since heavily-optimized linear
+algebra is the one place a library beats hand-rolling), `FiberSection`
+(stress resultants and section tangent derived directly from virtual
+work), and `DispBeamColumn` itself. A 2-fiber elastic section built to
+reproduce `EA`/`EI` exactly makes a cantilever `DispBeamColumn` match
+`ElasticBeamColumn`'s closed-form deflection *exactly*, not
+approximately — a real equivalence check, verified native + wasm32/Node.
+Remaining stages: `Steel01`/`Concrete01` + `Parallel`/`Series`/`MinMax`
+(which get correct commit/revert for free from the trial/commit
+mechanism just landed), then `Steel02`/`Concrete02`, then
+`Hysteretic`/`Pinching4`.
 
 ## Workspace layout
 
