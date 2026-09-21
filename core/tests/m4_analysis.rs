@@ -30,7 +30,7 @@ fn build_elastic_plastic_parallel_system(force: f64) -> (Domain, carapace_core::
         Material::Elastic { e: e_modulus },
     )));
     domain.add_element(Element::ZeroLength(
-        ZeroLength::new(node_i, node_j).with_material(0, Material::ElasticPP { e: e_epp, eyp }),
+        ZeroLength::new(node_i, node_j).with_material(0, Material::elastic_pp(e_epp, eyp)),
     ));
 
     (domain, node_i, node_j)

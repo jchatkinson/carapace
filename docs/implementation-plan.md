@@ -630,13 +630,75 @@ wasm-specific wrong" still applies).
   precision; the first milestone where a "closed form" acceptance check
   is honestly approximate rather than exact, and the test comments say so.
 
+- **Pre-M7 — material trial/commit state + `Domain` snapshot/restore.** ✅
+  Done. Landed ahead of M7's fiber-section/full-catalog work because that
+  work needs real path-dependent materials (Steel01, Concrete01/02,
+  Hysteretic, Pinching4) to be correct, and *how* material state is
+  organized needed settling first — see the design discussion this session
+  that led here.
+
+  **Not** OpenSees's parallel `C*`/`T*` field-pair pattern (verified
+  directly against `xara/SRC/material/uniaxial/{UniaxialMaterial,Steel01}.h`
+  before deciding against it) — that duplication solves a C++ problem Rust
+  doesn't have. Instead: a `Material` holds only committed history (e.g.
+  `ElasticPP`'s new `ep`, real permanent plastic strain now, not the old
+  reversible envelope — construct via `Material::elastic_pp`, not the
+  struct literal, since `ep` is internal history, not a parameter). Two
+  pure (`&self`, non-mutating) views over that state, sharing one private
+  `evaluate`: [`trial_stress_tangent`](core/src/model/material.rs) — called
+  every Newton iteration, always relative to the same fixed committed
+  baseline, which is the real correctness property this design is built
+  around (not just tidiness: if a material mutated on every trial call,
+  iteration N's result would depend on iteration N-1's discarded trial,
+  compounding error every time a step needs more than one iteration) — and
+  [`commit`](core/src/model/material.rs), called once, only after a step
+  actually converges, producing the new committed `Material`.
+  `Element::commit`/`Domain::commit` are the only things that ever call it,
+  and only from `Analysis::step`/`TransientAnalysis::step`'s success path.
+
+  This also means materials need no rollback machinery of their own —
+  nothing mutates until commit, so a failed step never left one in an
+  inconsistent trial state to revert. Nodal displacement/velocity/
+  acceleration still do (mutated eagerly every Newton iteration, correctly,
+  but not something a failed step should leave half-applied) — fixed by
+  giving `Domain` `#[derive(Clone)]` and having `Analysis::step`/
+  `TransientAnalysis::step` snapshot it up front, restoring on any `Err`
+  path via a `step`/`try_step` split. This closes a real, pre-existing gap:
+  before this, a `FailedToConverge` step already left displacement
+  partway through its last (discarded) Newton iterations, for every
+  milestone back to M4 — it just never mattered while every material was
+  a pure function of current displacement.
+
+  A useful side effect for M7: recursive composite materials
+  (Parallel/Series/MinMax) get correct commit/revert for free once they
+  exist — nothing needs to manually propagate `commit()` down through a
+  nested tree the way OpenSees's wrapper materials forward `commitState()`/
+  `revertToLastCommit()` to each child by hand; `Domain::commit`'s single
+  top-level call reaches the whole nested structure uniformly.
+
+  **Acceptance verified:** every M1-M6 test passed either unmodified or
+  with only the `Material::elastic_pp` constructor rename (a real
+  regression check that the trial/commit split doesn't change single-step
+  behavior, which it shouldn't — see `core/src/model/material.rs`'s
+  `elastic_pp_clamps_symmetrically_on_first_loading`). New coverage in
+  `core/src/model/material.rs` (`elastic_pp_remembers_permanent_set_after_
+  commit` — a partial unload after yielding shows real elastic unloading
+  the old reversible envelope couldn't) and `core/tests/material_state.rs`:
+  a *two-step* `Analysis` (load past yield, then partially unload) matches
+  the closed-form path-dependent answer and explicitly diverges from the
+  path-*independent* (wrong) answer a stateless model would give; a
+  separate test confirms a step with an unsatisfiable `ConvergenceTest`
+  (`max_iter: 0`) leaves the domain's displacement completely unchanged
+  rather than partially applied.
+
 - **M7 — DispBeamColumn + fiber sections + full standard material catalog.**
   `BeamIntegration` (Gauss-Legendre/Lobatto), fiber section stress-resultant
   integration, and the remaining leaf materials (Hysteretic, Pinching4,
   Concrete01/02, Steel01/02) plus the **recursive** composite materials
   (Parallel, Series, MinMax — §4.2). This is the milestone where the
   `Material` enum's recursive-composition design (decided at M2, not
-  deferred) gets exercised for real.
+  deferred) gets exercised for real, now that the trial/commit state
+  mechanism it needs is already in place.
 
 - **M8 — ForceBeamColumn.** Its own milestone per §2/§4.1 — nested
   element-level equilibrium iteration, architecturally distinct from every

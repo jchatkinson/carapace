@@ -81,12 +81,22 @@ M5's nodal `Node::mass`. Verified against classical closed-form SDOF free
 vibration (undamped and 5%-damped) to ~7e-6 — real Newmark discretization
 error at typical `dt`/period ratios, the first milestone where a
 closed-form check is honestly approximate rather than exact to solver
-precision. The M2 materials are still stateless (reversible)
-simplifications — real path-dependent plasticity (permanent set on unload)
-lands with the M7 stateful materials. See `docs/implementation-plan.md` for
-the milestone roadmap, starting at M7 (`DispBeamColumn` + fiber sections +
-full standard material catalog, including the recursive composite
-materials — `Parallel`/`Series`/`MinMax`).
+precision. Ahead of M7, `Material` gained a real trial/commit state design:
+not OpenSees's parallel `C*`/`T*` field duplication (a C++ workaround Rust
+doesn't need), but a single committed-state value with two pure views —
+`trial_stress_tangent` (called every Newton iteration, always relative to
+the same fixed baseline — a correctness requirement, not just tidiness) and
+`commit` (called once, only after a step converges). `ElasticPP` is now
+genuinely stateful (real permanent plastic strain, not the old reversible
+envelope). `Domain` gained `Clone` and `Analysis`/`TransientAnalysis` now
+snapshot-and-restore on a failed step — closing a real pre-existing gap
+where a `FailedToConverge` step left displacement partway through its
+discarded Newton iterations, for every milestone back to M4. See
+`docs/implementation-plan.md`'s "Pre-M7" entry for the full design
+reasoning. The milestone roadmap continues at M7 (`DispBeamColumn` + fiber
+sections + full standard material catalog, including the recursive
+composite materials — `Parallel`/`Series`/`MinMax` — which get correct
+commit/revert for free from the mechanism just landed).
 
 ## Workspace layout
 

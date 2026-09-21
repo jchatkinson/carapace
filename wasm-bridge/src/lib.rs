@@ -121,7 +121,7 @@ pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
 
     domain.add_element(Element::Truss(Truss::new(node_i, node_j, e_area, Material::Elastic { e: e_modulus })));
     domain.add_element(Element::ZeroLength(
-        ZeroLength::new(node_i, node_j).with_material(0, Material::ElasticPP { e: e_epp, eyp }),
+        ZeroLength::new(node_i, node_j).with_material(0, Material::elastic_pp(e_epp, eyp)),
     ));
 
     let mut analysis = AnalysisBuilder::new()

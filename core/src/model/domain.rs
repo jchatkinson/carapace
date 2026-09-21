@@ -5,8 +5,12 @@ use slotmap::SlotMap;
 use super::{Element, ElementId, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
 
 /// Owns all nodes and elements. No serialization/broker machinery (§3.3) —
-/// this is the whole model, in memory, for one worker.
-#[derive(Debug, Default)]
+/// this is the whole model, in memory, for one worker. `Clone` backs
+/// `Analysis`/`TransientAnalysis`'s snapshot-and-restore-on-failure (a
+/// failed step shouldn't leave nodal displacement/velocity/acceleration
+/// partway through a discarded Newton iteration) — see `Material`'s doc
+/// comment for why materials themselves don't need this protection.
+#[derive(Debug, Default, Clone)]
 pub struct Domain {
     nodes: SlotMap<NodeId, Node>,
     elements: SlotMap<ElementId, Element>,
@@ -191,6 +195,21 @@ impl Domain {
         let (k, resistance) = self.assemble_tangent_and_resistance();
         let residual = load_factor * self.assemble_reference_load() - resistance;
         (k, residual)
+    }
+
+    /// Commit every element's material(s) at the current (final, converged)
+    /// nodal state — called once per successful `Analysis`/
+    /// `TransientAnalysis` step, never during Newton iteration itself. See
+    /// `Material`'s doc comment for the trial/commit design this closes
+    /// the loop on.
+    pub(crate) fn commit(&mut self) {
+        for (_, element) in self.elements.iter_mut() {
+            let [id_i, id_j] = element.nodes();
+            // `self.nodes` and `self.elements` are disjoint fields, so
+            // borrowing one immutably while iterating the other mutably
+            // is fine.
+            element.commit(&self.nodes[id_i], &self.nodes[id_j]);
+        }
     }
 
     /// Scatter a global free-DOF displacement increment back onto nodes.

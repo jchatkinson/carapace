@@ -70,6 +70,10 @@ impl TransientAnalysis {
             a0[i] = (load0[i] - resistance0[i] - c_v0_i) / mass[i];
         }
         domain.scatter_state(&u0, &v0, &a0);
+        // Align committed material state with the given initial condition
+        // (matters if `with_initial_displacement` was used) before any
+        // stepping begins — see `Material`'s doc comment.
+        domain.commit();
 
         Ok(TransientAnalysis {
             domain,
@@ -94,7 +98,27 @@ impl TransientAnalysis {
     /// (`Domain::assemble_reference_load`) throughout — a time-varying load
     /// (e.g. ground motion) is out of scope until something needs it (§4.3
     /// only asks for Newmark integration + Rayleigh damping at M6).
+    ///
+    /// On failure, the domain and `time`/`step_count` are restored to their
+    /// state before this call — same reasoning as `Analysis::step`.
     pub fn step(&mut self) -> Result<TransientStepResult, AnalysisError> {
+        let snapshot = self.domain.clone();
+        let (snapshot_time, snapshot_step_count) = (self.time, self.step_count);
+
+        let result = self.try_step();
+
+        if result.is_err() {
+            self.domain = snapshot;
+            self.time = snapshot_time;
+            self.step_count = snapshot_step_count;
+        } else {
+            self.domain.commit();
+        }
+
+        result
+    }
+
+    fn try_step(&mut self) -> Result<TransientStepResult, AnalysisError> {
         self.step_count += 1;
         self.time += self.dt;
 

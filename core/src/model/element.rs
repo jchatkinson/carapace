@@ -69,6 +69,19 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
         }
     }
+
+    /// Commit this element's material(s) at the given (final, converged)
+    /// node state — see `Material`'s doc comment for why this is the only
+    /// place a `Material` ever mutates. A no-op for `ElasticBeamColumn`
+    /// (no `Material` — its response is closed-form, §4.1) and for any
+    /// `ZeroLength` direction with no material assigned.
+    pub fn commit(&mut self, node_i: &Node, node_j: &Node) {
+        match self {
+            Element::Truss(t) => t.commit(node_i, node_j),
+            Element::ZeroLength(z) => z.commit(node_i, node_j),
+            Element::ElasticBeamColumn(_) => {}
+        }
+    }
 }
 
 /// A 2-node axial truss: fixed-size element-local linear algebra (§3.4), no
@@ -111,19 +124,24 @@ impl Truss {
         (length, dx / length, dy / length)
     }
 
+    /// Axial elongation from current nodal displacements, projected onto
+    /// the (undeformed) bar axis — small-displacement theory. Shared by
+    /// `form_tangent_and_resistance` (trial) and `commit`.
+    fn strain(&self, node_i: &Node, node_j: &Node) -> f64 {
+        let (length, cx, cy) = self.geometry(node_i, node_j);
+        ((node_j.displacement[0] - node_i.displacement[0]) * cx
+            + (node_j.displacement[1] - node_i.displacement[1]) * cy)
+            / length
+    }
+
     fn form_tangent_and_resistance(
         &self,
         node_i: &Node,
         node_j: &Node,
     ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
         let (length, cx, cy) = self.geometry(node_i, node_j);
-
-        // Axial elongation from current nodal displacements, projected onto
-        // the (undeformed) bar axis — small-displacement theory.
-        let strain = ((node_j.displacement[0] - node_i.displacement[0]) * cx
-            + (node_j.displacement[1] - node_i.displacement[1]) * cy)
-            / length;
-        let (stress, tangent_modulus) = self.material.stress_tangent(strain);
+        let strain = self.strain(node_i, node_j);
+        let (stress, tangent_modulus) = self.material.trial_stress_tangent(strain);
 
         // Local DOF order [ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]; rotation
         // entries (2, 5) stay zero — a truss carries no moment.
@@ -133,6 +151,11 @@ impl Truss {
         let resistance = (stress * self.area) * b;
 
         (k, resistance)
+    }
+
+    fn commit(&mut self, node_i: &Node, node_j: &Node) {
+        let strain = self.strain(node_i, node_j);
+        self.material = self.material.commit(strain);
     }
 
     /// Lumped mass: half the element's total mass (`density * area * length`)
@@ -187,7 +210,7 @@ impl ZeroLength {
             let Some(material) = material else { continue };
 
             let relative = node_j.displacement[dof] - node_i.displacement[dof];
-            let (force, tangent_modulus) = material.stress_tangent(relative);
+            let (force, tangent_modulus) = material.trial_stress_tangent(relative);
 
             // Local DOF order [ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]; this
             // direction only couples node_i's and node_j's copy of the same
@@ -201,6 +224,14 @@ impl ZeroLength {
         }
 
         (k, resistance)
+    }
+
+    fn commit(&mut self, node_i: &Node, node_j: &Node) {
+        for (dof, material) in self.materials.iter_mut().enumerate() {
+            let Some(material) = material else { continue };
+            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            *material = material.commit(relative);
+        }
     }
 }
 
@@ -226,7 +257,7 @@ mod tests {
         // `resistance = force * b` with `b[dof_i] = -1`, so node_i's
         // component of the resistance vector is `-force`.
         let epp = ZeroLength::new(NodeId::default(), NodeId::default())
-            .with_material(0, Material::ElasticPP { e: 100.0, eyp: 0.01 });
+            .with_material(0, Material::elastic_pp(100.0, 0.01));
         let (_, r) = epp.form_tangent_and_resistance(&node_i, &node_j);
         assert_eq!(r[0], 100.0 * 0.01, "should be clamped to yield force");
 

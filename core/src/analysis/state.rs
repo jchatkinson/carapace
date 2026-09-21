@@ -29,7 +29,31 @@ impl Analysis {
     /// Advance one step: the integrator predicts this step's load factor,
     /// then the algorithm resolves equilibrium at that (fixed) load factor.
     /// See implementation-plan §5.4 for the sketch this follows.
+    ///
+    /// On failure, the domain (nodal displacement — mutated eagerly every
+    /// Newton iteration, which is correct Newton behavior, but shouldn't
+    /// be left half-applied if the step as a whole doesn't converge) is
+    /// restored to its state before this call. Materials never need this:
+    /// see `Material`'s doc comment for why they're never mutated until
+    /// `Domain::commit`, which only runs on the success path below.
     pub fn step(&mut self) -> Result<StepResult, AnalysisError> {
+        let snapshot = self.domain.clone();
+        let (snapshot_step_count, snapshot_load_factor) = (self.step_count, self.load_factor);
+
+        let result = self.try_step();
+
+        if result.is_err() {
+            self.domain = snapshot;
+            self.step_count = snapshot_step_count;
+            self.load_factor = snapshot_load_factor;
+        } else {
+            self.domain.commit();
+        }
+
+        result
+    }
+
+    fn try_step(&mut self) -> Result<StepResult, AnalysisError> {
         self.step_count += 1;
         self.load_factor = self.integrator.predict(&self.domain, &self.solver, self.load_factor)?;
 
