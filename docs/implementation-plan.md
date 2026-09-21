@@ -461,11 +461,34 @@ wasm-specific wrong" still applies).
   softens a cantilever's tip deflection under compressive axial force, in
   the intended direction.
 
-- **M4 — Analysis composition generalization.** Add `DisplacementControl`
-  integrator, `NewtonRaphson` algorithm, and the remaining `ConvergenceTest`
-  variants (`NormDispIncr`, `EnergyIncr`) as enum variants alongside what M1
-  established. Proves the enum-dispatch approach for analysis strategy types
-  (§3.1) scales past one variant each.
+- **M4 — Analysis composition generalization.** ✅ Done.
+  `Integrator::DisplacementControl` (`core/src/analysis/integrator.rs`) picks
+  each step's load factor via the standard unit-load technique (solve the
+  current tangent against the reference load pattern once, scale so the
+  controlled node/DOF's response matches the target increment) rather than
+  a fixed increment. `Algorithm::NewtonRaphson` re-forms the tangent and
+  residual every iteration at a load factor held fixed for the step,
+  reusing `ConvergenceTest` (now also `NormDispIncr`, `EnergyIncr` alongside
+  `NormUnbalance`) to decide when to stop; `Algorithm::Linear` is
+  unchanged, still a single unconditional solve. `Integrator` and
+  `Algorithm` were factored into a clean predictor/corrector split
+  (`Analysis::step`: integrator predicts the step's load factor once, then
+  the algorithm iterates — or doesn't — at that fixed factor), which is why
+  this needed touching both rather than just adding enum variants in
+  isolation. Added `AnalysisError::InvalidConstraint` for a
+  `DisplacementControl` target DOF that turns out to be fixed.
+
+  **Acceptance verified:** `core/tests/m4_analysis.rs` (native) +
+  `wasm-bridge`'s `newton_raphson_elastic_plastic_displacement` (wasm32 +
+  Node) — a `Truss` (elastic) in parallel with a `ZeroLength`+`ElasticPP`
+  spring, loaded past the EPP spring's yield point *within a single step*
+  (something `Algorithm::Linear` structurally cannot resolve, since its
+  one-shot solve is only exact within a single material regime — see M1-M3
+  notes above), matches the closed-form post-yield displacement
+  `u = (F - fy) / k_truss` under all three `ConvergenceTest` variants. A
+  separate test confirms `DisplacementControl` on M1's truss case recovers
+  the same P=50 load factor M1 verified directly, when given the equivalent
+  target displacement instead.
 
 - **M5 — Modal analysis.** Resolve and implement §6 decision #2 (ARPACK FFI
   vs. pure-Rust). **Acceptance:** eigenvalues of a small known model (e.g. a

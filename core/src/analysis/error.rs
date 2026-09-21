@@ -5,4 +5,7 @@
 pub enum AnalysisError {
     FailedToConverge { step: usize },
     SingularSystem,
+    /// An `Integrator::DisplacementControl`'s controlled DOF is fixed (not
+    /// part of the free-DOF system), so there's no equation to control.
+    InvalidConstraint,
 }

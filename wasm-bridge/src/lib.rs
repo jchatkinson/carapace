@@ -98,3 +98,39 @@ pub fn simply_supported_beam_end_rotation(e: f64, iz: f64, area: f64, length: f6
     analysis.step().expect("simply supported beam under UDL should solve");
     analysis.domain().node(node_i).displacement[2]
 }
+
+/// M4 wiring check: a `Truss` (elastic) in parallel with a `ZeroLength`+
+/// `ElasticPP` (elastic-perfectly-plastic) spring, loaded past the EPP
+/// spring's yield point within a single step — needs `Algorithm::
+/// NewtonRaphson`'s iteration to resolve correctly (`Algorithm::Linear`'s
+/// one-shot solve can't cross a material regime boundary within a step).
+/// See `core/tests/m4_analysis.rs` for the native equivalent and the
+/// closed-form derivation.
+#[wasm_bindgen]
+pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
+    let (k_t, length) = (50.0, 100.0);
+    let (e_area, e_modulus) = (1.0, k_t * length);
+    let (e_epp, eyp) = (100.0, 0.01);
+
+    let mut domain = Domain::new();
+    let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2).with_load(0, force));
+
+    domain.add_element(Element::Truss(Truss::new(node_i, node_j, e_area, Material::Elastic { e: e_modulus })));
+    domain.add_element(Element::ZeroLength(
+        ZeroLength::new(node_i, node_j).with_material(0, Material::ElasticPP { e: e_epp, eyp }),
+    ));
+
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::LoadControl { increment: 1.0 })
+        .algorithm(Algorithm::NewtonRaphson)
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 20,
+        })
+        .build(domain);
+
+    analysis.step().expect("should converge across the EPP yield point");
+    analysis.domain().node(node_j).displacement[0]
+}

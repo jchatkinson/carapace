@@ -9,7 +9,6 @@ pub struct Analysis {
     pub(crate) constraint_handler: ConstraintHandler,
     pub(crate) integrator: Integrator,
     pub(crate) algorithm: Algorithm,
-    #[allow(dead_code)] // read once Algorithm::NewtonRaphson (M4) needs it
     pub(crate) test: ConvergenceTest,
     pub(crate) solver: SparseSolver,
     pub(crate) step_count: usize,
@@ -27,20 +26,36 @@ impl Analysis {
         &self.domain
     }
 
-    /// Advance one step: form the tangent and residual, solve, update state.
+    /// Advance one step: the integrator predicts this step's load factor,
+    /// then the algorithm resolves equilibrium at that (fixed) load factor.
     /// See implementation-plan §5.4 for the sketch this follows.
     pub fn step(&mut self) -> Result<StepResult, AnalysisError> {
         self.step_count += 1;
-        self.load_factor = self.integrator.next_load_factor(self.load_factor);
-
-        let (k, residual) = self.domain.form_tangent_and_residual(self.load_factor);
-        let du = self.solver.solve(&k, &residual)?;
-        self.domain.apply_displacement_increment(&du);
+        self.load_factor = self.integrator.predict(&self.domain, &self.solver, self.load_factor)?;
 
         match self.algorithm {
-            // A single tangent formation + solve is definitionally converged
-            // for `Linear` — see algorithm.rs.
-            Algorithm::Linear => {}
+            // A single tangent formation + solve, unconditionally accepted
+            // — definitionally converged for `Linear` (see algorithm.rs).
+            Algorithm::Linear => {
+                let (k, residual) = self.domain.form_tangent_and_residual(self.load_factor);
+                let du = self.solver.solve(&k, &residual)?;
+                self.domain.apply_displacement_increment(&du);
+            }
+            Algorithm::NewtonRaphson => {
+                let mut converged = false;
+                for _ in 0..self.test.max_iter() {
+                    let (k, residual) = self.domain.form_tangent_and_residual(self.load_factor);
+                    let du = self.solver.solve(&k, &residual)?;
+                    self.domain.apply_displacement_increment(&du);
+                    if self.test.check(&residual, &du) {
+                        converged = true;
+                        break;
+                    }
+                }
+                if !converged {
+                    return Err(AnalysisError::FailedToConverge { step: self.step_count });
+                }
+            }
         }
 
         Ok(StepResult {
