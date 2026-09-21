@@ -4,7 +4,7 @@ mod material;
 mod node;
 
 pub use domain::Domain;
-pub use element::{Element, ElementId, Truss};
+pub use element::{Element, ElementId, Truss, ZeroLength};
 pub use material::Material;
 pub use node::{Node, NodeId};
 

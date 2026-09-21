@@ -45,11 +45,14 @@ to be in 1997.
 
 ## Status
 
-M1 done: real `Domain`/`Node`/`Element::Truss`/`Material::Elastic` types and a
-typestate-composed `Analysis` (`LoadControl` + `Linear` + a real linear solve)
-replace the M0 closed-form placeholder, verified against the same oracle value
-on both native and wasm32 + Node. See `docs/implementation-plan.md` for the
-milestone roadmap, starting at M2 (`ZeroLength` + EPP/Gap/ENT materials).
+M1 and M2 done. Real `Domain`/`Node`/`Element::{Truss,ZeroLength}`/
+`Material::{Elastic,ElasticPP,Gap,Ent}` types and a typestate-composed
+`Analysis` (`LoadControl` + `Linear` + a real linear solve) replace the M0
+closed-form placeholder, verified against known values on both native and
+wasm32 + Node. The M2 materials are stateless (reversible) simplifications —
+real path-dependent plasticity lands with the M7 stateful materials, after M4
+adds Newton iteration. See `docs/implementation-plan.md` for the milestone
+roadmap, starting at M3 (`ElasticBeamColumn` + `geomTransf` + element loads).
 
 ## Workspace layout
 

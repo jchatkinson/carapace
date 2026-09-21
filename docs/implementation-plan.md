@@ -398,9 +398,32 @@ wasm-specific wrong" still applies).
   `wasm-bindgen`) both match to 1e-9. The M0 closed-form path is kept
   alongside as a fixed oracle constant, not removed.
 
-- **M2 — ZeroLength + EPP/Gap/ENT materials.** Second element, first
-  non-trivial materials. Proves the `Material` enum dispatch generalizes
-  beyond one variant. No new architecture needed.
+- **M2 — ZeroLength + EPP/Gap/ENT materials.** ✅ Done. `Element::ZeroLength`
+  (`core/src/model/element.rs`) evaluates a material independently per DOF
+  direction (global axes only, no orientation vectors — out of scope until
+  needed), no geometry/integration. `Material` gained `ElasticPP`, `Gap`,
+  `Ent` variants (`core/src/model/material.rs`), all still stateless
+  (pure functions of current strain) — implemented as **reversible**
+  bilinear/gap envelopes, not true path-dependent plasticity with permanent
+  set. This is an intentional simplification, not the real OpenSees
+  `ElasticPPMaterial`/`ElasticPPGap` semantics (which track plastic strain
+  and unload elastically from wherever they last yielded); it's exact for
+  monotonic loading that stays in one regime, and diverges once loading
+  reverses direction or crosses a yield/gap boundary mid-step. Real
+  path-dependent state (trial vs. committed, `&mut self`) is deferred
+  alongside the M7 stateful materials (Steel01, Concrete01, ...), once M4
+  brings `Algorithm::NewtonRaphson` and there's an iteration loop that
+  actually needs to distinguish trial from committed state. **Acceptance
+  verified:** `core/src/model/material.rs` unit tests exercise each
+  variant's regimes directly; `core/src/model/element.rs` unit tests drive
+  `ZeroLength` across regimes via manually-set node displacements
+  (bypassing `Analysis`, since resolving equilibrium across a material's
+  nonlinear regimes needs the Newton iteration M4 adds); `core/tests/
+  m2_zero_length.rs` + `wasm-bridge`'s `zero_length_ent_displacement` run a
+  `ZeroLength`+`Ent` connector through the real `Domain`/`Analysis` pipeline
+  end-to-end (native and wasm32+Node), matching hand calc for a load that
+  stays within `Ent`'s single linear (engaged) regime — the same
+  `Algorithm::Linear`-is-exact condition M1's truss case relied on.
 
 - **M3 — ElasticBeamColumn + geomTransf (Linear, PDelta) + element loads.**
   First multi-DOF-per-node element, first coordinate transformation, first
