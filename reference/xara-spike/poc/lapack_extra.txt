@@ -1,0 +1,10 @@
+BLAS/dtrmm.f
+BLAS/dtrmv.f
+LAPACK/dgesv.f
+LAPACK/dgetf2.f
+LAPACK/dgetrf.f
+LAPACK/dgetri.f
+LAPACK/dgetrs.f
+LAPACK/dtrti2.f
+LAPACK/dtrtri.f
+LAPACK/lsame.f

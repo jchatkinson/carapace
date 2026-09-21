@@ -1,0 +1,11 @@
+[package]
+name = "carapace-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "carapace_core"
+
+[dependencies]
+slotmap = "1.1"
+nalgebra = "0.35"
