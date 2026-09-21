@@ -1112,3 +1112,74 @@ Key Xara source files referenced throughout this plan, for direct inspection:
   bug (§2, problem #4; not a Carapace concern, just documented context).
 - `xara/OTHER/ARPACK/` (legacy tree) vs `xara/OTHER/arpack-ng/` — the
   f2c-compatibility distinction relevant to §6 decision #2.
+
+---
+
+## 10. Known follow-ups / performance backlog
+
+Not scheduled against any milestone — things noticed along the way that are
+deliberately *not* being acted on without a profile or a concrete need,
+recorded here so they don't have to be rediscovered from scratch. Don't
+implement anything in this section speculatively; it exists so a future
+session (or this one, later) knows the question was already thought through
+once.
+
+### 10.1 `trial_stress_tangent` unnecessarily allocates for boxed materials
+
+**The situation:** `Material`'s large leaf variants (currently `Hysteretic`;
+`Pinching4` will be the same — see §7.1's stage-4b handoff) are boxed
+(`Material::Hysteretic(Box<HystereticFields>)`) specifically so one huge
+variant doesn't force every `Material` value in the system — including a
+trivial `Elastic { e: f64 }` — up to its size (§3.1's closed-enum dispatch
+means `size_of::<Material>()` is always the size of the *largest* variant;
+confirmed empirically: `Steel02`, at ~20 `f64` fields, currently sets it at
+160 bytes for every `Material` value that exists, regardless of which
+variant it actually is).
+
+That boxing has a real, separate cost: `Material::evaluate` (the shared
+core behind both `trial_stress_tangent` and `commit` — see `material.rs`'s
+top-level doc comment for the trial/commit design) always constructs the
+*full* next-state `Material`, box included, even when the caller is
+`trial_stress_tangent` and immediately discards it. Since
+`trial_stress_tangent` runs once per Newton iteration (far more often than
+`commit`, which runs once per converged step), every Newton iteration
+touching a boxed material allocates and immediately frees a small heap
+block for no reason.
+
+**Why this isn't being fixed reflexively:** two reasons, one about scope and
+one about actual impact.
+
+- *Scope*: a real fix has an easy part and a hard part. The easy part —
+  giving a boxed leaf material's own `evaluate_xxx` a variant that returns
+  the raw, unboxed fields struct (e.g. `(f64, f64, HystereticFields)`
+  instead of `(f64, f64, Material)`), and letting `trial_stress_tangent`
+  and `commit` each decide separately whether to box the result — is clean
+  and contained, and wouldn't change the trial/commit purity design at all
+  (see §10 intro and the "why not OpenSees' mutable `T*`/`C*` pattern"
+  discussion this section is transcribing — same conclusion: keep the pure
+  design, it already gets step rollback "for free" via `Domain` cloning,
+  documented at `core/src/analysis/state.rs:36` and
+  `core/src/model/domain.rs:9`). The hard part is that `Parallel`/
+  `Series`/`MinMax` all recursively call `child.evaluate(strain)` through
+  the single generic dispatcher, which has no way to know whether the
+  *outer* caller wanted a trial or a commit — so a boxed material sitting
+  inside a composite would still box on every trial unless composites also
+  got a trial/commit-aware recursive path, which means duplicating (or
+  generically parameterizing) the entire `evaluate` dispatch tree, not
+  just patching one material's call sites. That's a materially bigger,
+  more invasive change than the leaf-material case alone.
+- *Impact*: unmeasured. A handful of small heap allocations per Newton
+  iteration per boxed-material fiber is plausibly noise next to the cost
+  already paid per iteration (global tangent assembly, sparse LU solve) —
+  unless a model has enough `Hysteretic`/`Pinching4` fibers, in enough
+  elements, over enough iterations, for it to add up. Nobody has profiled
+  this against a real model yet.
+
+**If this becomes worth doing:** benchmark first (allocation count and/or
+wall time per step, before/after, on a model with many boxed-material
+fibers under `Algorithm::Newton` — something like a multi-story frame with
+`Hysteretic` or `Pinching4` sections would exercise it realistically) to
+confirm it's actually load-bearing before spending the implementation
+effort, and scope the first pass to the leaf-material case only (skip
+composites unless the profile specifically implicates a boxed material
+used inside a `Parallel`/`Series`/`MinMax`).
