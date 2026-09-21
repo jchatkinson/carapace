@@ -784,13 +784,96 @@ wasm-specific wrong" still applies).
   form exists for a nonlinear composite section, so this is what
   "verified" means for this stage, unlike stage 1's exact elastic match.
 
-  **Remaining stages not yet landed** — see §7.1 immediately below for the
-  full handoff (source locations, algorithms, state fields, gotchas): 3)
-  `Steel02`/`Concrete02`; 4) `Hysteretic`/`Pinching4`.
+  **Stage 3 — `Steel02`, `Concrete02`.** ✅ Done. `Steel02`: Menegotto-
+  Pinto smooth transition curve between an elastic and a strain-hardening
+  asymptote, with Filippou isotropic hardening on reversal — genuinely
+  more involved than `Steel01`'s piecewise-linear rule, as flagged in the
+  original stage-3 handoff notes, but the same trial/commit recipe still
+  applies cleanly: `kon` (`Steel02Kon`, mirroring `Steel02::konP` minus
+  its `sigini`-only pinned state — `sigini` itself isn't supported, same
+  scope decision as `Steel01`) tracks which asymptote the curve is
+  heading toward; `asymptote_strain`/`asymptote_stress` and
+  `reversal_strain`/`reversal_stress` are the two curve anchors, recomputed
+  (with the isotropic-hardening shift) on every direction reversal.
+  `Concrete02`: `Concrete01`'s compression envelope plus linear tension
+  softening (`ft`/`ets`) and a stiffer EERC-report reloading rule —
+  smaller increment over `Concrete01` than `Steel02` is over `Steel01`,
+  confirming the original handoff note's expectation. `tension_strain`
+  (`Concrete02`'s `deptP`) is the one genuinely new history field: the
+  peak tensile-excursion strain, with no `Concrete01` analogue since
+  `Concrete01` carries no tension branch at all. One real (not
+  simplified-away) divergence between the two concrete ports: the flat
+  crushed/ruptured branches' tangent floor is `0.0` in `Concrete01` but
+  `1e-10` in `Concrete02`, matching each one's own OpenSees source exactly
+  rather than reconciling them to look alike.
+
+  **Acceptance verified:** unit tests per variant in `material.rs` — for
+  `Steel02`, the Menegotto-Pinto curve gives the *exact* initial tangent
+  `E0` at zero strain (eps_ratio is exactly `0` there, independent of
+  `R`), approaches the hardening slope `Esh` far past yield, starts a
+  reversal near the elastic slope again, and correctly latches
+  `max_strain`/`min_strain` across a reversal; for `Concrete02`, the
+  compression envelope matches `Concrete01`'s formula exactly (as
+  expected, since it's unchanged), tension is linear-elastic below `ft`
+  and softens at `-Ets` above it (verifying real tensile behavior
+  `Concrete01` has none of), and reload stiffness degrades below `Ec0`
+  after a compression excursion.
+
+  **Stage 4a — `Hysteretic`.** ✅ Done (`Pinching4`, stage 4's other
+  material, is not — see below). Multi-linear (up to 3 points per side)
+  backbone with pinching, deformation/energy-based damage, and ductility-
+  degraded unloading stiffness, ported from `HystereticMaterial`. Genuinely
+  the most-fields leaf material yet (~30), which motivated a structural
+  change beyond the usual recipe: `Material::Hysteretic(Box<
+  HystereticFields>)` — the payload is a boxed, `Copy` struct rather than
+  inlined enum fields like every other leaf. Inlining it would have made
+  *every* `Material` (including a plain `Elastic { e: f64 }`) pay the
+  largest variant's stack size everywhere a `Material` is stored (`Fiber`,
+  `ZeroLength`'s per-DOF array, every composite's `Vec<Material>`) —
+  confirmed by `clippy::large_enum_variant` firing on `Element` (which
+  embeds `Material` three deep via `ZeroLength`) once `Hysteretic` landed
+  inline; boxing it made the warning disappear. `Pinching4` should follow
+  the same boxed-payload pattern — it will be larger still.
+
+  Two of OpenSees' early-return guards weren't ported (documented in
+  `evaluate_hysteretic`'s own comment): one reproduces exactly via the
+  general formula regardless (verified by a test); the other — skipping
+  re-derivation when `dStrain==0` — has no interior-branch fallback at all
+  in the original source (a real gap, since the C++ only reaches that
+  branch after the guard already intercepted the zero-increment case).
+  Resolved by treating `dstrain>=0.0` (not `>0.0`) as the "positive
+  increment" branch, which is both well-defined at exactly zero and
+  consistent with this same file's own tie-break for the very first-ever
+  increment.
+
+  **Acceptance verified:** unit tests in `material.rs` against a shared,
+  fully hand-computed symmetric bilinear-then-flat backbone (`beta=0`,
+  `damfc1=damfc2=0` to keep the arithmetic tractable) — exact initial
+  tangent, exact envelope stress on first loading through two segments,
+  and (the real test of the state machine) reloading after a full
+  positive-then-negative reversal: the pinching reference point `rot_nu`
+  and the resulting pinched-plateau stress/tangent both matched a from-
+  scratch hand derivation to `1e-9`, including confirming the pinched
+  path is genuinely softer than straight elastic reload (the whole point
+  of pinching) rather than just structurally different.
+
+  **Stage 4b — `Pinching4` — not landed.** Read in full
+  (`xara/SRC/material/uniaxial/Pinching4Material.cpp`, ~1725 lines) but
+  deliberately not ported this session: it's a 5-state cyclic-damage state
+  machine (states 0-4, not a simple positive/negative/interior split) with
+  an intricate ~250-line geometric correction cascade (`getState3`/
+  `getState4`) that repairs a trilinear unload-reload path when it comes
+  out geometrically invalid (reload point behind the target point, wrong-
+  sign slopes, etc.) through a sequence of special-cased fallback
+  constructions — exactly the kind of logic where a rushed, unverified
+  translation risks a subtly wrong structural-engineering result. See
+  §7.1 below for the full distilled handoff (state machine shape, the key
+  insight that its "damaged envelope" arrays are cheap to treat as
+  *derived*, not stored, committed state, and where the real risk is).
 
 ### 7.1 M7 handoff: remaining stages
 
-Written for a session with no memory of the ones that did stages 1-2 —
+Written for a session with no memory of the ones that did stages 1-3 —
 read this before opening any OpenSees source yourself; it's the distilled
 result of already having read the relevant files once.
 
@@ -825,38 +908,140 @@ mechanical translation:
    *state-machine mechanics* (trial/commit, no field duplication) always
    follow the recipe above, not the C++ structure.
 
-Stage 2 already went through this ripple (`Material` is `Clone`-only as
-of stage 2 — see the M7 entry in §7 above); stages 3-4 only add more leaf
-variants and shouldn't need any further structural changes on this front.
+Stage 2 already went through the `Material`-loses-`Copy` ripple (see the
+M7 entry in §7 above); stages 3-4 only add more leaf variants and
+shouldn't need any further structural changes on this front. Stage 3
+(`Steel02`/`Concrete02`, also done — see §7) confirmed the recipe scales
+past `Steel01`/`Concrete01` cleanly, including a genuinely more involved
+state machine (`Steel02`'s Menegotto-Pinto curve): the trial/commit purity
+split was never the hard part, faithfully tracing each C++ source's
+branches is. Stage 4a (`Hysteretic`, also done — see §7) added one more
+structural pattern worth reusing for `Pinching4` below: once a variant's
+field count gets large (`Hysteretic` has ~30), box the payload as a
+`Copy` struct (`Material::Hysteretic(Box<HystereticFields>)`) instead of
+inlining it into the enum — otherwise *every* `Material` pays that
+variant's stack size everywhere a `Material` is stored, not just the
+values that are actually that variant. `clippy::large_enum_variant`
+(checked via `cargo clippy --workspace --all-targets`, already clean
+otherwise) is the trip-wire for this — if it fires on `Element` after
+`Pinching4` lands, that's the fix.
 
-#### Stage 3: `Steel02`, `Concrete02`
+#### Stage 4b: `Pinching4` (the only piece of M7 not yet landed)
 
-- **`Steel02`** — `xara/SRC/material/uniaxial/Steel02.{h,cpp}`. Menegotto-
-  Pinto with isotropic hardening (params `R0`, `cR1`, `cR2` controlling
-  the transition-curve sharpness, plus `Steel01`-style `a1..a4`). Not read
-  in detail yet — budget more time than `Steel01`; the transition-curve
-  evaluation (`R` as a function of accumulated plastic excursion) is a
-  genuinely more involved rule than `Steel01`'s piecewise-linear one, not
-  just more parameters.
-- **`Concrete02`** — `xara/SRC/material/uniaxial/Concrete02.{h,cpp}`.
-  Adds linear tension softening on top of `Concrete01`'s compression
-  envelope (params `ft`, `Ets`) plus a stiffer reloading rule. Smaller
-  increment over `Concrete01` than `Steel02` is over `Steel01` — read
-  `Concrete01`'s stage-2 implementation first, since `Concrete02` is
-  structured as a direct extension of it in the OpenSees source too.
+Read in full this session (`xara/SRC/material/uniaxial/
+Pinching4Material.cpp`, ~1725 lines) but deliberately not ported — see the
+M7 entry in §7 for why. This is the distilled result of that reading;
+still budget the most time of anything in M7 for actually writing it,
+the porting recipe notwithstanding.
 
-#### Stage 4: `Hysteretic`, `Pinching4`
+**Shape of the state machine — genuinely different from every other
+material here.** Not a positive/negative/interior split. Five states
+(`Tstate`/`Cstate`, an `int` in the source — model as a real 5-variant
+enum): `0` (near-origin elastic, before the first real excursion in
+either direction), `1` (on the positive envelope), `2` (on the negative
+envelope), `3` (a trilinear unload/reload path connecting a negative
+excursion back toward — but not necessarily reaching — the positive
+side), `4` (the mirror: a trilinear path connecting a positive excursion
+back toward the negative side). `getstate()` (`Pinching4Material.cpp`
+~874) is the transition function; state changes only when the trial
+strain exits the current state's `[lowTstateStrain, hghTstateStrain]`
+bracket (tracked explicitly, not re-derived) or the strain-rate sign
+flips (`du*CstrainRate<=0.0`, the `cid` flag) — read this function first,
+before anything else, since every other piece exists to compute what a
+transition *into* a given state initializes.
 
-Not read in any detail — budget the most time here of any stage.
-`HystereticMaterial` (`xara/SRC/material/uniaxial/HystereticMaterial.{h,cpp}`)
-is a multi-linear backbone (up to 3 points per side) with pinching and
-stiffness/strength degradation parameters. `Pinching4Material`
-(`xara/SRC/material/uniaxial/Pinching4Material.{h,cpp}`) is a
-quadrilinear backbone with substantially more extensive pinching/damage
-rules — one of the most complex uniaxial materials OpenSees ships. Read
-both fully, in the same "trace `determineTrialState`, apply the porting
-recipe" style as stages 2-3, before writing any code — do not assume
-either is a small extension of what's already landed by that point.
+**The envelope is 6 points, not 4** — `SetEnvelope()` (~810) synthesizes
+point 0 (a tiny near-origin point at `1e-4` of the first real breakpoint,
+giving the elastic state-0 slope `k = max(stress1p/strain1p,
+stress1n/strain1n)`) and point 5 (a far extrapolated point at `1e6 *
+strain4p`/`strain4n`, extending the 3-4 segment's slope if it's still
+rising, or flat at `1.1x` the point-4 stress if it's already softening)
+around the 4 real backbone points — `posEnvlpStress`/`negEnvlpStress`/
+`*Tangent` (~1038-1121) piecewise-search this 6-point array, not a
+hand-unrolled 4-branch `if` chain like `Hysteretic`'s envelope — port as
+a small loop or `Vec`/array of breakpoints, not 6 named fields per side.
+
+**The key implementation insight, easy to miss on a first read:**
+`envlpPosDamgdStress`/`envlpNegDamgdStress` (the "damaged" — strength-
+degraded — envelope actually used by `posEnvlpStress`/`negEnvlpStress`)
+*look* like they need to be stored, mutable, per-side 6-element arrays
+mirrored in the committed state. They don't. Every write site computes
+them as `envlpPosStress(i)*(1.0-gammaFUsed)` (or `...Neg...`), and
+`gammaFUsed`/`kElasticPosDamgd`/`kElasticNegDamgd` only change at a state
+*transition* (inside `getstate()`, using `gammaFUsed = CgammaF` — the
+*committed*, not trial, damage factor) — never on every `evaluate` call.
+So the actual state that needs to persist is just two scalars per side
+(`gamma_k_used`, `gamma_f_used` — `Hysteretic`-recipe committed fields,
+point 2 of the general recipe above, distinct from the `TgammaK`/
+`TgammaD`/`TgammaF` computed by `updateDmg` below), and the "damaged
+envelope" is a cheap on-demand computation (`envlp_stress[i] * (1.0 -
+gamma_f_used)`) wherever the C++ reads `envlpPosDamgdStress`/
+`envlpNegDamgdStress` — never its own stored field. Confirm this by
+checking every read site in `getstate()`, `posEnvlpStress`/
+`negEnvlpStress`, and `getState3`/`getState4` actually only ever wants
+the *last-transition* value, not something recomputed mid-call — it does
+(re-verify this claim before relying on it; it's the single highest-
+leverage simplification for this material, so worth double-checking
+against the source rather than taking the handoff's word for it).
+
+**`getState3`/`getState4`** (~1124-1395, mirror images of each other,
+same structure as `posEnvlpStress`/`negEnvlpStress` and `Envlp3`/
+`Envlp4Stress`/`Tangent` below) build the 4-point path
+`(lowTstateStrain, lowTstateStress) → (state3/4[1]) → (state3/4[2]) →
+(hghTstateStrain, hghTstateStress)` for states 3/4's trilinear
+unload-reload. Points 0 and 3 are given (the state's bracket); points 1
+and 2 are constructed from the pinching parameters (`rDispN/P`,
+`rForceN/P`, `uForceN/P`) and then run through a cascade of geometric
+sanity checks — reload point behind the target point, reload stiffness
+exceeding unload stiffness, wrong-sign or decreasing segments — each
+with its own fallback (usually "redraw points 1/2 as a straight
+33%/67% split between 0 and 3"). This cascade is the highest-risk part
+of the whole material to mistranslate: port it as a literal, checkable
+line-by-line trace of the C++ (variable names and all, adapted only for
+the trial/commit purity split), not a "cleaned up" reimplementation from
+first principles — the fallback conditions encode real degenerate-
+geometry cases discovered empirically, not something to rederive from
+the docstring-level description above. `Envlp3Stress`/`Envlp4Stress`/
+`*Tangent` (~1397-1496) then piecewise-interpolate this 4-point path,
+structurally identical to `posEnvlpStress` but over `state3`/`state4`
+instead of the 6-point backbone.
+
+**`updateDmg`** (~1498-1541) computes `TgammaK`/`TgammaD`/`TgammaF` from
+the ductility demand (`umaxAbs`/`uultAbs`) and either the dissipated-
+energy ratio or an explicit cycle count (`DmgCyc` — port as a 2-variant
+enum, `EnergyBased`/`CycleBased`, not a raw `int`), clamped against
+`gammaKLimit`/`gammaDLimit`/`gammaFLimit` and an *envelope-derived*
+stiffness limit (`gammaKLimEnv`, from how much the current
+maximum-ductility-demand point has already softened relative to the
+undamaged elastic stiffness) so damage can never make the tangent
+increase. This runs unconditionally at the end of every `setTrialStrain`
+(**not** gated behind a state transition, unlike `gammaKUsed`/
+`gammaFUsed` above) — it's the source of `TgammaK`/`TgammaD`/`TgammaF`,
+which then become next step's `CgammaK`/`CgammaD`/`CgammaF`, which then
+become `gammaKUsed`/`gammaFUsed` *only if* that next step happens to
+transition state. Three separate damage "clocks" (`used` vs. `committed`
+vs. `this step's fresh computation`) — keep them straight; this is the
+easiest place in the whole material to introduce a subtle lag/no-lag bug
+that only shows up several cycles into a real hysteretic loop, not in a
+single-step unit test.
+
+**Suggested acceptance tests**, in increasing order of how much of the
+state machine they exercise: (1) state-0 exact elastic slope at zero
+strain (`envlpPosStress(0)/envlpPosStrain(0)`, i.e. the synthetic
+near-origin point's slope — analogous to every other material's
+"exact initial tangent" test); (2) state-1/2 envelope match on first
+loading through all 4 real breakpoints plus the extrapolated point 5,
+same spirit as `Hysteretic`'s bilinear-envelope test but now against the
+6-point piecewise search; (3) a full reversal into states 3/4, checked
+against a hand-walked `getState3`/`getState4` trace for a case that does
+*not* hit any of the degenerate-geometry fallbacks (pick backbone/
+pinching parameters that keep the trilinear path well-behaved, to keep
+the hand computation tractable — the same tactic `Hysteretic`'s
+`beta=0`/`damfc1=damfc2=0` test material used); (4) at least one test
+that deliberately drives a fallback branch in `getState3`/`getState4`
+(e.g. pinching parameters that push the reload point behind the target
+point), since that cascade is exactly the risk called out above and
+deserves its own direct check, not just incidental coverage from (3).
 
 - **M8 — ForceBeamColumn.** Its own milestone per §2/§4.1 — nested
   element-level equilibrium iteration, architecturally distinct from every
