@@ -4,6 +4,7 @@ mod constraint;
 mod convergence;
 mod error;
 mod integrator;
+mod modal;
 mod solver;
 mod state;
 
@@ -14,4 +15,5 @@ pub use constraint::ConstraintHandler;
 pub use convergence::ConvergenceTest;
 pub use error::AnalysisError;
 pub use integrator::Integrator;
+pub use modal::{modal_analysis, Mode};
 pub use solver::SparseSolver;

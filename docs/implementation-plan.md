@@ -333,35 +333,68 @@ impl Analysis {
 These were identified but deliberately not settled during design, because
 they're better answered empirically than by discussion:
 
-1. **Linear algebra / sparse solver crate: `nalgebra` vs `faer`. Resolved at
-   M1 (partially).** `SparseSolver` (`core/src/analysis/solver.rs`) uses
-   `nalgebra`'s dense `DMatrix`/LU for now — at M1's DOF counts (single
-   digits) dense-vs-sparse and `nalgebra`-vs-`faer` aren't yet distinguishable
-   from each other numerically or performance-wise, so a real comparative
-   spike would be theater at this problem size. `nalgebra` was picked over
-   `faer` as the placeholder because it's the more mature/documented option
-   and this isn't the decision that matters yet. **Still open:** revisit for
-   real once M3 (multi-element frame models) produces systems large enough
-   to actually stress a solver choice — that's when to check whether a
-   sparse solver's fill-reducing ordering removes the need for a separate
-   `DOF_Numberer` abstraction, per the original question here.
+1. **Linear algebra / sparse solver crate: `nalgebra` vs `faer`. Resolved
+   for real, post-M5.** `SparseSolver` (`core/src/analysis/solver.rs`) uses
+   `faer`'s sparse LU (`SparseColMat::sp_lu()`), not a dense `nalgebra`
+   solve — the M1-M5 dense placeholder was deliberately deferred (see the
+   superseded note this replaced) until it actually mattered, and "real
+   problems are not small" was the trigger to stop deferring rather than
+   wait for a specific milestone to force the issue. `faer` over
+   `nalgebra-sparse`: a built-in sparse LU with COLAMD/AMD fill-reducing
+   ordering (answers the original "does the solver do its own fill-reducing
+   ordering" question — yes, so no separate `DOF_Numberer` abstraction is
+   needed, confirming §3.6's original bet), pure Rust (no C dependency to
+   fight through `wasm32-unknown-unknown`), and confirmed by hand to build
+   and solve correctly under `wasm32-unknown-unknown` + Node with a minimal
+   feature set (`default-features = false, features = ["std",
+   "sparse-linalg"]` — the defaults pull in `rand`/`rayon`/`npy`, and
+   `getrandom` fails the wasm32 build without the `wasm_js` backend those
+   defaults don't request). `Domain` assembles stiffness directly into
+   sparse triplets (`core/src/model/domain.rs`'s
+   `assemble_stiffness_triplets`) rather than a dense buffer that's
+   sparsified after — the whole point was avoiding the O(n²) memory/compute
+   a dense assembly-then-convert would still cost on a real model.
+   `core/tests/sparse_solver.rs` exercises a 150-free-DOF chained-beam
+   system (exact against the closed-form cantilever tip deflection) as a
+   scale sanity check beyond the single- and few-DOF systems every other
+   milestone's tests use. Refactoring the symbolic factorization across
+   Newton iterations (same sparsity pattern, only values change) is a real
+   future optimization this pass didn't need — `SparseSolver::solve`
+   currently re-factors from scratch every call.
 
-2. **ARPACK strategy for modal analysis (M5).** Two real options, both
-   validated as feasible:
-   - **FFI-bind the f2c-translated ARPACK** already proven working in the
-     Xara wasm spike (legacy `xara/OTHER/ARPACK` — *not* `arpack-ng`, whose
-     modernized debug-print calls use F90 array-constructor syntax `[j]`
-     that `f2c` can't parse; the legacy tree passes bare scalars and
-     translates cleanly). Rust and C objects link fine in one wasm module
-     via `cbindgen`/manual `extern "C"` — reuses proven, validated numerics
-     with zero new numerical risk.
-   - **Pure-Rust Lanczos/Arnoldi implementation.** No mature, battle-tested
-     equivalent exists in the Rust ecosystem today — this would be a real
-     verification-heavy undertaking, not a quick crate swap.
-   
-   Recommendation at time of writing: start with the FFI-bind option (lower
-   risk, reuses validated work) and only invest in a pure-Rust eigensolver if
-   the FFI boundary proves genuinely painful in practice.
+2. **ARPACK strategy for modal analysis (M5). Resolved for real, post-M5:
+   a hand-rolled shift-invert Lanczos — not because "no mature crate
+   exists" (the original framing), but because once `SparseSolver` went
+   sparse (decision #1), a dense full-spectrum `SymmetricEigen` on the
+   whole stiffness matrix turned out to be wrong beyond just slow: it
+   still cost O(n²) memory regardless of how sparse the model actually
+   was (could exhaust a wasm worker's memory well before compute time
+   mattered), and it always computed *every* eigenpair when the standard
+   use — including the modal-superposition damping M6+ will want — only
+   ever needs the lowest `num_modes`.** `core/src/analysis/modal.rs`'s
+   `modal_analysis` now takes a `num_modes` argument and runs a
+   shift-invert (shift = 0, i.e. operator `K^-1 * M`) Lanczos: each
+   iteration's shift-invert solve reuses `SparseSolver`'s sparse LU
+   directly, and the only dense step is `nalgebra::SymmetricEigen` on the
+   small `m×m` *projected* tridiagonal matrix (`m` = Lanczos subspace
+   size, always small — `min(2*num_modes+8, n)` — never `n` itself). This
+   is not "rolling our own ARPACK": the two numerically hard pieces
+   (sparse LU, small dense eigendecomposition) are both library code; what's
+   ours is the well-understood outer three-term-recurrence loop with full
+   M-orthogonal re-orthogonalization (cheap, since the subspace is small).
+   Only `shift = 0` is implemented (lowest frequencies — the standard
+   structural-dynamics case); a nonzero shift (targeting a frequency band,
+   or handling near-singular `K` for buckling) is a natural extension, not
+   built until something needs it. `Domain::assemble_mass_diagonal` also
+   replaced the old `assemble_mass` (which built a full dense N×N matrix
+   for what's always diagonal lumped mass — the same class of waste as a
+   dense stiffness matrix). **Verified:** `core/tests/m5_modal.rs`'s
+   `requesting_fewer_modes_than_free_dofs_returns_the_lowest_ones` checks a
+   partial-spectrum request (2 of 5 modes) against a full-spectrum solve of
+   the same system; a 500-free-DOF chain solved for its lowest 5 modes in
+   ~2ms in manual testing (not a committed benchmark, just a scale sanity
+   check). The ARPACK spike (§9) remains available reference material for
+   an eventual real ARPACK comparison, not wasted work.
 
 3. **`cmx.h`-equivalent small-matrix inversion.** Not actually a Carapace
    decision — `nalgebra`/`faer` both handle small fixed-size matrix inversion
@@ -390,8 +423,9 @@ wasm-specific wrong" still applies).
   generational `NodeId`/`ElementId` via `slotmap`) and `carapace-core::analysis`
   (typestate `AnalysisBuilder<Unwired..Ready>` per §5.4, `Integrator::LoadControl`,
   `Algorithm::Linear`, `ConvergenceTest::NormUnbalance`, `ConstraintHandler::Plain`,
-  `SparseSolver` — dense `nalgebra` LU for now, §6 decision #1 partially
-  resolved) replace the closed-form placeholder. **Acceptance verified:** same
+  `SparseSolver` — a dense `nalgebra` LU at the time, later replaced by
+  `faer`'s sparse LU, see §6 decision #1) replace the closed-form
+  placeholder. **Acceptance verified:** same
   2-node truss case as M0 (L=100, A=2, E=30000, P=50 → dx=0.0833333333),
   computed through the real architecture — `core/tests/m1_truss.rs` (native)
   and `wasm-bridge`'s `axial_displacement_via_analysis` (wasm32 + Node, via
@@ -490,11 +524,48 @@ wasm-specific wrong" still applies).
   the same P=50 load factor M1 verified directly, when given the equivalent
   target displacement instead.
 
-- **M5 — Modal analysis.** Resolve and implement §6 decision #2 (ARPACK FFI
-  vs. pure-Rust). **Acceptance:** eigenvalues of a small known model (e.g. a
-  diagonal-mass/stiffness toy problem with closed-form eigenvalues, same
-  spirit as the ARPACK spike's diag(1..100) test case) match to numerical
-  tolerance.
+- **M5 — Modal analysis.** ✅ Done. `Node` gained a `mass` field (lumped,
+  per-DOF — element-consistent mass matrices are still M6's job) and
+  `Domain::assemble_mass_diagonal` builds the free-DOF mass diagonal from
+  it (a `DVector`, not a dense or sparse N×N matrix — `M` is diagonal by
+  construction, so anything more is pure waste). `analysis::modal_analysis`
+  (`core/src/analysis/modal.rs`) solves the generalized eigenproblem
+  `K*phi = omega^2*M*phi` at the domain's current state, requesting the
+  lowest `num_modes` via a shift-invert Lanczos — see §6 decision #2 for
+  the full resolution (a dense full-spectrum solve was the initial version
+  of this milestone, later replaced once it turned out to be wrong beyond
+  just slow — real projects should read decision #2's writeup, not just
+  this summary, before assuming "dense" anywhere in this codebase). A free
+  DOF with zero mass, or a `num_modes` outside `[1, num_free_dofs]`, is
+  reported as `AnalysisError::SingularSystem` /
+  `AnalysisError::InvalidModeCount` respectively — not silently wrong.
+  Frequencies are returned sorted ascending.
+
+  **Acceptance verified:** `core/tests/m5_modal.rs` (native) +
+  `wasm-bridge`'s `mass_spring_chain_frequencies` (wasm32 + Node) — the
+  classic 2-DOF "1-1-1-1" mass-spring chain (unit masses, unit spring
+  stiffnesses, `ZeroLength`+`Elastic` in series) matches its exact
+  closed-form natural frequencies `1/phi` and `phi` (golden ratio, from the
+  characteristic polynomial `lambda^2 - 3*lambda + 1 = 0`) to 1e-9. A
+  second test confirms the massless-free-DOF case is reported as an error
+  rather than silently dividing by zero. A third
+  (`requesting_fewer_modes_than_free_dofs_returns_the_lowest_ones`) checks
+  the Lanczos partial-spectrum request itself: asking a 5-free-DOF chain
+  for only its lowest 2 modes matches a full 5-mode solve of the same
+  system.
+
+- **Post-M5 — `SparseSolver` switched to a real sparse solver (`faer`), and
+  `modal_analysis` to a shift-invert Lanczos.** Not a numbered milestone
+  (see §6 decisions #1 and #2's full writeups for the reasoning): the
+  M1-M5 dense placeholders were deliberately deferred until they mattered,
+  and "real problems are not small" was the trigger to stop deferring —
+  for both the linear solve and, once that went sparse, the eigensolve
+  that had been quietly relying on it staying dense-compatible.
+  `core/tests/sparse_solver.rs` adds a 150-free-DOF chained-beam scale
+  check for the linear solve; the Lanczos partial-spectrum test above
+  covers the eigensolve. Every pre-existing milestone test (M1-M5) passed
+  unmodified against both new solvers — a real correctness signal, not
+  just "it compiles."
 
 - **M6 — Mass, Rayleigh damping, Newmark, time-history analysis.** First
   transient analysis. Needs element/nodal mass matrices (lumped, to start)

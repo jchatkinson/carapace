@@ -1,7 +1,8 @@
-use nalgebra::{DMatrix, DVector};
+use faer::sparse::Triplet;
+use nalgebra::DVector;
 use slotmap::SlotMap;
 
-use super::{Element, ElementId, Node, NodeId, ELEMENT_DOF, NDF};
+use super::{Element, ElementId, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
 
 /// Owns all nodes and elements. No serialization/broker machinery (§3.3) —
 /// this is the whole model, in memory, for one worker.
@@ -63,12 +64,35 @@ impl Domain {
         self.num_free_dofs
     }
 
-    /// Assemble the global tangent stiffness and internal resisting force
-    /// over free DOFs only, at the current nodal displacement state. No
-    /// load-pattern contribution — see `assemble_reference_load`.
-    pub(crate) fn assemble_tangent_and_resistance(&self) -> (DMatrix<f64>, DVector<f64>) {
+    /// Number DOFs (idempotent given a fixed set of nodes) and assemble the
+    /// lumped-mass matrix's diagonal over free DOFs — needed by modal
+    /// analysis (M5). No element-consistent mass matrices yet (M6); entirely
+    /// `Node::mass`. Just the diagonal, not a full (dense or sparse) N×N
+    /// matrix — `M` is diagonal by construction (lumped mass), so storing
+    /// anything more is pure waste, the same class of mistake a dense
+    /// stiffness matrix would be (see `SparseMatrix`'s doc comment).
+    pub fn assemble_mass_diagonal(&mut self) -> DVector<f64> {
+        self.number_dofs();
         let n = self.num_free_dofs;
-        let mut k = DMatrix::<f64>::zeros(n, n);
+        let mut mass = DVector::<f64>::zeros(n);
+        for (_, node) in self.nodes.iter() {
+            for dof in 0..NDF {
+                if let Some(eq) = node.equation[dof] {
+                    mass[eq] += node.mass[dof];
+                }
+            }
+        }
+        mass
+    }
+
+    /// Per-element tangent-stiffness triplets and the assembled internal
+    /// resisting force, over free DOFs, at the current nodal displacement
+    /// state. Duplicate `(row, col)` triplets (every DOF shared by more
+    /// than one element) are summed by whoever consumes them — `faer`'s
+    /// triplet constructor does this automatically.
+    fn assemble_stiffness_triplets(&self) -> (Vec<Triplet<usize, usize, f64>>, DVector<f64>) {
+        let n = self.num_free_dofs;
+        let mut triplets = Vec::new();
         let mut resistance = DVector::<f64>::zeros(n);
 
         for (_, element) in self.elements.iter() {
@@ -86,11 +110,23 @@ impl Domain {
                 resistance[*eq_a] += r_local[a];
                 for (b, eq_b) in equations.iter().enumerate() {
                     let Some(eq_b) = eq_b else { continue };
-                    k[(*eq_a, *eq_b)] += k_local[(a, b)];
+                    triplets.push(Triplet::new(*eq_a, *eq_b, k_local[(a, b)]));
                 }
             }
         }
 
+        (triplets, resistance)
+    }
+
+    /// Assemble the global tangent stiffness (sparse) and internal
+    /// resisting force over free DOFs only, at the current nodal
+    /// displacement state. No load-pattern contribution — see
+    /// `assemble_reference_load`.
+    pub(crate) fn assemble_tangent_and_resistance(&self) -> (SparseMatrix, DVector<f64>) {
+        let n = self.num_free_dofs;
+        let (triplets, resistance) = self.assemble_stiffness_triplets();
+        let k = SparseMatrix::try_new_from_triplets(n, n, &triplets)
+            .expect("equation numbers are always in [0, num_free_dofs)");
         (k, resistance)
     }
 
@@ -132,7 +168,7 @@ impl Domain {
     /// Assemble the global tangent stiffness and unbalanced-force residual
     /// (`load_factor * reference_load - internal_resistance`) over free
     /// DOFs only. Called once per Newton iteration by `Analysis::step`.
-    pub(crate) fn form_tangent_and_residual(&self, load_factor: f64) -> (DMatrix<f64>, DVector<f64>) {
+    pub(crate) fn form_tangent_and_residual(&self, load_factor: f64) -> (SparseMatrix, DVector<f64>) {
         let (k, resistance) = self.assemble_tangent_and_resistance();
         let residual = load_factor * self.assemble_reference_load() - resistance;
         (k, residual)

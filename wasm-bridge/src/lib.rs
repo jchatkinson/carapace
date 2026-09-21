@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
 use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Material, Node, Truss, ZeroLength};
 
 #[wasm_bindgen]
@@ -133,4 +133,26 @@ pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
 
     analysis.step().expect("should converge across the EPP yield point");
     analysis.domain().node(node_j).displacement[0]
+}
+
+/// M5 wiring check: the 2-DOF "1-1-1-1" mass-spring chain's natural
+/// frequencies, closed form `1/phi` and `phi` (golden ratio) — see
+/// `core/tests/m5_modal.rs` for the native equivalent and derivation.
+/// Returns `[omega1, omega2]`.
+#[wasm_bindgen]
+pub fn mass_spring_chain_frequencies() -> Vec<f64> {
+    let mut domain = Domain::new();
+    let ground = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let m1 = domain.add_node(Node::new([1.0, 0.0]).fix(1).fix(2).with_mass(0, 1.0));
+    let m2 = domain.add_node(Node::new([2.0, 0.0]).fix(1).fix(2).with_mass(0, 1.0));
+
+    domain.add_element(Element::ZeroLength(
+        ZeroLength::new(ground, m1).with_material(0, Material::Elastic { e: 1.0 }),
+    ));
+    domain.add_element(Element::ZeroLength(
+        ZeroLength::new(m1, m2).with_material(0, Material::Elastic { e: 1.0 }),
+    ));
+
+    let modes = modal_analysis(&mut domain, 2).expect("2-DOF chain should have a well-posed eigenproblem");
+    modes.iter().map(|m| m.frequency).collect()
 }

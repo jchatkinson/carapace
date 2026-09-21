@@ -25,3 +25,14 @@ pub const NDF: usize = 3;
 /// stable Rust's const generics can't yet compute `2 * NDF` inline at each
 /// `SMatrix`/`SVector` use site.
 pub const ELEMENT_DOF: usize = 2 * NDF;
+
+/// The global tangent stiffness matrix's representation: sparse, not a
+/// dense `nalgebra::DMatrix` — resolves implementation-plan §6 decision #1
+/// for real. `faer` over `nalgebra-sparse`: a built-in sparse LU with
+/// COLAMD/AMD fill-reducing ordering (so no separate `DOF_Numberer`
+/// abstraction is needed, per the original §6 question), pure Rust (no C
+/// dependency to fight through `wasm32-unknown-unknown`), and confirmed to
+/// build and solve correctly under wasm32 + Node with a minimal feature set
+/// (`std` + `sparse-linalg`, dropping `rand`/`rayon`/`npy`, which otherwise
+/// pull in a `getrandom` wasm build failure).
+pub(crate) type SparseMatrix = faer::sparse::SparseColMat<usize, f64>;

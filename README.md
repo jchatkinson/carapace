@@ -45,7 +45,7 @@ to be in 1997.
 
 ## Status
 
-M1–M4 done. Real `Domain`/`Node`/
+M1–M5 done. Real `Domain`/`Node`/
 `Element::{Truss,ZeroLength,ElasticBeamColumn}`/
 `Material::{Elastic,ElasticPP,Gap,Ent}` types and a typestate-composed
 `Analysis` replace the M0 closed-form placeholder, verified against known
@@ -56,10 +56,26 @@ local↔global transform, and element loads (uniform transverse).
 analysis composition past the M1 baseline of `LoadControl` + `Linear` —
 Newton iteration is what lets a single step now cross a material's nonlinear
 regime boundary correctly, which `Linear`'s one-shot solve structurally
-can't do. The M2 materials are still stateless (reversible) simplifications —
-real path-dependent plasticity (permanent set on unload) lands with the M7
-stateful materials. See `docs/implementation-plan.md` for the milestone
-roadmap, starting at M5 (modal analysis).
+can't do. `modal_analysis` (M5) adds lumped nodal mass and a generalized
+eigenproblem solve. Post-M5, both solvers in the codebase moved from dense
+to real sparse implementations, once "real problems are not small" made the
+M1-M5 dense placeholders indefensible: `SparseSolver` now uses `faer`'s
+sparse LU (COLAMD/AMD fill-reducing ordering, pure Rust, verified on wasm32
++ Node), with `Domain` assembling stiffness directly into sparse triplets
+rather than a dense buffer; `modal_analysis` now runs a shift-invert Lanczos
+that reuses `SparseSolver`'s sparse LU for each iteration's solve and only
+asks for the `num_modes` actually wanted (a dense full-spectrum eigensolve
+can't do partial-spectrum extraction at all — it was the wrong shape of
+computation independent of raw size, since real modal analysis and
+mode-superposition damping only ever want the lowest handful of modes out
+of a model with many more DOFs than that). Every pre-existing milestone test
+passed unmodified against both new solvers. The M2 materials are still
+stateless (reversible) simplifications — real path-dependent plasticity
+(permanent set on unload) lands with the M7 stateful materials. See
+`docs/implementation-plan.md` for the milestone roadmap, starting at M6
+(element/nodal mass matrices, Rayleigh damping, Newmark time-history
+analysis — which can now build on `modal_analysis`'s mass-normalized mode
+shapes for modal damping).
 
 ## Workspace layout
 

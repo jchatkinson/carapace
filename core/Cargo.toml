@@ -9,3 +9,4 @@ name = "carapace_core"
 [dependencies]
 slotmap = "1.1"
 nalgebra = "0.35"
+faer = { version = "0.24", default-features = false, features = ["std", "sparse-linalg"] }

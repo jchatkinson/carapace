@@ -8,4 +8,7 @@ pub enum AnalysisError {
     /// An `Integrator::DisplacementControl`'s controlled DOF is fixed (not
     /// part of the free-DOF system), so there's no equation to control.
     InvalidConstraint,
+    /// `modal_analysis` was asked for more modes than the model has free
+    /// DOFs (or zero modes) — there's no such Krylov subspace to build.
+    InvalidModeCount { requested: usize, free_dofs: usize },
 }

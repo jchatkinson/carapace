@@ -19,6 +19,10 @@ pub struct Node {
     pub fixed: [bool; NDF],
     pub load: [f64; NDF],
     pub displacement: [f64; NDF],
+    /// Lumped nodal mass per DOF — a user-assigned point mass, not an
+    /// element-consistent mass matrix (element mass lands at M6). Needed by
+    /// modal analysis (M5) and later time-history analysis (M6).
+    pub mass: [f64; NDF],
     /// Equation number for each free DOF, or `None` if fixed. Assigned by
     /// `Domain::number_dofs` during `AnalysisBuilder::build`.
     pub(crate) equation: [Option<usize>; NDF],
@@ -31,6 +35,7 @@ impl Node {
             fixed: [false; NDF],
             load: [0.0; NDF],
             displacement: [0.0; NDF],
+            mass: [0.0; NDF],
             equation: [None; NDF],
         }
     }
@@ -42,6 +47,11 @@ impl Node {
 
     pub fn with_load(mut self, dof: usize, value: f64) -> Self {
         self.load[dof] = value;
+        self
+    }
+
+    pub fn with_mass(mut self, dof: usize, value: f64) -> Self {
+        self.mass[dof] = value;
         self
     }
 }
