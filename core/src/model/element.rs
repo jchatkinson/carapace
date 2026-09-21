@@ -55,6 +55,20 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_load_vector(node_i, node_j),
         }
     }
+
+    /// This element's lumped-mass contribution (diagonal only — see §4.4:
+    /// "lumped, to start") in the same local DOF order, geometry-dependent
+    /// (`length`) for `Truss`/`ElasticBeamColumn` so it needs both nodes.
+    /// Zero for `ZeroLength` (a spring/connector, not a mass-bearing
+    /// member) and for `Truss`/`ElasticBeamColumn` with the default
+    /// `density = 0.0`.
+    pub fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+        match self {
+            Element::Truss(t) => t.form_mass(node_i, node_j),
+            Element::ZeroLength(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
+            Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
+        }
+    }
 }
 
 /// A 2-node axial truss: fixed-size element-local linear algebra (§3.4), no
@@ -69,6 +83,9 @@ pub struct Truss {
     pub node_j: NodeId,
     pub area: f64,
     pub material: Material,
+    /// Mass per unit volume. Zero (the default) means massless — existing
+    /// models are unaffected unless they opt in via `with_density`.
+    pub density: f64,
 }
 
 impl Truss {
@@ -78,7 +95,13 @@ impl Truss {
             node_j,
             area,
             material,
+            density: 0.0,
         }
+    }
+
+    pub fn with_density(mut self, density: f64) -> Self {
+        self.density = density;
+        self
     }
 
     fn geometry(&self, node_i: &Node, node_j: &Node) -> (f64, f64, f64) {
@@ -110,6 +133,16 @@ impl Truss {
         let resistance = (stress * self.area) * b;
 
         (k, resistance)
+    }
+
+    /// Lumped mass: half the element's total mass (`density * area * length`)
+    /// at each node, split equally between that node's translational DOFs —
+    /// a point mass has no directional preference. Zero rotational
+    /// contribution (index 2, 5) — a truss carries no moment either.
+    fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+        let (length, _cx, _cy) = self.geometry(node_i, node_j);
+        let half = self.density * self.area * length / 2.0;
+        SVector::<f64, ELEMENT_DOF>::from_column_slice(&[half, half, 0.0, half, half, 0.0])
     }
 }
 

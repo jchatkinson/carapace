@@ -239,16 +239,19 @@ done.
 ### 4.4 Supporting infrastructure
 
 - **Mass:** lumped (diagonal) mass matrices per element, or nodal mass —
-  needed for modal and time-history analyses.
+  needed for modal and time-history analyses. ✅ Done at M5 (nodal) / M6
+  (element).
 - **Loads:** nodal loads (done in M1) and element loads (distributed loads on
-  beam-columns — needed once `ElasticBeamColumn`/`DispBeamColumn` land).
+  beam-columns — needed once `ElasticBeamColumn`/`DispBeamColumn` land). ✅
+  Done at M3.
 - **`geomTransf`:** `Linear` and `PDelta` are cheap (small correction terms).
-  **Corotational is a separate, high-complexity milestone (M9)** if/when
-  large-displacement analysis is actually needed — it requires element-local
-  frame tracking and large-rotation updates, comparable in complexity to
-  force-based elements. Confirm this is actually in scope before starting it;
-  it was flagged as "decide if you need it" during scoping, not committed.
-- **Rayleigh damping:** needed for time-history analysis (M6).
+  ✅ Done at M3. **Corotational is a separate, high-complexity milestone
+  (M9)** if/when large-displacement analysis is actually needed — it
+  requires element-local frame tracking and large-rotation updates,
+  comparable in complexity to force-based elements. Confirm this is
+  actually in scope before starting it; it was flagged as "decide if you
+  need it" during scoping, not committed.
+- **Rayleigh damping:** needed for time-history analysis (M6). ✅ Done.
 
 ---
 
@@ -567,11 +570,65 @@ wasm-specific wrong" still applies).
   unmodified against both new solvers — a real correctness signal, not
   just "it compiles."
 
-- **M6 — Mass, Rayleigh damping, Newmark, time-history analysis.** First
-  transient analysis. Needs element/nodal mass matrices (lumped, to start)
-  and Rayleigh damping. **Acceptance:** a simple SDOF or 2-DOF dynamic
-  problem with a known closed-form or well-established numerical response
-  matches within tolerance.
+- **M6 — Mass, Rayleigh damping, Newmark, time-history analysis.** ✅ Done.
+
+  **Element mass.** `Truss`/`ElasticBeamColumn` gained a `density` field
+  (`with_density`, default 0.0 — massless, so no existing model changes
+  behavior) and `form_mass` (`core/src/model/element.rs`,
+  `core/src/model/beam.rs`): half the element's total mass
+  (`density*area*length`) lumped to each node's translational DOFs, zero
+  rotational contribution — the simplest standard lumped-mass model, per
+  §4.4's "lumped, to start." `Domain::assemble_mass_diagonal` (from M5,
+  now additive over `Node::mass` *and* every element's `form_mass`) stays
+  a `DVector`, not a matrix — `M` is diagonal by construction regardless
+  of how many contributors feed it.
+
+  **`RayleighDamping`** (`core/src/analysis/damping.rs`): a concrete
+  `{ alpha_m, beta_k }` struct (`C = alpha_m*M + beta_k*K`), not an enum —
+  it's the one form of damping in scope, per §4.4.
+
+  **`TransientAnalysis`** (`core/src/analysis/transient.rs`): a type
+  distinct from `Analysis`/`AnalysisBuilder`, not a third `Integrator`
+  variant — static analysis (scalar load factor, optionally Newton-iterated
+  displacement at fixed time) and dynamic analysis (displacement/velocity/
+  acceleration propagated through actual time) are different enough
+  physical processes that unifying them would blur both, the same reasoning
+  behind `modal_analysis` being a free function rather than an `Analysis`
+  mode. Fixed at Newmark's "average acceleration" parameters
+  (`beta=1/4, gamma=1/2` — unconditionally stable, OpenSees' own default),
+  one linear solve per step (exact for this milestone's linear-elastic
+  scope, mirroring `Algorithm::Linear`'s identical caveat for the static
+  case — a Newton-iterated corrector for nonlinear dynamic response is a
+  natural extension, not built until needed). `TransientAnalysis::new`
+  computes a consistent initial acceleration from equilibrium at t=0
+  (`M*a0 = F0 - K*u0 - C*v0`) so free-vibration problems (the standard
+  validation case) don't need a fabricated starting acceleration.
+  `Node` gained `velocity`/`acceleration` fields and
+  `with_initial_displacement`/`with_initial_velocity` builders (bypassing
+  the usual equation-driven displacement path, since an initial condition
+  is given, not solved for). `Domain` gained the gather/scatter plumbing
+  (`gather_displacement`/`velocity`/`acceleration`, `scatter_state`) plus
+  `assemble_newmark_system` (one traversal producing both the effective
+  sparse stiffness `K_eff = (1+a4*beta_k)*K + (a1+a4*alpha_m)*diag(mass)`
+  and the `K*damp_vector` term the effective load needs, reusing the same
+  raw triplets `assemble_tangent_and_resistance` builds from, and
+  `multiply_stiffness`, a single sparse mat-vec product used once for the
+  initial-acceleration solve) — no new `faer` sparse-matrix-arithmetic API
+  needed; scaling/adding was done directly on the triplets.
+
+  **Acceptance verified:** `core/tests/m6_dynamics.rs` (native) +
+  `wasm-bridge`'s `damped_sdof_free_vibration_displacement` (wasm32 +
+  Node). Two element-mass checks (`Truss` and `ElasticBeamColumn`) against
+  the exact SDOF closed form `omega = sqrt(k/m)` via `modal_analysis`
+  (solver precision, 1e-9 — a static/modal check, no time discretization
+  involved). Two Newmark + Rayleigh-damping checks — undamped and 5%
+  mass-proportional-damped SDOF free vibration — against the classical
+  closed forms `u(t) = u0*cos(omega*t)` and `u(t) = exp(-xi*omega*t)*u0*
+  [cos(omega_d*t) + (xi*omega/omega_d)*sin(omega_d*t)]`. These match to
+  ~7e-6 (checked against a 1e-4 tolerance) — real, small Newmark
+  discretization error at this `dt`/period ratio (~1/630), not solver
+  precision; the first milestone where a "closed form" acceptance check
+  is honestly approximate rather than exact, and the test comments say so.
 
 - **M7 — DispBeamColumn + fiber sections + full standard material catalog.**
   `BeamIntegration` (Gauss-Legendre/Lobatto), fiber section stress-resultant

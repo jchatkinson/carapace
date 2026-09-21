@@ -21,6 +21,9 @@ pub struct ElasticBeamColumn {
     /// scope is exactly this one load case; generalize only when a second
     /// element-load type is actually needed.
     pub w_transverse: f64,
+    /// Mass per unit volume. Zero (the default) means massless — existing
+    /// models are unaffected unless they opt in via `with_density`.
+    pub density: f64,
 }
 
 impl ElasticBeamColumn {
@@ -33,11 +36,17 @@ impl ElasticBeamColumn {
             iz,
             transform,
             w_transverse: 0.0,
+            density: 0.0,
         }
     }
 
     pub fn with_uniform_load(mut self, w_transverse: f64) -> Self {
         self.w_transverse = w_transverse;
+        self
+    }
+
+    pub fn with_density(mut self, density: f64) -> Self {
+        self.density = density;
         self
     }
 
@@ -166,5 +175,16 @@ impl ElasticBeamColumn {
             -w * l * l / 12.0,
         ]);
         t.transpose() * local
+    }
+
+    /// Lumped mass: half the element's total mass (`density * a * length`)
+    /// at each node's translational DOFs, zero rotational contribution —
+    /// the simplest standard lumped-mass model (§4.4: "lumped, to start");
+    /// a consistent (non-diagonal) mass matrix or a nonzero rotational
+    /// lumped inertia is a further refinement, not built until needed.
+    pub(super) fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
+        let (length, _cx, _cy) = self.geometry(node_i, node_j);
+        let half = self.density * self.a * length / 2.0;
+        SVector::<f64, 6>::from_column_slice(&[half, half, 0.0, half, half, 0.0])
     }
 }

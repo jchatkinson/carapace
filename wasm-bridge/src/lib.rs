@@ -1,6 +1,9 @@
 use wasm_bindgen::prelude::*;
 
-use carapace_core::analysis::{modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, RayleighDamping,
+    TransientAnalysis,
+};
 use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Material, Node, Truss, ZeroLength};
 
 #[wasm_bindgen]
@@ -155,4 +158,36 @@ pub fn mass_spring_chain_frequencies() -> Vec<f64> {
 
     let modes = modal_analysis(&mut domain, 2).expect("2-DOF chain should have a well-posed eigenproblem");
     modes.iter().map(|m| m.frequency).collect()
+}
+
+/// M6 wiring check: Newmark + Rayleigh-damped SDOF free vibration, closed
+/// form `u(t) = exp(-xi*omega*t) * u0 * [cos(omega_d*t) +
+/// (xi*omega/omega_d)*sin(omega_d*t)]` — see `core/tests/m6_dynamics.rs`
+/// for the native equivalent and derivation. Returns the displacement
+/// after `steps` steps of size `dt`.
+#[wasm_bindgen]
+pub fn damped_sdof_free_vibration_displacement(steps: usize, dt: f64) -> f64 {
+    let (k_spring, m, xi): (f64, f64, f64) = (1.0, 1.0, 0.05);
+    let omega = (k_spring / m).sqrt();
+    let alpha_m = 2.0 * xi * omega;
+
+    let mut domain = Domain::new();
+    let ground = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let mass_node = domain.add_node(
+        Node::new([1.0, 0.0])
+            .fix(1)
+            .fix(2)
+            .with_mass(0, m)
+            .with_initial_displacement(0, 1.0),
+    );
+    domain.add_element(Element::ZeroLength(
+        ZeroLength::new(ground, mass_node).with_material(0, Material::Elastic { e: k_spring }),
+    ));
+
+    let mut analysis = TransientAnalysis::new(domain, RayleighDamping::new(alpha_m, 0.0), dt)
+        .expect("SDOF with assigned mass should have a well-posed transient system");
+    for _ in 0..steps {
+        analysis.step().expect("linear damped SDOF should solve every step");
+    }
+    analysis.domain().node(mass_node).displacement[0]
 }

@@ -45,7 +45,7 @@ to be in 1997.
 
 ## Status
 
-M1–M5 done. Real `Domain`/`Node`/
+M1–M6 done. Real `Domain`/`Node`/
 `Element::{Truss,ZeroLength,ElasticBeamColumn}`/
 `Material::{Elastic,ElasticPP,Gap,Ent}` types and a typestate-composed
 `Analysis` replace the M0 closed-form placeholder, verified against known
@@ -69,13 +69,24 @@ can't do partial-spectrum extraction at all — it was the wrong shape of
 computation independent of raw size, since real modal analysis and
 mode-superposition damping only ever want the lowest handful of modes out
 of a model with many more DOFs than that). Every pre-existing milestone test
-passed unmodified against both new solvers. The M2 materials are still
-stateless (reversible) simplifications — real path-dependent plasticity
-(permanent set on unload) lands with the M7 stateful materials. See
-`docs/implementation-plan.md` for the milestone roadmap, starting at M6
-(element/nodal mass matrices, Rayleigh damping, Newmark time-history
-analysis — which can now build on `modal_analysis`'s mass-normalized mode
-shapes for modal damping).
+passed unmodified against both new solvers. `TransientAnalysis` (M6) adds
+Newmark-beta time-history integration and `RayleighDamping`
+(`C = alpha_m*M + beta_k*K`) — a type distinct from `Analysis`, not a third
+`Integrator` variant, since propagating displacement/velocity/acceleration
+through actual time is different enough from static equilibrium at a fixed
+load factor to warrant its own type (the same reasoning behind
+`modal_analysis` being a free function). `Truss`/`ElasticBeamColumn` gained
+an optional `density` for element-consistent lumped mass, additive with
+M5's nodal `Node::mass`. Verified against classical closed-form SDOF free
+vibration (undamped and 5%-damped) to ~7e-6 — real Newmark discretization
+error at typical `dt`/period ratios, the first milestone where a
+closed-form check is honestly approximate rather than exact to solver
+precision. The M2 materials are still stateless (reversible)
+simplifications — real path-dependent plasticity (permanent set on unload)
+lands with the M7 stateful materials. See `docs/implementation-plan.md` for
+the milestone roadmap, starting at M7 (`DispBeamColumn` + fiber sections +
+full standard material catalog, including the recursive composite
+materials — `Parallel`/`Series`/`MinMax`).
 
 ## Workspace layout
 
