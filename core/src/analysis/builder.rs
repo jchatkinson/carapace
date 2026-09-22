@@ -92,7 +92,19 @@ impl AnalysisBuilder<WithAlgorithm> {
 impl AnalysisBuilder<Ready> {
     /// Numbers DOFs and builds the sparsity/solver setup once, here — not
     /// re-checked every step (§4.4; no live re-solve loop per §1).
+    ///
+    /// # Panics
+    /// If `domain` has any `equal_dof`/`rigid_diaphragm` constraint but
+    /// `ConstraintHandler::Plain` was selected — `Plain` can't resolve
+    /// multi-point constraints (see its doc comment); use `Transformation`.
+    /// This is a model-construction error, not a runtime condition, so it's
+    /// caught here rather than threaded through `Result` (§2.8 is about
+    /// real runtime failure, not misuse of the builder).
     pub fn build(self, mut domain: Domain) -> Analysis {
+        assert!(
+            !(matches!(self.state.constraint_handler, ConstraintHandler::Plain) && domain.has_mp_constraints()),
+            "ConstraintHandler::Plain can't resolve multi-point constraints (equal_dof/rigid_diaphragm) — use ConstraintHandler::Transformation"
+        );
         domain.number_dofs();
         Analysis {
             domain,

@@ -184,6 +184,18 @@ another.
 
 All of the above are done as of M6/M7 — see §6.
 
+- **Multi-point constraints:** `Domain::equal_dof`/`rigid_diaphragm`
+  (Xara/OpenSees's `equalDOF`/`rigidDiaphragm`), resolved by
+  `ConstraintHandler::Transformation` — see its doc comment
+  (`core/src/analysis/constraint.rs`) for the DOF-equation-aliasing scheme
+  and why it's sufficient here without a general coefficient/transformation
+  matrix. Deliberately narrower than Xara's `rigidDiaphragm`: this is a 2D
+  (`NDF = 3`: x, y, rz) model, so there's no out-of-plane axis for a
+  "diaphragm perpendicular to it" to mean anything — `rigid_diaphragm` here
+  is the standard 2D-frame simplification of tying constrained nodes'
+  x-translation DOF to a retained node's, not true rigid-body (lever-arm)
+  kinematics. Done — see `core/tests/m_constraints.rs`.
+
 ---
 
 ## 4. System architecture (worker / JS integration)
@@ -414,6 +426,42 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
 
 - **M11 — Results persistence.** Not started. SQLite-over-OPFS integration
   (§4.3), throttled progress-snapshot `postMessage` streaming.
+
+- **M12 — Algorithm richness (line search, initial/secant tangent, Krylov
+  acceleration).** Not started. `Algorithm` is currently just
+  `Linear`/`NewtonRaphson` (full Newton, current tangent every iteration,
+  no globalization) — see [`docs/algorithms.md`](algorithms.md) for the
+  full design: a `TangentStrategy` axis (current/initial/reuse-first,
+  needing `SparseSolver` to support factor-once-solve-many first), a
+  `LineSearch` modifier (Bisection/RegulaFalsi to start), and a
+  Krylov-subspace-accelerated modified-Newton variant, each ported from a
+  specific `xara/SRC/analysis/algorithm/equiSolnAlgo/` source file rather
+  than re-derived. Scoped to static `Analysis` only —
+  `TransientAnalysis`'s own already-flagged Newton-corrector gap (§6 M6
+  note) is separate follow-on work that can reuse whatever comes out of
+  this milestone.
+
+- **M13 — Event-to-event (EtE) stepping.** Not started. A genuinely
+  different `Algorithm` variant from M12's Newton family — for a model
+  built from piecewise-linear materials, the response between "events"
+  (a fiber yielding, a gap closing, a hysteretic control point crossed)
+  is exactly linear, so the load-factor distance to the next event can be
+  solved for directly (one linear solve, zero iteration, zero
+  convergence tolerance) rather than approximated by Newton — the
+  numerical basis of PERFORM-3D, which OpenSees/Xara has no equivalent
+  of (confirmed: nothing under `xara/SRC/analysis/`), so unlike every
+  other milestone here there is no source tree to port from — designed
+  instead from the originating paper (Karamchandani & Cornell 1992) and
+  CSI's own public terminology for the same technique in SAP2000/ETABS.
+  See [`docs/algorithms.md`](algorithms.md)'s Part II for the full
+  design: a new `Material::distance_to_event` query (closed-enum match
+  arm per variant, §12), its aggregation up through `FiberSection`/
+  element/`Domain` (§13, including the harder `ForceBeamColumn` and
+  `Series`/`MinMax`-composite sub-problems flagged as open rather than
+  hand-waved), event lumping's precise exactness guarantee (§14), and an
+  explicit open decision on smooth (non-piecewise-linear) materials
+  (`Steel02`/`Concrete01`/`Concrete02`, §13.4) that needs resolving
+  before implementation, not during it.
 
 ---
 

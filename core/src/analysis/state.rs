@@ -5,7 +5,11 @@ use super::{Algorithm, AnalysisError, ConstraintHandler, ConvergenceTest, Integr
 /// A fully-wired analysis (only buildable via `AnalysisBuilder<Ready>::build`).
 pub struct Analysis {
     pub(crate) domain: Domain,
-    #[allow(dead_code)] // read once multi-point constraints exist
+    /// Only actually consulted at `AnalysisBuilder<Ready>::build` time (to
+    /// reject `Plain` against a domain with multi-point constraints) —
+    /// kept here rather than dropped after `build` so `Analysis` still
+    /// records which strategy it was built with.
+    #[allow(dead_code)]
     pub(crate) constraint_handler: ConstraintHandler,
     pub(crate) integrator: Integrator,
     pub(crate) algorithm: Algorithm,

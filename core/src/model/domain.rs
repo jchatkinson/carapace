@@ -1,8 +1,23 @@
+use std::collections::HashSet;
+
 use faer::sparse::Triplet;
 use nalgebra::DVector;
 use slotmap::SlotMap;
 
 use super::{Element, ElementId, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
+
+/// A multi-point constraint tying `dofs` of `constrained` exactly to the
+/// same DOFs of `retained` (`u_c[dof] = u_r[dof]`) — identity ties only, no
+/// coefficients, no cross-DOF terms. See `ConstraintHandler::Transformation`
+/// for how this is resolved (DOF-equation aliasing, not a real
+/// transformation matrix) and why that's sufficient for `equal_dof`/
+/// `rigid_diaphragm` specifically.
+#[derive(Debug, Clone)]
+struct MpConstraint {
+    retained: NodeId,
+    constrained: NodeId,
+    dofs: Vec<usize>,
+}
 
 /// Owns all nodes and elements. No serialization/broker machinery (§2.3) —
 /// this is the whole model, in memory, for one worker. `Clone` backs
@@ -14,6 +29,7 @@ use super::{Element, ElementId, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
 pub struct Domain {
     nodes: SlotMap<NodeId, Node>,
     elements: SlotMap<ElementId, Element>,
+    mp_constraints: Vec<MpConstraint>,
     num_free_dofs: usize,
 }
 
@@ -34,6 +50,31 @@ impl Domain {
         &self.nodes[id]
     }
 
+    /// Tie `dofs` of `constrained` exactly to the same DOFs of `retained`
+    /// (`u_c = u_r` for each listed dof) — Xara/OpenSees's `equalDOF`.
+    /// Requires `ConstraintHandler::Transformation`; see its doc comment
+    /// for how this is resolved.
+    pub fn equal_dof(&mut self, retained: NodeId, constrained: NodeId, dofs: &[usize]) {
+        self.mp_constraints.push(MpConstraint {
+            retained,
+            constrained,
+            dofs: dofs.to_vec(),
+        });
+    }
+
+    /// Tie the x-translation DOF of every node in `constrained` to
+    /// `retained`'s — the standard 2D-frame simplification for a rigid
+    /// floor diaphragm (Xara/OpenSees's `rigidDiaphragm` is inherently 3D:
+    /// it ties in-plane translations *and* rotation-about-axis through a
+    /// lever arm to nodes in a plane perpendicular to a given axis, which
+    /// doesn't map onto a single-plane 2D model). Equivalent to calling
+    /// `equal_dof(retained, c, &[0])` for each `c` in `constrained`.
+    pub fn rigid_diaphragm(&mut self, retained: NodeId, constrained: &[NodeId]) {
+        for &c in constrained {
+            self.equal_dof(retained, c, &[0]);
+        }
+    }
+
     /// Equation number of a node's DOF, or `None` if it's fixed. Used by
     /// `Integrator::DisplacementControl` to locate its controlled DOF in
     /// the free-DOF system.
@@ -41,17 +82,32 @@ impl Domain {
         self.nodes[node].equation[dof]
     }
 
-    /// Assign a sequential equation number to every free DOF, in node
-    /// insertion order. Fixed DOFs get no equation number. This is the
-    /// entire numbering pass — done once, not re-checked every step (§4.4:
-    /// no live re-solve means no `hasDomainChanged()`-style machinery).
+    /// Assign a sequential equation number to every free, unconstrained
+    /// DOF, in node insertion order, then alias every multi-point-
+    /// constrained DOF to its retained node's equation number for that DOF
+    /// (`ConstraintHandler::Transformation` — see `MpConstraint`). Fixed
+    /// DOFs, and constrained DOFs whose retained DOF is itself fixed, get
+    /// no equation number. This is the entire numbering pass — done once,
+    /// not re-checked every step (§4.4: no live re-solve means no
+    /// `hasDomainChanged()`-style machinery).
+    ///
+    /// Constrained DOFs must be excluded from the *first* pass (not just
+    /// overwritten afterwards) — otherwise the equation number allocated
+    /// to them before being overwritten is never referenced by any node,
+    /// leaving an all-zero row/column in the assembled system.
     ///
     /// Returns the number of free DOFs (the size of the global system).
     pub(crate) fn number_dofs(&mut self) -> usize {
+        let constrained_dofs: HashSet<(NodeId, usize)> = self
+            .mp_constraints
+            .iter()
+            .flat_map(|c| c.dofs.iter().map(move |&dof| (c.constrained, dof)))
+            .collect();
+
         let mut next = 0;
-        for (_, node) in self.nodes.iter_mut() {
+        for (id, node) in self.nodes.iter_mut() {
             for dof in 0..NDF {
-                node.equation[dof] = if node.fixed[dof] {
+                node.equation[dof] = if node.fixed[dof] || constrained_dofs.contains(&(id, dof)) {
                     None
                 } else {
                     let eq = next;
@@ -60,12 +116,28 @@ impl Domain {
                 };
             }
         }
+
+        for constraint in &self.mp_constraints {
+            let retained_eq = self.nodes[constraint.retained].equation;
+            for &dof in &constraint.dofs {
+                self.nodes[constraint.constrained].equation[dof] = retained_eq[dof];
+            }
+        }
+
         self.num_free_dofs = next;
         next
     }
 
     pub fn num_free_dofs(&self) -> usize {
         self.num_free_dofs
+    }
+
+    /// Whether any `equal_dof`/`rigid_diaphragm` constraint has been added —
+    /// used by `AnalysisBuilder<Ready>::build` to reject `ConstraintHandler
+    /// ::Plain` (which can't resolve them) early, at model-construction
+    /// time rather than as a silently-wrong solve.
+    pub(crate) fn has_mp_constraints(&self) -> bool {
+        !self.mp_constraints.is_empty()
     }
 
     /// Number DOFs (idempotent given a fixed set of nodes) and assemble the
