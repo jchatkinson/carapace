@@ -40,10 +40,12 @@ mod concrete01;
 mod concrete02;
 mod elastic_like;
 mod hysteretic;
+mod pinching4;
 mod steel01;
 mod steel02;
 
 pub use hysteretic::HystereticFields;
+pub use pinching4::{Pinching4DmgCyc, Pinching4Fields, Pinching4State};
 pub use steel01::Steel01Loading;
 pub use steel02::Steel02Kon;
 
@@ -210,6 +212,20 @@ pub enum Material {
     /// `Vec<Material>`). `Pinching4` (stage 4's other material) boxes the
     /// same way, for the same reason.
     Hysteretic(Box<HystereticFields>),
+    /// Four-point-per-side backbone with a pinched trilinear unload/reload
+    /// path and three independent cyclic-damage rules (stiffness, strength,
+    /// and deformation-demand degradation), ported from OpenSees'
+    /// `Pinching4Material`. Construct via [`Material::pinching4`].
+    ///
+    /// The most involved material in this catalog: a genuine 5-state
+    /// machine (see [`Pinching4State`]) rather than the
+    /// positive/negative/interior split every other path-dependent variant
+    /// here uses, driven by an explicit strain bracket per state rather
+    /// than re-derived thresholds.
+    ///
+    /// Boxed for the same reason `Hysteretic` is (see above) — this one is
+    /// larger still (~60 fields, including four 6-element envelope arrays).
+    Pinching4(Box<Pinching4Fields>),
     /// Composite: every child sees the same strain, stress/tangent are the
     /// factor-weighted sum. Ported from OpenSees' `ParallelMaterial` — the
     /// factor defaults to `1.0` (see [`Material::parallel`]) but is kept
@@ -280,6 +296,11 @@ impl Material {
             Material::Steel02 { e0, .. } => *e0,
             Material::Concrete02 { fc, epsc0, .. } => 2.0 * fc / epsc0,
             Material::Hysteretic(h) => h.e1p,
+            // `Pinching4Material::getInitialTangent` — the slope of the
+            // synthesized near-origin envelope point, i.e. the state-0
+            // slope, not `stress1p/strain1p` directly (they're equal only
+            // when the positive side is the stiffer of the two).
+            Material::Pinching4(p) => p.envlp_pos_stress[0] / p.envlp_pos_strain[0],
             Material::Parallel(children) => children.iter().map(|(m, f)| f * m.initial_tangent()).sum(),
             Material::Series { children, .. } => {
                 let total_flex: f64 = children.iter().map(|m| 1.0 / m.initial_tangent()).sum();
@@ -308,6 +329,7 @@ impl Material {
             Material::Steel02 { .. } => steel02::evaluate(self, strain),
             Material::Concrete02 { .. } => concrete02::evaluate(self, strain),
             Material::Hysteretic(_) => hysteretic::evaluate(self, strain),
+            Material::Pinching4(_) => pinching4::evaluate(self, strain),
             Material::Parallel(children) => composite::evaluate_parallel(children, strain),
             Material::Series { .. } => composite::evaluate_series(self, strain),
             Material::MinMax {

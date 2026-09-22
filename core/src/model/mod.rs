@@ -14,7 +14,7 @@ pub use domain::Domain;
 pub use element::{Element, ElementId, Truss, ZeroLength};
 pub use fiber_section::{Fiber, FiberSection};
 pub use integration::BeamIntegration;
-pub use materials::Material;
+pub use materials::{Material, Pinching4DmgCyc, Pinching4State};
 pub use node::{Node, NodeId};
 pub use transform::GeomTransf;
 

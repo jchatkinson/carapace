@@ -692,10 +692,14 @@ wasm-specific wrong" still applies).
   rather than partially applied.
 
 - **M7 — DispBeamColumn + fiber sections + full standard material catalog.**
-  Being landed in stages (agreed with the project owner given this
-  milestone's unusual size relative to every other one — six new
-  materials, several genuinely complex hysteretic state machines, plus the
-  recursive composites, all bundled together in the original scoping).
+  ✅ Done — all four stages landed. Landed in stages (agreed with the
+  project owner given this milestone's unusual size relative to every
+  other one — six new materials, several genuinely complex hysteretic
+  state machines, plus the recursive composites, all bundled together in
+  the original scoping); each stage's entry below records what it built
+  and how it was verified. §7.1's handoff notes, written mid-milestone for
+  the sessions that finished it, are now historical context — see the note
+  at the head of that section.
 
   **Stage 1 — `BeamIntegration` + fiber sections + `DispBeamColumn`.** ✅
   Done. `BeamIntegration::{Legendre, Lobatto}` (`core/src/model/
@@ -857,21 +861,109 @@ wasm-specific wrong" still applies).
   path is genuinely softer than straight elastic reload (the whole point
   of pinching) rather than just structurally different.
 
-  **Stage 4b — `Pinching4` — not landed.** Read in full
-  (`xara/SRC/material/uniaxial/Pinching4Material.cpp`, ~1725 lines) but
-  deliberately not ported this session: it's a 5-state cyclic-damage state
-  machine (states 0-4, not a simple positive/negative/interior split) with
-  an intricate ~250-line geometric correction cascade (`getState3`/
-  `getState4`) that repairs a trilinear unload-reload path when it comes
-  out geometrically invalid (reload point behind the target point, wrong-
-  sign slopes, etc.) through a sequence of special-cased fallback
-  constructions — exactly the kind of logic where a rushed, unverified
-  translation risks a subtly wrong structural-engineering result. See
-  §7.1 below for the full distilled handoff (state machine shape, the key
-  insight that its "damaged envelope" arrays are cheap to treat as
-  *derived*, not stored, committed state, and where the real risk is).
+  **Stage 4b — `Pinching4`.** ✅ Done. `Material::Pinching4(Box<
+  Pinching4Fields>)` (`core/src/model/materials/pinching4.rs`), ported
+  from `Pinching4Material.cpp` — a genuine 5-state cyclic-damage machine
+  (`Pinching4State::{NearOrigin, Positive, Negative, Trilinear3,
+  Trilinear4}`, a real enum, not the source's `int` 0-4), driven by an
+  explicitly-tracked strain bracket per state (`low_state_*`/`hgh_state_*`)
+  rather than re-derived thresholds, plus three independent damage rules
+  (stiffness `gamma_k`, deformation-demand `gamma_d`, strength `gamma_f`)
+  and `Pinching4DmgCyc::{EnergyBased, CycleBased}` for OpenSees' `DmgCyc`
+  int flag. The 6-point envelope (the 4 real backbone points plus
+  `SetEnvelope`'s synthesized near-origin point 0 and far extrapolated
+  point 5) is stored as four `[f64; 6]` arrays and piecewise-searched in a
+  loop, not unrolled into named fields as `Hysteretic`'s 3-point envelope
+  was. The constructor regroups OpenSees' twelve flat `gammaK1..gammaF4`
+  arguments into three `[f64; 4]` arrays (39 arguments → 30); OpenSees'
+  second, symmetric-backbone overload isn't ported, same call as
+  `Material::hysteretic`'s skipped 2-point overload.
 
-### 7.1 M7 handoff: remaining stages
+  **The §7.1 "damaged envelope is derived, not stored" insight held, with
+  one real correction found by checking it against the source** (as §7.1
+  itself asked). `envlpPosDamgdStress`/`envlpNegDamgdStress`,
+  `kElasticPosDamgd`/`kElasticNegDamgd` and `uMaxDamgd`/`uMinDamgd` are
+  indeed all exact functions of committed scalars and are *not* stored —
+  the committed state carries only `gamma_k_used`/`gamma_f_used` (plus
+  `gamma_k`/`gamma_d`/`gamma_f` and `min`/`max_strain_dmnd`). But the
+  handoff's "just multiply by `(1 - gamma_f_used)` at every read site" is
+  not quite right *within* a step: `getstate` refreshes only **one side's**
+  damaged stresses (and only one of the two damaged elastic stiffnesses)
+  at a transition — a transition out of state 1 rewrites the negative
+  damaged envelope and `kElasticPosDamgd`, leaving the positive damaged
+  envelope and `kElasticNegDamgd` one commit behind until `commitState`
+  resynchronizes both. That per-side lag is observable inside
+  `getState3`/`getState4`, which read both sides. It's reproduced exactly
+  by rebuilding both arrays as trial-local `[f64; 6]` values at the top of
+  `evaluate` and letting `getstate` overwrite one of them, which is both
+  faithful and still requires nothing extra in the committed state.
+  A second, smaller source asymmetry preserved rather than tidied: the
+  state-3→1 transition uses the *undamaged* `envlpPosStress(0)/(5)` while
+  the state-4→1 transition uses the *damaged* array for the same bracket.
+
+  **Other deviations from the handoff's summary, all verified against the
+  source:** `updateDmg` does run unconditionally every step as described,
+  but its two `DmgCyc` arms are not symmetric — the energy arm is
+  additionally gated on `Tenergy > elasticStrainEnergy`, the cycle arm is
+  not. `getState3`/`getState4` are mirror images only approximately:
+  `getState4` carries an extra `uForceP == 0.0` special case with no
+  `getState3` counterpart (which is what trips
+  `clippy::if_same_then_else`, allowed with a comment rather than
+  collapsed), and the two functions order their sub-checks differently.
+  The shared "final check" tail was extracted into one `final_check`
+  helper since it is byte-identical between them; its odd `slope == 0.0`
+  gating (the second `if` can only fire after the first has collapsed the
+  path) is an artifact of the C++ control flow and is preserved exactly,
+  loop-local `du`/`df` shadowing included.
+
+  **Structural ripple:** none beyond the new variant — the boxed-payload
+  pattern Stage 4a established absorbed it. `clippy::large_enum_variant`
+  does fire on `Element`, but it already did before this change (checked
+  by stashing): it's `ZeroLength`'s own `[Option<Material>; NDF]` array,
+  not `Material`'s largest variant, and boxing `Pinching4Fields` keeps
+  `Material` the same size as before. `Pinching4DmgCyc`/`Pinching4State`
+  are re-exported from `core/src/model/mod.rs` (the first material enums
+  that needed to be, since `Pinching4DmgCyc` is a constructor argument,
+  unlike `Steel01Loading`/`Steel02Kon` which are internal-only).
+
+  **Acceptance verified:** the four tests §7.1 suggested, plus one more,
+  all against a shared symmetric 4-point backbone (slopes 1000/500/200
+  then softening -700) with every damage parameter and limit set to zero
+  so the damage factors stay identically zero and the state machine and
+  geometric cascade — the actual subjects — stay hand-computable (the
+  same tactic `Hysteretic`'s `beta = 0` material used). (1) The state-0
+  tangent is the synthesized near-origin point's slope, exact to one ulp
+  — the residual `1e-13` is real: OpenSees recovers it as `(u*k)/u`, not
+  as `k`, and reconstructing `k` directly would be a deviation.
+  (2) State 1 matches the 6-point envelope at all four real breakpoints,
+  at a midpoint of every segment, and on the extrapolated point-5 segment
+  past `strain4p` (which, because the 3-4 segment softens, is the nearly
+  flat `1.1*stress4p` branch, not a continuation of the softening slope).
+  (3) A full reversal into state 3 against a fully hand-walked
+  `get_state3` trace that hits *no* fallback — `r_disp <= r_force` is what
+  keeps the reload-stiffness cap from engaging — checked at two points,
+  one on each of the first two path segments, to `1e-9`. (4) The same
+  reversal with `r_disp = 0.05`/`r_force = 0.9`, chosen so the 1→2 secant
+  (~1753) exceeds `kmax` (1000) and the cascade's "linear unload-reload
+  path expected" fallback fires: checked against the hand-computed
+  33%/67% redraw, *and* against the value the un-fallen-back construction
+  would have given, so the test would fail if the fallback silently
+  stopped firing. (5) A second reversal, state 3 → state 4, checking that
+  the new bracket is anchored at the reversal point below and at the
+  damaged positive envelope stress at peak demand above.
+
+### 7.1 M7 handoff: remaining stages — historical, all stages now landed
+
+**Superseded.** Every stage this section was written to hand off is done
+(see the M7 entry above); it's kept, unedited below the stage-4b note, as
+the record of what was known before each stage rather than as live
+instructions. Where it and the stage entries in §7 disagree, §7 wins — it
+was written *after* the port, against the source. In particular the
+stage-4b subsection's central claim about the damaged envelope was
+verified and found *almost* right; the M7 stage-4b entry above records
+the correction. The general porting recipe immediately below is the one
+genuinely still-live part: it applies to any future `UniaxialMaterial`
+port, not just M7's.
 
 Written for a session with no memory of the ones that did stages 1-3 —
 read this before opening any OpenSees source yourself; it's the distilled
@@ -926,7 +1018,13 @@ values that are actually that variant. `clippy::large_enum_variant`
 otherwise) is the trip-wire for this — if it fires on `Element` after
 `Pinching4` lands, that's the fix.
 
-#### Stage 4b: `Pinching4` (the only piece of M7 not yet landed)
+#### Stage 4b: `Pinching4` — landed; notes below are historical
+
+Everything from here to the end of §7.1 is the pre-port handoff, kept as
+written. It is largely accurate (the suggested acceptance tests were all
+implemented as suggested), with the corrections recorded in the M7
+stage-4b entry in §7 — chiefly that the "damaged envelope" is refreshed
+one side at a time inside `getstate`, not uniformly.
 
 Read in full this session (`xara/SRC/material/uniaxial/
 Pinching4Material.cpp`, ~1725 lines) but deliberately not ported — see the
