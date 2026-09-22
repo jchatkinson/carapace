@@ -5,11 +5,13 @@ use super::{Node, NodeId, ELEMENT_DOF};
 
 mod disp_beam_column;
 mod elastic_beam_column;
+mod force_beam_column;
 mod truss;
 mod zero_length;
 
 pub use disp_beam_column::DispBeamColumn;
 pub use elastic_beam_column::ElasticBeamColumn;
+pub use force_beam_column::ForceBeamColumn;
 pub use truss::Truss;
 pub use zero_length::ZeroLength;
 
@@ -19,13 +21,14 @@ new_key_type! {
 }
 
 /// Element catalog. Closed enum, `match`-based dispatch, no `Box<dyn Trait>`
-/// (§2.1). `ForceBeamColumn` lands at M8 per the plan's §3.1 table.
+/// (§2.1).
 #[derive(Debug, Clone)]
 pub enum Element {
     Truss(Truss),
     ZeroLength(ZeroLength),
     ElasticBeamColumn(ElasticBeamColumn),
     DispBeamColumn(DispBeamColumn),
+    ForceBeamColumn(ForceBeamColumn),
 }
 
 impl Element {
@@ -35,6 +38,7 @@ impl Element {
             Element::ZeroLength(z) => [z.node_i, z.node_j],
             Element::ElasticBeamColumn(b) => [b.node_i, b.node_j],
             Element::DispBeamColumn(b) => [b.node_i, b.node_j],
+            Element::ForceBeamColumn(b) => [b.node_i, b.node_j],
         }
     }
 
@@ -54,6 +58,7 @@ impl Element {
             Element::ZeroLength(z) => z.form_tangent_and_resistance(node_i, node_j),
             Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
+            Element::ForceBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
         }
     }
 
@@ -64,7 +69,7 @@ impl Element {
     /// `DispBeamColumn` — see its doc comment for why).
     pub fn form_load_vector(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         match self {
-            Element::Truss(_) | Element::ZeroLength(_) | Element::DispBeamColumn(_) => {
+            Element::Truss(_) | Element::ZeroLength(_) | Element::DispBeamColumn(_) | Element::ForceBeamColumn(_) => {
                 SVector::<f64, ELEMENT_DOF>::zeros()
             }
             Element::ElasticBeamColumn(b) => b.form_load_vector(node_i, node_j),
@@ -82,6 +87,7 @@ impl Element {
             Element::ZeroLength(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
             Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_mass(node_i, node_j),
+            Element::ForceBeamColumn(b) => b.form_mass(node_i, node_j),
         }
     }
 
@@ -96,6 +102,7 @@ impl Element {
             Element::ZeroLength(z) => z.commit(node_i, node_j),
             Element::ElasticBeamColumn(_) => {}
             Element::DispBeamColumn(b) => b.commit(node_i, node_j),
+            Element::ForceBeamColumn(b) => b.commit(node_i, node_j),
         }
     }
 }

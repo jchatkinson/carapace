@@ -322,15 +322,17 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   `core/tests/m1_truss.rs`.
 
 - **M2 — ZeroLength + EPP/Gap/ENT materials.** ✅ Done. `Element::ZeroLength`
-  evaluates a material independently per DOF direction. `Material` gained
-  `ElasticPP`, `Gap`, `Ent` variants. See `core/src/model/element.rs`,
-  `core/src/model/material.rs`, `core/tests/m2_zero_length.rs`.
+  (`core/src/model/elements/zero_length.rs`) evaluates a material
+  independently per DOF direction. `Material` gained `ElasticPP`, `Gap`,
+  `Ent` variants. See `core/src/model/materials/mod.rs`,
+  `core/tests/m2_zero_length.rs`.
 
 - **M3 — ElasticBeamColumn + geomTransf (Linear, PDelta) + element loads.**
-  ✅ Done. `Element::ElasticBeamColumn` (`core/src/model/beam.rs`): a
-  prismatic 2D Euler-Bernoulli beam-column, `GeomTransf`
-  (`Linear`/`PDelta`), and a uniform transverse element load. Bumped `NDF`
-  from 2 to 3 (in-plane rotation). See `core/tests/m3_beam.rs`.
+  ✅ Done. `Element::ElasticBeamColumn`
+  (`core/src/model/elements/elastic_beam_column.rs`): a prismatic 2D
+  Euler-Bernoulli beam-column, `GeomTransf` (`Linear`/`PDelta`), and a
+  uniform transverse element load. Bumped `NDF` from 2 to 3 (in-plane
+  rotation). See `core/tests/m3_beam.rs`.
 
 - **M4 — Analysis composition generalization.** ✅ Done.
   `Integrator::DisplacementControl` (`core/src/analysis/integrator.rs`) and
@@ -369,7 +371,7 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   - **Stage 1** — `BeamIntegration::{Legendre,Lobatto}`
     (`core/src/model/integration.rs`), `FiberSection`
     (`core/src/model/fiber_section.rs`), `DispBeamColumn`
-    (`core/src/model/disp_beam_column.rs`). See `core/tests/
+    (`core/src/model/elements/disp_beam_column.rs`). See `core/tests/
     m7_disp_beam_column.rs`.
   - **Stage 2** — `Steel01`, `Concrete01`, `Parallel`/`Series`/`MinMax`
     composites (`core/src/model/materials/`).
@@ -382,14 +384,23 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   that material's own module doc comment
   (`core/src/model/materials/{steel01,steel02,concrete01,concrete02,
   hysteretic,pinching4}.rs`); acceptance-test reasoning lives alongside each
-  test in `core/src/model/material.rs`'s unit tests and
+  material's own unit tests in that same file (and `composite.rs` for
+  `Parallel`/`Series`/`MinMax`), plus
   `core/src/model/fiber_section.rs`'s composite-section test.
 
-- **M8 — ForceBeamColumn.** Not started. Its own milestone — nested
-  element-level equilibrium iteration, architecturally distinct from every
-  prior element (`docs/xara-feasibility.md` #5). Needs its own
-  `form_tangent_and_residual` shape (an internal iterative solve, not a
-  direct evaluation), not a generalization of the M3/M7 element pattern.
+- **M8 — ForceBeamColumn.** ✅ Done.
+  `Element::ForceBeamColumn` (`core/src/model/elements/force_beam_column.rs`):
+  a flexibility-method 2D fiber beam-column, its `state_determination`
+  Newton iteration ported directly from
+  `xara/SRC/element/Frame/Other/Force/ForceBeamColumn2d.cpp::update()`
+  (the reference C++ checkout, not re-derived from the cited papers by
+  hand — see that file's doc comment for the port's scope and a
+  bisection-based subdivision fallback for large load increments,
+  simplified from the source's own `numSubdivide`/algorithm-ladder
+  mechanism). Verified against `ElasticBeamColumn`'s closed-form elastic
+  stiffness (symmetric section) and a hand-derived closed form for an
+  asymmetric (axial-bending-coupled) section, plus an `ElasticPP`
+  past-yield/permanent-set case — see `core/tests/m8_force_beam_column.rs`.
 
 - **M9 — Corotational geomTransf (large-displacement).** Not started. Only
   if confirmed still in scope (§3.4) — comparable complexity to M8. Revisit

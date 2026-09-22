@@ -7,7 +7,7 @@ mod node;
 mod transform;
 
 pub use domain::Domain;
-pub use elements::{DispBeamColumn, Element, ElasticBeamColumn, ElementId, Truss, ZeroLength};
+pub use elements::{DispBeamColumn, Element, ElasticBeamColumn, ElementId, ForceBeamColumn, Truss, ZeroLength};
 pub use fiber_section::{Fiber, FiberSection};
 pub use integration::BeamIntegration;
 pub use materials::{Material, Pinching4DmgCyc, Pinching4State};
