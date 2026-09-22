@@ -2,7 +2,7 @@ use crate::model::{Domain, NodeId};
 
 use super::{AnalysisError, SparseSolver};
 
-/// Static/pseudo-static integration strategy. Closed enum (§3.1). Both
+/// Static/pseudo-static integration strategy. Closed enum (§2.1). Both
 /// variants only ever change how this *step's* load factor is chosen (the
 /// "predictor") — the iteration that follows (§ `Algorithm`) proceeds
 /// identically regardless of which one picked it.

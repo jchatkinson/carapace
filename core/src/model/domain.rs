@@ -4,7 +4,7 @@ use slotmap::SlotMap;
 
 use super::{Element, ElementId, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
 
-/// Owns all nodes and elements. No serialization/broker machinery (§3.3) —
+/// Owns all nodes and elements. No serialization/broker machinery (§2.3) —
 /// this is the whole model, in memory, for one worker. `Clone` backs
 /// `Analysis`/`TransientAnalysis`'s snapshot-and-restore-on-failure (a
 /// failed step shouldn't leave nodal displacement/velocity/acceleration
@@ -43,7 +43,7 @@ impl Domain {
 
     /// Assign a sequential equation number to every free DOF, in node
     /// insertion order. Fixed DOFs get no equation number. This is the
-    /// entire numbering pass — done once, not re-checked every step (§5.4:
+    /// entire numbering pass — done once, not re-checked every step (§4.4:
     /// no live re-solve means no `hasDomainChanged()`-style machinery).
     ///
     /// Returns the number of free DOFs (the size of the global system).

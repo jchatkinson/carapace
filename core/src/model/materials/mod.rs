@@ -1,4 +1,4 @@
-/// Uniaxial material catalog. Closed enum, not a trait object (§3.1 of the
+/// Uniaxial material catalog. Closed enum, not a trait object (§2.1 of the
 /// implementation plan) — the set is fixed at compile time. `Steel01`,
 /// `Concrete01` and the `Parallel`/`Series`/`MinMax` composites land at M7
 /// stage 2.
@@ -30,6 +30,37 @@
 /// material in an inconsistent state to revert — only nodal displacement
 /// (mutated eagerly every iteration, which is correct Newton behavior)
 /// needs `Analysis`/`TransientAnalysis`'s snapshot-and-restore-on-failure.
+///
+/// # Porting a new leaf material from OpenSees/Xara
+///
+/// OpenSees implements each `UniaxialMaterial` as `setTrialStrain`/
+/// `determineTrialState` mutating parallel `T*`/`C*` field pairs. None of
+/// that duplication is needed here — every port becomes a pure
+/// `fn evaluate(&self, strain: f64) -> (stress, tangent, next_self)` where
+/// `self` is always the committed state:
+///
+/// 1. Every place the C++ reads a `C*` field, read `self`'s corresponding
+///    field. Every place it reads/writes a `T*` field, use a local variable
+///    (never write to `self` — `evaluate` takes `&self`).
+/// 2. Watch for places the algorithm reads `Cstrain`/`Cstress` directly, not
+///    just the "obvious" history variables (e.g. `Cloading`-style fields) —
+///    `Steel01`/`Concrete01` both need last-committed strain and stress as
+///    explicit fields, and it's easy to miss if you only skim the header's
+///    "History Variables" section (OpenSees files `Cstrain`/`Cstress`
+///    separately under "State Variables", but they're just as load-bearing).
+/// 3. The function's return is `(Tstress, Ttangent, Self { ..committed
+///    fields updated.. })`; `trial_stress_tangent` discards the third
+///    element, `commit` discards the first two.
+/// 4. Port the *math* faithfully (published, referenced research — see each
+///    source `.cpp`'s `// References` comment), but the *state-machine
+///    mechanics* (trial/commit, no field duplication) always follow the
+///    recipe above, not the C++ structure.
+///
+/// Once a variant's field count gets large (`HystereticFields`,
+/// `Pinching4Fields`), box the payload as its own `Copy` struct instead of
+/// inlining it into `Material` — otherwise every `Material` value pays the
+/// largest variant's stack size, not just values that are actually that
+/// variant (`clippy::large_enum_variant` is the trip-wire for this).
 ///
 /// `Material` is `Clone`, not `Copy`: `Parallel`/`Series`/`MinMax` hold a
 /// `Vec`/`Box` of child materials, so every call site that used to rely on

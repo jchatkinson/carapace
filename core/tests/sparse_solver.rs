@@ -2,9 +2,9 @@ use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, Con
 use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Node};
 
 /// Not tied to a specific milestone — a correctness + scale check for the
-/// `SparseSolver` swap to `faer` (see implementation-plan §6 decision #1).
+/// `SparseSolver` swap to `faer` (see implementation-plan §5 decision #1).
 /// A single 2-node `ElasticBeamColumn` is exact for M3's simply-supported
-/// UDL case (§7); this does the equivalent check for a *chain* of many
+/// UDL case (§6); this does the equivalent check for a *chain* of many
 /// elements, which exercises the sparse assembly/solve path at a
 /// non-trivial system size (150 free DOFs) with a real banded/sparse
 /// pattern, rather than the single- or few-element systems every other

@@ -96,7 +96,7 @@ impl TransientAnalysis {
 
     /// Advance one Newmark step of size `dt`. Constant external load
     /// (`Domain::assemble_reference_load`) throughout — a time-varying load
-    /// (e.g. ground motion) is out of scope until something needs it (§4.3
+    /// (e.g. ground motion) is out of scope until something needs it (§3.3
     /// only asks for Newmark integration + Rayleigh damping at M6).
     ///
     /// On failure, the domain and `time`/`step_count` are restored to their

@@ -3,7 +3,7 @@ use nalgebra::{SMatrix, SVector};
 use super::{GeomTransf, Node, NodeId};
 
 /// A 2-node, prismatic, linear-elastic 2D beam-column (Euler-Bernoulli, no
-/// shear deformation): closed-form stiffness, no iteration (§4.1) — unlike
+/// shear deformation): closed-form stiffness, no iteration (§3.1) — unlike
 /// `Truss`/`ZeroLength`, there's no `Material` dispatch here, since the
 /// element's response is fully determined by `e`/`a`/`iz` with no nonlinear
 /// stress-strain law to evaluate.
@@ -16,7 +16,7 @@ pub struct ElasticBeamColumn {
     pub iz: f64,
     pub transform: GeomTransf,
     /// Uniform transverse load (force/length) in the element's local
-    /// +y direction, converted to equivalent nodal loads (§4.4). Zero means
+    /// +y direction, converted to equivalent nodal loads (§3.4). Zero means
     /// no element load. A single field, not a `Vec<ElementLoad>` — M3's
     /// scope is exactly this one load case; generalize only when a second
     /// element-load type is actually needed.
@@ -156,7 +156,7 @@ impl ElasticBeamColumn {
 
     /// Equivalent nodal load (global coordinates) from the element's
     /// uniform transverse load, via consistent (virtual-work) Hermite
-    /// cubic shape-function integration — see implementation-plan §4.4.
+    /// cubic shape-function integration — see implementation-plan §3.4.
     /// Zero when `w_transverse` is zero.
     pub(super) fn form_load_vector(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
         if self.w_transverse == 0.0 {
@@ -179,7 +179,7 @@ impl ElasticBeamColumn {
 
     /// Lumped mass: half the element's total mass (`density * a * length`)
     /// at each node's translational DOFs, zero rotational contribution —
-    /// the simplest standard lumped-mass model (§4.4: "lumped, to start");
+    /// the simplest standard lumped-mass model (§3.4: "lumped, to start");
     /// a consistent (non-diagonal) mass matrix or a nonzero rotational
     /// lumped inertia is a further refinement, not built until needed.
     pub(super) fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {

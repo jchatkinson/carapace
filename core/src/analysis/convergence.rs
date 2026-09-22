@@ -1,7 +1,7 @@
 use nalgebra::DVector;
 
 /// Convergence criterion for `Algorithm::NewtonRaphson`. Closed enum
-/// (§3.1). Unused by `Algorithm::Linear` (which never iterates).
+/// (§2.1). Unused by `Algorithm::Linear` (which never iterates).
 #[derive(Debug, Clone, Copy)]
 pub enum ConvergenceTest {
     /// Converged once the unbalanced-force residual's norm drops below `tol`.

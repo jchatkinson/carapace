@@ -1,7 +1,7 @@
 use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
 use carapace_core::model::{Domain, Element, Material, Node, Truss};
 
-/// M1 acceptance criterion (implementation-plan §7): same 2-node truss case
+/// M1 acceptance criterion (implementation-plan §6): same 2-node truss case
 /// as M0 (L=100, A=2, E=30000, P=50 -> dx=0.0833333333), computed through
 /// the real Domain/Node/Element::Truss/Material::Elastic/Analysis
 /// architecture instead of the closed-form placeholder.

@@ -1,4 +1,4 @@
-/// Real error enum, not sentinel integers (§3.8). Carries the context an
+/// Real error enum, not sentinel integers (§2.8). Carries the context an
 /// OpenSees-style `-1`..`-5` return code would otherwise leave to
 /// out-of-band documentation.
 #[derive(Debug, Clone, Copy, PartialEq)]

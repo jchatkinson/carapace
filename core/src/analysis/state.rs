@@ -28,7 +28,7 @@ impl Analysis {
 
     /// Advance one step: the integrator predicts this step's load factor,
     /// then the algorithm resolves equilibrium at that (fixed) load factor.
-    /// See implementation-plan §5.4 for the sketch this follows.
+    /// See implementation-plan §4.4 for the sketch this follows.
     ///
     /// On failure, the domain (nodal displacement — mutated eagerly every
     /// Newton iteration, which is correct Newton behavior, but shouldn't

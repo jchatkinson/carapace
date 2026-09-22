@@ -1,7 +1,7 @@
 /// Coordinate-transformation strategy for frame elements: relates an
 /// element's local (basic) stiffness/forces to the global system. Closed
-/// enum (§3.1) — `Linear` and `PDelta` are both "cheap" per the
-/// implementation plan §4.4; `Corotational` (large-displacement) is its own
+/// enum (§2.1) — `Linear` and `PDelta` are both "cheap" per the
+/// implementation plan §3.4; `Corotational` (large-displacement) is its own
 /// milestone (M9) if/when actually needed, not a third variant here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeomTransf {

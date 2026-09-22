@@ -4,12 +4,12 @@ use slotmap::new_key_type;
 use super::{DispBeamColumn, ElasticBeamColumn, Material, Node, NodeId, ELEMENT_DOF, NDF};
 
 new_key_type! {
-    /// Generational index into `Domain`'s element store (§3.2).
+    /// Generational index into `Domain`'s element store (§2.2).
     pub struct ElementId;
 }
 
 /// Element catalog. Closed enum, `match`-based dispatch, no `Box<dyn Trait>`
-/// (§3.1). `ForceBeamColumn` lands at M8 per the plan's §4.1 table.
+/// (§2.1). `ForceBeamColumn` lands at M8 per the plan's §3.1 table.
 #[derive(Debug, Clone)]
 pub enum Element {
     Truss(Truss),
@@ -48,7 +48,7 @@ impl Element {
     }
 
     /// This element's equivalent nodal load vector (global coordinates,
-    /// same DOF order as above) from any element load applied to it (§4.4)
+    /// same DOF order as above) from any element load applied to it (§3.4)
     /// — e.g. a beam-column's distributed transverse load. Zero for
     /// elements with no element-load support (`Truss`, `ZeroLength`,
     /// `DispBeamColumn` — see its doc comment for why).
@@ -61,7 +61,7 @@ impl Element {
         }
     }
 
-    /// This element's lumped-mass contribution (diagonal only — see §4.4:
+    /// This element's lumped-mass contribution (diagonal only — see §3.4:
     /// "lumped, to start") in the same local DOF order, geometry-dependent
     /// (`length`) so it needs both nodes. Zero for `ZeroLength` (a spring/
     /// connector, not a mass-bearing member) and for any element with the
@@ -78,7 +78,7 @@ impl Element {
     /// Commit this element's material(s) at the given (final, converged)
     /// node state — see `Material`'s doc comment for why this is the only
     /// place a `Material` ever mutates. A no-op for `ElasticBeamColumn`
-    /// (no `Material` — its response is closed-form, §4.1) and for any
+    /// (no `Material` — its response is closed-form, §3.1) and for any
     /// `ZeroLength` direction with no material assigned.
     pub fn commit(&mut self, node_i: &Node, node_j: &Node) {
         match self {
@@ -90,7 +90,7 @@ impl Element {
     }
 }
 
-/// A 2-node axial truss: fixed-size element-local linear algebra (§3.4), no
+/// A 2-node axial truss: fixed-size element-local linear algebra (§2.4), no
 /// heap allocation in the hot path. Only ever populates the translational
 /// DOF entries of the (now 3-DOF-per-node) local/global matrices — the
 /// rotation entries stay zero, so a node connected only to `Truss`/
@@ -176,7 +176,7 @@ impl Truss {
 }
 
 /// A 2-node, zero-length connector: no geometry or integration, just direct
-/// per-DOF material evaluation (§4.1) — each direction with a material
+/// per-DOF material evaluation (§3.1) — each direction with a material
 /// assigned independently relates that DOF's relative displacement between
 /// the two nodes to a force along that same (global) direction. No
 /// orientation vectors (unlike OpenSees' general `ZeroLength`, which can

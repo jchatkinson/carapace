@@ -14,12 +14,12 @@ pub struct Mode {
     pub shape: DVector<f64>,
 }
 
-/// Resolves implementation-plan §6 open decision #2 for real: a
+/// Resolves implementation-plan §5 open decision #2 for real: a
 /// shift-invert Lanczos eigensolver (shift = 0, so the operator is simply
 /// `K^-1 * M`), not a dense full-spectrum `nalgebra::SymmetricEigen` and
 /// not an ARPACK FFI binding either. Two things made the earlier dense
 /// choice wrong beyond just performance, once `SparseSolver` itself went
-/// sparse (see §6 decision #1):
+/// sparse (see §5 decision #1):
 ///
 /// - **Memory.** A dense N×N matrix costs O(n²) regardless of how sparse
 ///   the model actually is — on a model `SparseSolver` handles comfortably,

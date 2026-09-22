@@ -2,7 +2,7 @@ use nalgebra::{SMatrix, SVector};
 
 use super::{BeamIntegration, Fiber, FiberSection, Node, NodeId};
 
-/// A 2-node, displacement-based, fiber-discretized 2D beam-column (§4.1):
+/// A 2-node, displacement-based, fiber-discretized 2D beam-column (§3.1):
 /// nodal displacements directly give the strain/curvature field along the
 /// length (cubic Hermite transverse + linear axial shape functions, same
 /// as `ElasticBeamColumn`'s), each `BeamIntegration` point's `FiberSection`

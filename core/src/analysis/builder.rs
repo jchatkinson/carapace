@@ -2,7 +2,7 @@ use crate::model::Domain;
 
 use super::{Algorithm, Analysis, ConstraintHandler, ConvergenceTest, Integrator, SparseSolver};
 
-/// Typestate analysis composition (§3.5): each stage exposes only the next
+/// Typestate analysis composition (§2.5): each stage exposes only the next
 /// piece that must be wired, and only `AnalysisBuilder<Ready>` exposes
 /// `.build()`. Illegal sequencing (e.g. calling `.build()` before an
 /// algorithm is set) is a compile error, not a runtime `setLinks` ordering
@@ -91,7 +91,7 @@ impl AnalysisBuilder<WithAlgorithm> {
 
 impl AnalysisBuilder<Ready> {
     /// Numbers DOFs and builds the sparsity/solver setup once, here — not
-    /// re-checked every step (§5.4; no live re-solve loop per §1).
+    /// re-checked every step (§4.4; no live re-solve loop per §1).
     pub fn build(self, mut domain: Domain) -> Analysis {
         domain.number_dofs();
         Analysis {

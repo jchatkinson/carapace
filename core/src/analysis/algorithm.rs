@@ -1,5 +1,5 @@
 /// Iteration strategy for resolving each step's equilibrium. Closed enum
-/// (§3.1).
+/// (§2.1).
 #[derive(Debug, Clone, Copy)]
 pub enum Algorithm {
     /// One tangent formation, one solve, no re-iteration and no convergence

@@ -1,4 +1,4 @@
-/// Constraint-handling strategy. Closed enum (§3.1) — small, homogeneous,
+/// Constraint-handling strategy. Closed enum (§2.1) — small, homogeneous,
 /// user-selected per analysis.
 #[derive(Debug, Clone, Copy)]
 pub enum ConstraintHandler {

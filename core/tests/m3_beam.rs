@@ -1,7 +1,7 @@
 use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
 use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Node};
 
-/// M3 acceptance (implementation-plan §7): a single `ElasticBeamColumn`
+/// M3 acceptance (implementation-plan §6): a single `ElasticBeamColumn`
 /// spanning a simply-supported beam, under a uniform transverse element
 /// load, matches the classical closed-form end rotation
 /// `theta = w*L^3 / (24*E*I)`.

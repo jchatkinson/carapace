@@ -1,7 +1,7 @@
 use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
 use carapace_core::model::{Domain, Element, Material, Node, ZeroLength};
 
-/// M2 acceptance (implementation-plan §7): prove `Element`/`Material` enum
+/// M2 acceptance (implementation-plan §6): prove `Element`/`Material` enum
 /// dispatch generalizes beyond `Truss`/`Elastic` by running a `ZeroLength` +
 /// `Ent` ("no tension") element through the same real `Domain`/`Analysis`
 /// pipeline M1 verified. The applied load stays compressive, so the whole

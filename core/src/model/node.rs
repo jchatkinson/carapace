@@ -6,7 +6,7 @@ new_key_type! {
     /// Generational index into `Domain`'s node store. Stays valid across
     /// removals of *other* nodes; using a stale key against a different
     /// domain is a logic error the type can't catch, but a use-after-free
-    /// within one domain's lifetime is (§3.2 of the implementation plan).
+    /// within one domain's lifetime is (§2.2 of the implementation plan).
     pub struct NodeId;
 }
 

@@ -1,7 +1,7 @@
 use carapace_core::analysis::{modal_analysis, RayleighDamping, TransientAnalysis};
 use carapace_core::model::{Domain, Element, GeomTransf, Material, Node, Truss, ZeroLength};
 
-/// M6 acceptance, part 1 (implementation-plan §7): element-consistent
+/// M6 acceptance, part 1 (implementation-plan §6): element-consistent
 /// lumped mass. A single `Truss` with a nonzero `density`, fixed at one
 /// end, has its total mass (`density*area*length`) split half to each
 /// node's translational DOFs (`Element::form_mass`) — since the fixed

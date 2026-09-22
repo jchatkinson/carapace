@@ -3,7 +3,7 @@ use carapace_core::model::{
     BeamIntegration, Domain, ElasticBeamColumn, Element, Fiber, GeomTransf, Material, Node,
 };
 
-/// M7 stage 1 acceptance (implementation-plan §7): `DispBeamColumn`
+/// M7 stage 1 acceptance (implementation-plan §6): `DispBeamColumn`
 /// (fiber-discretized, displacement-based) must exactly reproduce
 /// `ElasticBeamColumn`'s closed-form linear-elastic response — not
 /// approximately, exactly, to solver precision. Two symmetric elastic

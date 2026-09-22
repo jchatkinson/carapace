@@ -1,7 +1,7 @@
 use carapace_core::analysis::modal_analysis;
 use carapace_core::model::{Domain, Element, Material, Node, ZeroLength};
 
-/// M5 acceptance (implementation-plan §7): eigenvalues of a small known
+/// M5 acceptance (implementation-plan §6): eigenvalues of a small known
 /// model match closed form. This is the classic 2-DOF "1-1-1-1" mass-spring
 /// chain (unit masses, unit spring stiffnesses in series): ground -k1- m1
 /// -k2- m2, giving `K = [[2,-1],[-1,1]]`, `M = I`. Its natural frequencies
@@ -38,7 +38,7 @@ fn mass_spring_chain_matches_golden_ratio_closed_form() {
 }
 
 /// Asking for fewer modes than the model has free DOFs is the whole point
-/// of the Lanczos switch (implementation-plan §6 decision #2, revisited
+/// of the Lanczos switch (implementation-plan §5 decision #2, revisited
 /// post-`SparseSolver` sparse switch) — a dense full-spectrum eigensolve
 /// can't do partial-spectrum extraction at all. A 5-mass chain (5 free
 /// DOFs) asking for just the lowest 2 modes should return exactly those 2,
