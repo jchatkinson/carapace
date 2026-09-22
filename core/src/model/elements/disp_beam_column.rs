@@ -1,6 +1,6 @@
 use nalgebra::{SMatrix, SVector};
 
-use super::{BeamIntegration, Fiber, FiberSection, Node, NodeId};
+use super::super::{BeamIntegration, Fiber, FiberSection, Node, NodeId};
 
 /// A 2-node, displacement-based, fiber-discretized 2D beam-column (§3.1):
 /// nodal displacements directly give the strain/curvature field along the

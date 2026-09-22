@@ -1,6 +1,6 @@
 use nalgebra::{SMatrix, SVector};
 
-use super::{GeomTransf, Node, NodeId};
+use super::super::{GeomTransf, Node, NodeId};
 
 /// A 2-node, prismatic, linear-elastic 2D beam-column (Euler-Bernoulli, no
 /// shear deformation): closed-form stiffness, no iteration (§3.1) — unlike
