@@ -41,7 +41,9 @@ carapace/
 ├── wasm-bridge/     # carapace-wasm: thin wasm-bindgen layer exposing core's API
 │                    to JS. Should contain no numerical logic of its own.
 └── docs/
-    └── implementation-plan.md   # comprehensive design doc + milestones — read this first
+    ├── implementation-plan.md   # comprehensive design doc + milestones — read this first
+    ├── pysees-handoff.md        # pysees model/sequence → worker contract for M10/M11
+    └── spatial-architecture.md  # 3D execution-profile architecture and milestones M15–M18
 ```
 
 ## Building
@@ -71,3 +73,12 @@ inside a wasm runtime directly.
 feature scope, milestone-by-milestone plan with acceptance criteria, and open
 decisions that need resolving early (linear algebra crate, ARPACK strategy).
 Any new coding session on this repo should start there.
+
+For the frontend/worker boundary, then read
+**[`docs/pysees-handoff.md`](docs/pysees-handoff.md)** — the required pysees
+model and analysis-sequence contract, run lifecycle, transport, and results
+database design for M10/M11.
+
+For the planned 3D profile, read
+**[`docs/spatial-architecture.md`](docs/spatial-architecture.md)** before
+changing node DOFs, element transformations, fiber sections, or constraints.

@@ -8,12 +8,18 @@ mod node;
 mod transform;
 
 pub use domain::Domain;
-pub use elements::{DispBeamColumn, Element, ElasticBeamColumn, ElementId, ForceBeamColumn, Truss, ZeroLength};
+pub use elements::{
+    DispBeamColumn, Element, ElasticBeamColumn, ElementId, ForceBeamColumn, SpatialElementMatrix,
+    SpatialElementVector, Truss, Truss3, ZeroLength,
+};
 pub use fiber_section::{Fiber, FiberSection};
 pub use integration::BeamIntegration;
 pub use load_pattern::{ElementLoad, LoadPatternId, LoadSeries};
 pub use materials::{Material, Pinching4DmgCyc, Pinching4State};
-pub use node::{Node, NodeId};
+pub use node::{
+    Node, Node2, Node3, Node3Id, NodeId, SpatialDof, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
+    SPATIAL_NDF, SPATIAL_NDIM,
+};
 pub use transform::GeomTransf;
 
 /// Degrees of freedom per node: 2D translation (x, y) plus in-plane

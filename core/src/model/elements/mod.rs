@@ -12,7 +12,7 @@ mod zero_length;
 pub use disp_beam_column::DispBeamColumn;
 pub use elastic_beam_column::ElasticBeamColumn;
 pub use force_beam_column::ForceBeamColumn;
-pub use truss::Truss;
+pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
 pub use zero_length::ZeroLength;
 
 new_key_type! {

@@ -135,6 +135,11 @@ elements/materials "while you're in there."
 
 ### 3.1 Elements — rough milestone order, see §6 for status
 
+The implemented catalog is planar (`NDM = 2`, `NDF = 3`) today. Spatial
+(`NDM = 3`, `NDF = 6`) is planned as a separate concrete execution profile,
+not a mode that pads every planar model with unused DOFs; see
+[`spatial-architecture.md`](spatial-architecture.md).
+
 | Element | Complexity | Notes |
 |---|---|---|
 | Truss | Trivial | M1. |
@@ -422,14 +427,29 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   if confirmed still in scope (§3.4) — comparable complexity to M8. Revisit
   scope with the project owner before starting.
 
-- **M10 — JS/TS worker integration.** Not started. Expand `carapace-wasm` to
-  the real command-buffer interface (§4.1/§4.2): batch model-description
-  ingestion, `runAnalysis`/`getResults` commands, typed-array boundaries via
-  `js-sys`. This is where `pysees` actually starts calling Carapace instead
-  of Xara.
+- **M10 — pysees handoff and worker execution.** Not started. `pysees` hands
+  off an immutable, validated `Model + AnalysisSequence` snapshot on an
+  explicit Run action — not a live model binding and not a replay of arbitrary
+  OpenSees commands. Compile it once to a versioned `CarapaceInputV1` with
+  small metadata plus transferable typed-array tables; `carapace-wasm` decodes
+  it once and owns a batched in-progress session in an analysis Web Worker.
+  The first vertical slice is a 2D fiber-column gravity → frozen-gravity →
+  displacement-controlled pushover, with selected node response history
+  written directly to the worker-owned SQLite-over-OPFS run database. Progress
+  messages are small and throttled; complete histories are queried through the
+  worker, never held in Zustand or posted every step. Each run persists its
+  input/engine provenance so later editor changes do not invalidate its
+  snapshot. See [`pysees-handoff.md`](pysees-handoff.md) for the exact
+  contract, compiler requirements, worker protocol, and first acceptance case.
 
-- **M11 — Results persistence.** Not started. SQLite-over-OPFS integration
-  (§4.3), throttled progress-snapshot `postMessage` streaming.
+- **M11 — Results database hardening.** Not started. Build on M10's initial
+  SQLite-over-OPFS recorder/write path: schema migrations, efficient
+  range-query paging and indexes, retention, export, interruption/recovery,
+  and large-run storage tests. Extend result channels beyond M10's static
+  nodal pushover history (node velocity/acceleration and reactions, element
+  and fiber responses, modal and transient channels) only when their core
+  response APIs exist and a UI query needs them. The analysis worker remains
+  the database's sole owner; the main thread queries it by run ID.
 
 - **M12 — Algorithm richness (line search, initial/secant tangent, Krylov
   acceleration).** Not started. `Algorithm` is currently just
@@ -501,6 +521,37 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   doc comments on `LoadSeries`/`LoadPattern`
   (`core/src/model/load_pattern.rs`), `Domain::hold_pattern_constant`, and
   `GroundMotion` for the design rationale.
+
+- **M15 — Spatial foundation (3D).** In progress. The first kernel slice is
+  generic `Node<NDIM, NDOF>` in `core/src/model/node.rs`, specialized as
+  `Node3 = Node<3, 6>`, plus `Truss3` colocated with `Truss` in
+  `core/src/model/elements/truss.rs`:
+  fixed-size `[ux, uy, uz, rx, ry, rz]` layout, direction-cosine stiffness,
+  and three-translation lumped mass, with element-level skew-bar tests.
+  Remaining: `Domain3`, profile-aware assembly/state/load handling,
+  `ZeroLength3`, spatial modal/transient plumbing, and identity `equal_dof`.
+  M10's handoff carries an explicit profile and rejects spatial input until
+  this foundation is complete. See
+  [`spatial-architecture.md`](spatial-architecture.md).
+
+- **M16 — Spatial elastic frame and constraints (3D).** Not started. Add a
+  right-handed, explicitly oriented `Linear3` transform, `ElasticBeamColumn3`
+  (axial, torsion, biaxial bending), local-y/local-z beam loads, and a real
+  constraint transformation for spatial rigid diaphragms; identity DOF
+  aliasing cannot express lever-arm kinematics. See
+  [`spatial-architecture.md`](spatial-architecture.md).
+
+- **M17 — Spatial fiber/nonlinear frame elements (3D).** Not started.
+  `FiberSection3` has local y/z fiber locations and coupled `[N, My, Mz]`
+  response with explicit torsional stiffness; `DispBeamColumn3` and
+  `ForceBeamColumn3` follow as independently verified formulations, not 3D
+  constructor flags on their planar counterparts. See
+  [`spatial-architecture.md`](spatial-architecture.md).
+
+- **M18 — Spatial corotational geometry (3D), if confirmed in scope.** Not
+  started. Revisit after M15–M17; spatial and planar corotational transforms
+  need different rotation handling and independent objectivity tests. See
+  [`spatial-architecture.md`](spatial-architecture.md).
 
 ---
 
