@@ -1,5 +1,5 @@
 use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
-use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Node};
+use carapace_core::model::{Domain, ElasticBeamColumn, Element, ElementLoad, GeomTransf, Node};
 
 /// M3 acceptance (implementation-plan §6): a single `ElasticBeamColumn`
 /// spanning a simply-supported beam, under a uniform transverse element
@@ -24,9 +24,16 @@ fn simply_supported_beam_udl_matches_closed_form_end_rotation() {
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1));
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1));
 
-    domain.add_element(Element::ElasticBeamColumn(
-        ElasticBeamColumn::new(node_i, node_j, e, area, iz, GeomTransf::Linear).with_uniform_load(w),
-    ));
+    let beam = domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+        node_i,
+        node_j,
+        e,
+        area,
+        iz,
+        GeomTransf::Linear,
+    )));
+    let pattern = domain.default_pattern();
+    domain.add_element_load(pattern, beam, ElementLoad::UniformTransverse(w));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
@@ -83,7 +90,9 @@ fn pdelta_matches_linear_at_zero_axial_force_and_softens_under_compression() {
     let build = |transform: GeomTransf, axial_load: f64| {
         let mut domain = Domain::new();
         let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-        let node_j = domain.add_node(Node::new([length, 0.0]).with_load(0, axial_load).with_load(1, -1.0));
+        let node_j = domain.add_node(Node::new([length, 0.0]));
+        domain.load_node(node_j, 0, axial_load);
+        domain.load_node(node_j, 1, -1.0);
         domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
             node_i, node_j, e, area, iz, transform,
         )));

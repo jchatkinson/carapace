@@ -15,12 +15,6 @@ pub struct ElasticBeamColumn {
     pub a: f64,
     pub iz: f64,
     pub transform: GeomTransf,
-    /// Uniform transverse load (force/length) in the element's local
-    /// +y direction, converted to equivalent nodal loads (§3.4). Zero means
-    /// no element load. A single field, not a `Vec<ElementLoad>` — M3's
-    /// scope is exactly this one load case; generalize only when a second
-    /// element-load type is actually needed.
-    pub w_transverse: f64,
     /// Mass per unit volume. Zero (the default) means massless — existing
     /// models are unaffected unless they opt in via `with_density`.
     pub density: f64,
@@ -35,14 +29,8 @@ impl ElasticBeamColumn {
             a,
             iz,
             transform,
-            w_transverse: 0.0,
             density: 0.0,
         }
-    }
-
-    pub fn with_uniform_load(mut self, w_transverse: f64) -> Self {
-        self.w_transverse = w_transverse;
-        self
     }
 
     pub fn with_density(mut self, density: f64) -> Self {
@@ -154,17 +142,19 @@ impl ElasticBeamColumn {
         (k, resistance)
     }
 
-    /// Equivalent nodal load (global coordinates) from the element's
-    /// uniform transverse load, via consistent (virtual-work) Hermite
-    /// cubic shape-function integration — see implementation-plan §3.4.
-    /// Zero when `w_transverse` is zero.
-    pub(super) fn form_load_vector(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
-        if self.w_transverse == 0.0 {
+    /// Equivalent nodal load (global coordinates) from a uniform transverse
+    /// load `w` (force/length, local +y direction) applied to this element
+    /// by whichever `LoadPattern` is currently being assembled (§3.4;
+    /// `Domain::assemble_reference_load` passes `w` in — it's no longer a
+    /// field on the element itself, since a pattern-scoped load can't live
+    /// on `Element`, same reasoning as `Node`'s load leaving `Node`), via
+    /// consistent (virtual-work) Hermite cubic shape-function integration.
+    pub(super) fn form_load_vector(&self, node_i: &Node, node_j: &Node, w: f64) -> SVector<f64, 6> {
+        if w == 0.0 {
             return SVector::<f64, 6>::zeros();
         }
         let (length, cx, cy) = self.geometry(node_i, node_j);
         let t = self.transformation(cx, cy);
-        let w = self.w_transverse;
         let l = length;
         let local = SVector::<f64, 6>::from_row_slice(&[
             0.0,

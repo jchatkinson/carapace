@@ -28,10 +28,13 @@ fn long_cantilever_chain_matches_closed_form_under_sparse_solve() {
         let mut node = Node::new([x, 0.0]);
         if i == 0 {
             node = node.fix(0).fix(1).fix(2); // fixed support
-        } else if i == n {
-            node = node.with_load(1, tip_load);
         }
-        nodes.push(domain.add_node(node));
+        let is_tip = i == n;
+        let node_id = domain.add_node(node);
+        if is_tip {
+            domain.load_node(node_id, 1, tip_load);
+        }
+        nodes.push(node_id);
     }
     for i in 0..n {
         domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(

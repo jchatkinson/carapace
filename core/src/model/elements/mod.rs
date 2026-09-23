@@ -1,7 +1,7 @@
 use nalgebra::{SMatrix, SVector};
 use slotmap::new_key_type;
 
-use super::{Node, NodeId, ELEMENT_DOF};
+use super::{ElementLoad, Node, NodeId, ELEMENT_DOF};
 
 mod disp_beam_column;
 mod elastic_beam_column;
@@ -63,16 +63,16 @@ impl Element {
     }
 
     /// This element's equivalent nodal load vector (global coordinates,
-    /// same DOF order as above) from any element load applied to it (§3.4)
-    /// — e.g. a beam-column's distributed transverse load. Zero for
-    /// elements with no element-load support (`Truss`, `ZeroLength`,
-    /// `DispBeamColumn` — see its doc comment for why).
-    pub fn form_load_vector(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
-        match self {
-            Element::Truss(_) | Element::ZeroLength(_) | Element::DispBeamColumn(_) | Element::ForceBeamColumn(_) => {
-                SVector::<f64, ELEMENT_DOF>::zeros()
-            }
-            Element::ElasticBeamColumn(b) => b.form_load_vector(node_i, node_j),
+    /// same DOF order as above) from `load` — the `ElementLoad` (if any)
+    /// that whichever `LoadPattern` is currently being assembled has on
+    /// this element (§3.4) — e.g. a beam-column's distributed transverse
+    /// load. Zero when `load` is `None`, and for elements with no
+    /// element-load support at all (`Truss`, `ZeroLength`, `DispBeamColumn`
+    /// — see its doc comment for why).
+    pub fn form_load_vector(&self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) -> SVector<f64, ELEMENT_DOF> {
+        match (self, load) {
+            (Element::ElasticBeamColumn(b), Some(ElementLoad::UniformTransverse(w))) => b.form_load_vector(node_i, node_j, *w),
+            _ => SVector::<f64, ELEMENT_DOF>::zeros(),
         }
     }
 

@@ -11,15 +11,18 @@ new_key_type! {
 }
 
 /// A node: fixed 2D coordinates, `NDF` degrees of freedom, and the mutable
-/// state (displacement, velocity, acceleration, applied load, boundary
-/// conditions) an analysis reads and writes each step. `velocity`/
-/// `acceleration` are only meaningful for/written by `TransientAnalysis`
-/// (M6) — static `Analysis` never touches them.
+/// state (displacement, velocity, acceleration, boundary conditions) an
+/// analysis reads and writes each step. `velocity`/`acceleration` are only
+/// meaningful for/written by `TransientAnalysis` (M6) — static `Analysis`
+/// never touches them. Applied load is *not* here — see `Domain`'s
+/// `LoadPattern`s (nodal loads are keyed by `NodeId` there, since a node
+/// can carry different, independently-scaled loads across multiple
+/// patterns — one reason a load can't be a fixed-size field on `Node`
+/// itself).
 #[derive(Debug, Clone)]
 pub struct Node {
     pub coords: [f64; 2],
     pub fixed: [bool; NDF],
-    pub load: [f64; NDF],
     pub displacement: [f64; NDF],
     pub velocity: [f64; NDF],
     pub acceleration: [f64; NDF],
@@ -37,7 +40,6 @@ impl Node {
         Node {
             coords,
             fixed: [false; NDF],
-            load: [0.0; NDF],
             displacement: [0.0; NDF],
             velocity: [0.0; NDF],
             acceleration: [0.0; NDF],
@@ -48,11 +50,6 @@ impl Node {
 
     pub fn fix(mut self, dof: usize) -> Self {
         self.fixed[dof] = true;
-        self
-    }
-
-    pub fn with_load(mut self, dof: usize, value: f64) -> Self {
-        self.load[dof] = value;
         self
     }
 

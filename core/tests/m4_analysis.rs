@@ -21,7 +21,8 @@ fn build_elastic_plastic_parallel_system(force: f64) -> (Domain, carapace_core::
 
     let mut domain = Domain::new();
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2).with_load(0, force));
+    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, force);
 
     domain.add_element(Element::Truss(Truss::new(
         node_i,
@@ -92,7 +93,8 @@ fn displacement_control_recovers_the_load_that_produces_the_target_displacement(
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
     // Reference load pattern is a unit load — DisplacementControl scales it
     // by whatever load factor produces the target displacement.
-    let node_j = domain.add_node(Node::new([100.0, 0.0]).fix(1).fix(2).with_load(0, 1.0));
+    let node_j = domain.add_node(Node::new([100.0, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, 1.0);
 
     domain.add_element(Element::Truss(Truss::new(node_i, node_j, 2.0, Material::Elastic { e: 30000.0 })));
 

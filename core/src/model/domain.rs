@@ -4,7 +4,8 @@ use faer::sparse::Triplet;
 use nalgebra::DVector;
 use slotmap::SlotMap;
 
-use super::{Element, ElementId, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
+use super::load_pattern::LoadPattern;
+use super::{Element, ElementId, ElementLoad, LoadPatternId, LoadSeries, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
 
 /// A multi-point constraint tying `dofs` of `constrained` exactly to the
 /// same DOFs of `retained` (`u_c[dof] = u_r[dof]`) — identity ties only, no
@@ -19,23 +20,44 @@ struct MpConstraint {
     dofs: Vec<usize>,
 }
 
-/// Owns all nodes and elements. No serialization/broker machinery (§2.3) —
-/// this is the whole model, in memory, for one worker. `Clone` backs
-/// `Analysis`/`TransientAnalysis`'s snapshot-and-restore-on-failure (a
-/// failed step shouldn't leave nodal displacement/velocity/acceleration
-/// partway through a discarded Newton iteration) — see `Material`'s doc
-/// comment for why materials themselves don't need this protection.
-#[derive(Debug, Default, Clone)]
+/// Owns all nodes, elements, and load patterns. No serialization/broker
+/// machinery (§2.3) — this is the whole model, in memory, for one worker.
+/// `Clone` backs `Analysis`/`TransientAnalysis`'s snapshot-and-restore-on-
+/// failure (a failed step shouldn't leave nodal displacement/velocity/
+/// acceleration partway through a discarded Newton iteration) — see
+/// `Material`'s doc comment for why materials themselves don't need this
+/// protection. Also what makes multi-phase analysis composition possible:
+/// `Analysis::into_domain`/`TransientAnalysis::into_domain` hand this same
+/// `Domain` (nodal state, committed material history, and load-pattern
+/// freeze state all intact) to the next phase's builder.
+#[derive(Debug, Clone)]
 pub struct Domain {
     nodes: SlotMap<NodeId, Node>,
     elements: SlotMap<ElementId, Element>,
     mp_constraints: Vec<MpConstraint>,
+    load_patterns: SlotMap<LoadPatternId, LoadPattern>,
+    default_pattern: LoadPatternId,
     num_free_dofs: usize,
 }
 
 impl Domain {
+    /// A fresh, empty model — already carrying one `LoadPattern`
+    /// (`default_pattern`, `LoadSeries::Linear { slope: 1.0 }`, unscaled)
+    /// so simple single-pattern models (the common case) don't need to
+    /// name a pattern at all: `domain.load_node(id, dof, value)` reaches
+    /// for it implicitly. Reproduces, exactly, the single-pattern behavior
+    /// every `Analysis` had before multi-pattern support existed.
     pub fn new() -> Self {
-        Domain::default()
+        let mut load_patterns = SlotMap::default();
+        let default_pattern = load_patterns.insert(LoadPattern::new(LoadSeries::Linear { slope: 1.0 }));
+        Domain {
+            nodes: SlotMap::default(),
+            elements: SlotMap::default(),
+            mp_constraints: Vec::new(),
+            load_patterns,
+            default_pattern,
+            num_free_dofs: 0,
+        }
     }
 
     pub fn add_node(&mut self, node: Node) -> NodeId {
@@ -48,6 +70,58 @@ impl Domain {
 
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id]
+    }
+
+    /// `Domain::new()`'s always-present pattern — see its doc comment.
+    pub fn default_pattern(&self) -> LoadPatternId {
+        self.default_pattern
+    }
+
+    /// Add a new, independently-scaled `LoadPattern` (scale factor 1.0;
+    /// chain `.with_scale_factor` via `add_load_pattern_scaled` if needed).
+    /// Xara/OpenSees's `pattern Plain <tag> <series> {...}`.
+    pub fn add_load_pattern(&mut self, series: LoadSeries) -> LoadPatternId {
+        self.load_patterns.insert(LoadPattern::new(series))
+    }
+
+    /// Same as `add_load_pattern`, with an explicit scale factor (e.g. a
+    /// ground-motion PGA scale, or a load-factor-vs-displacement-target
+    /// unit conversion) applied on top of the series' own factor.
+    pub fn add_load_pattern_scaled(&mut self, series: LoadSeries, scale_factor: f64) -> LoadPatternId {
+        self.load_patterns.insert(LoadPattern::new(series).with_scale_factor(scale_factor))
+    }
+
+    /// Add a nodal load to `pattern` — Xara/OpenSees's `load <node> <...>`
+    /// inside a `pattern` block.
+    pub fn add_nodal_load(&mut self, pattern: LoadPatternId, node: NodeId, dof: usize, value: f64) {
+        self.load_patterns[pattern].add_nodal_load(node, dof, value);
+    }
+
+    /// Convenience for the common single-pattern case: adds `value` to
+    /// `default_pattern()` directly, so simple models don't need to name a
+    /// pattern (`domain.load_node(id, 0, force)` instead of
+    /// `domain.add_nodal_load(domain.default_pattern(), id, 0, force)`).
+    pub fn load_node(&mut self, node: NodeId, dof: usize, value: f64) {
+        self.add_nodal_load(self.default_pattern, node, dof, value);
+    }
+
+    /// Add an element load (e.g. a beam-column's uniform transverse load)
+    /// to `pattern` — Xara/OpenSees's `eleLoad` inside a `pattern` block.
+    pub fn add_element_load(&mut self, pattern: LoadPatternId, element: ElementId, load: ElementLoad) {
+        self.load_patterns[pattern].add_element_load(element, load);
+    }
+
+    /// Freeze `pattern`'s contribution at its value as of `pseudo_time` —
+    /// Xara/OpenSees's `loadConst -time <pseudo_time>` (there, applied to
+    /// every pattern in the domain; here, one pattern at a time, so a
+    /// caller composing phases can freeze only the pattern(s) that should
+    /// stop ramping, e.g. gravity, while others continue). Call this with
+    /// whatever pseudo-time the phase you're ending actually stopped at
+    /// (`StepResult::load_factor` / `TransientStepResult::time`) — see
+    /// `LoadPattern`'s doc comment for why the frozen value is captured
+    /// explicitly here rather than lazily cached on every assemble call.
+    pub fn hold_pattern_constant(&mut self, pattern: LoadPatternId, pseudo_time: f64) {
+        self.load_patterns[pattern].hold_constant(pseudo_time);
     }
 
     /// Tie `dofs` of `constrained` exactly to the same DOFs of `retained`
@@ -225,35 +299,68 @@ impl Domain {
         (k, resistance)
     }
 
-    /// Assemble the reference load pattern (nodal loads + element
-    /// equivalent loads) over free DOFs, unscaled by any load factor —
-    /// what `Integrator`s scale by `load_factor` to get the external load
-    /// side of equilibrium.
-    pub(crate) fn assemble_reference_load(&self) -> DVector<f64> {
+    /// Assemble the total applied load (every `LoadPattern`'s nodal +
+    /// element equivalent loads, each scaled by its own factor at
+    /// `pseudo_time` — frozen patterns use their frozen value regardless of
+    /// `pseudo_time`, see `LoadPattern::factor`) over free DOFs. Already
+    /// fully scaled — unlike the single-pattern design this replaced,
+    /// callers no longer multiply the result by an external load factor
+    /// (see `form_tangent_and_residual`).
+    pub(crate) fn assemble_reference_load(&self, pseudo_time: f64) -> DVector<f64> {
+        self.assemble_load_with(|p| p.factor(pseudo_time))
+    }
+
+    /// `d(assemble_reference_load)/d(pseudo_time)` at `pseudo_time` — the
+    /// unit-load probe `Integrator::DisplacementControl` needs (how much
+    /// the *total* applied load changes per unit pseudo-time increment;
+    /// frozen/`Constant`-series patterns contribute zero, see `LoadPattern::
+    /// sensitivity`/`LoadSeries::slope`'s doc comments). With the single
+    /// default `Linear { slope: 1.0 }` pattern (every model that hasn't
+    /// added a second pattern), this is numerically identical to
+    /// `assemble_reference_load` — no behavior change for single-pattern
+    /// models.
+    pub(crate) fn assemble_reference_load_sensitivity(&self, pseudo_time: f64) -> DVector<f64> {
+        self.assemble_load_with(|p| p.sensitivity(pseudo_time))
+    }
+
+    /// Shared core of `assemble_reference_load`/`_sensitivity`: sum every
+    /// pattern's nodal + element reference load, each scaled by whatever
+    /// `pattern_factor` computes for that pattern (its current factor, or
+    /// its sensitivity — the only difference between the two callers).
+    fn assemble_load_with(&self, pattern_factor: impl Fn(&LoadPattern) -> f64) -> DVector<f64> {
         let n = self.num_free_dofs;
         let mut load = DVector::<f64>::zeros(n);
 
-        for (_, node) in self.nodes.iter() {
-            for dof in 0..NDF {
-                if let Some(eq) = node.equation[dof] {
-                    load[eq] += node.load[dof];
+        for (_, pattern) in self.load_patterns.iter() {
+            let factor = pattern_factor(pattern);
+            if factor == 0.0 {
+                continue;
+            }
+
+            for (node_id, node) in self.nodes.iter() {
+                let Some(nodal_load) = pattern.nodal_load(node_id) else { continue };
+                for dof in 0..NDF {
+                    if let Some(eq) = node.equation[dof] {
+                        load[eq] += factor * nodal_load[dof];
+                    }
                 }
             }
-        }
 
-        for (_, element) in self.elements.iter() {
-            let [id_i, id_j] = element.nodes();
-            let node_i = &self.nodes[id_i];
-            let node_j = &self.nodes[id_j];
-            let load_local = element.form_load_vector(node_i, node_j);
+            for (element_id, element) in self.elements.iter() {
+                let Some(element_load) = pattern.element_load(element_id) else { continue };
+                let [id_i, id_j] = element.nodes();
+                let node_i = &self.nodes[id_i];
+                let node_j = &self.nodes[id_j];
+                let load_local = element.form_load_vector(node_i, node_j, Some(element_load));
 
-            let mut equations = [None; ELEMENT_DOF];
-            equations[..NDF].copy_from_slice(&node_i.equation);
-            equations[NDF..].copy_from_slice(&node_j.equation);
+                let mut equations = [None; ELEMENT_DOF];
+                equations[..NDF].copy_from_slice(&node_i.equation);
+                equations[NDF..].copy_from_slice(&node_j.equation);
 
-            for (a, eq_a) in equations.iter().enumerate() {
-                let Some(eq_a) = eq_a else { continue };
-                load[*eq_a] += load_local[a];
+                for (a, eq_a) in equations.iter().enumerate() {
+                    let Some(eq_a) = eq_a else { continue };
+                    load[*eq_a] += factor * load_local[a];
+                }
             }
         }
 
@@ -261,12 +368,33 @@ impl Domain {
     }
 
     /// Assemble the global tangent stiffness and unbalanced-force residual
-    /// (`load_factor * reference_load - internal_resistance`) over free
-    /// DOFs only. Called once per Newton iteration by `Analysis::step`.
-    pub(crate) fn form_tangent_and_residual(&self, load_factor: f64) -> (SparseMatrix, DVector<f64>) {
+    /// (`reference_load(pseudo_time) - internal_resistance`) over free DOFs
+    /// only. Called once per Newton iteration by `Analysis::step`. Unlike
+    /// before multi-pattern support, `pseudo_time` is *not* an external
+    /// multiplier on a single reference-load vector — each `LoadPattern`
+    /// scales its own contribution internally (`assemble_reference_load`),
+    /// so this is just their difference from internal resistance.
+    pub(crate) fn form_tangent_and_residual(&self, pseudo_time: f64) -> (SparseMatrix, DVector<f64>) {
         let (k, resistance) = self.assemble_tangent_and_resistance();
-        let residual = load_factor * self.assemble_reference_load() - resistance;
+        let residual = self.assemble_reference_load(pseudo_time) - resistance;
         (k, residual)
+    }
+
+    /// A unit "influence vector" over free DOFs: `1.0` at every DOF whose
+    /// local index is `dof_direction`, `0.0` elsewhere — Chopra's ι, what
+    /// `TransientAnalysis`'s ground-motion excitation needs to turn a
+    /// scalar ground acceleration into an effective nodal force vector
+    /// (`-M·ι·ag(t)`, mass-proportional, not reference-load-proportional —
+    /// see `GroundMotion`). Computed once at `TransientAnalysis::new` time,
+    /// not every step (like `mass` itself).
+    pub(crate) fn direction_incidence(&self, dof_direction: usize) -> DVector<f64> {
+        let mut incidence = DVector::<f64>::zeros(self.num_free_dofs);
+        for (_, node) in self.nodes.iter() {
+            if let Some(eq) = node.equation[dof_direction] {
+                incidence[eq] = 1.0;
+            }
+        }
+        incidence
     }
 
     /// Commit every element's material(s) at the current (final, converged)

@@ -33,7 +33,8 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
 
     let mut domain = Domain::new();
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2).with_load(0, 1.0));
+    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, 1.0);
 
     domain.add_element(Element::Truss(Truss::new(node_i, node_j, e_area, Material::Elastic { e: e_modulus })));
     domain.add_element(Element::ZeroLength(
@@ -96,7 +97,8 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
 fn failed_step_leaves_domain_unchanged() {
     let mut domain = Domain::new();
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([100.0, 0.0]).fix(1).fix(2).with_load(0, 50.0));
+    let node_j = domain.add_node(Node::new([100.0, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, 50.0);
     domain.add_element(Element::Truss(Truss::new(node_i, node_j, 2.0, Material::Elastic { e: 30000.0 })));
 
     let mut analysis = AnalysisBuilder::new()

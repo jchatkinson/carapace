@@ -5,8 +5,8 @@ use carapace_core::analysis::{
     TransientAnalysis,
 };
 use carapace_core::model::{
-    BeamIntegration, Domain, DispBeamColumn, ElasticBeamColumn, Element, Fiber, GeomTransf, Material, Node, Truss,
-    ZeroLength,
+    BeamIntegration, Domain, DispBeamColumn, ElasticBeamColumn, Element, ElementLoad, Fiber, GeomTransf, Material,
+    Node, Truss, ZeroLength,
 };
 
 #[wasm_bindgen]
@@ -23,7 +23,8 @@ pub fn axial_displacement_via_analysis(load: f64, length: f64, area: f64, modulu
     let mut domain = Domain::new();
 
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2).with_load(0, load));
+    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, load);
 
     domain.add_element(Element::Truss(Truss::new(
         node_i,
@@ -57,7 +58,8 @@ pub fn zero_length_ent_displacement(load: f64, modulus: f64) -> f64 {
     let mut domain = Domain::new();
 
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([0.0, 0.0]).fix(1).fix(2).with_load(0, load));
+    let node_j = domain.add_node(Node::new([0.0, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, load);
 
     domain.add_element(Element::ZeroLength(
         ZeroLength::new(node_i, node_j).with_material(0, Material::Ent { e: modulus }),
@@ -87,9 +89,16 @@ pub fn simply_supported_beam_end_rotation(e: f64, iz: f64, area: f64, length: f6
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1));
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1));
 
-    domain.add_element(Element::ElasticBeamColumn(
-        ElasticBeamColumn::new(node_i, node_j, e, area, iz, GeomTransf::Linear).with_uniform_load(w),
-    ));
+    let beam = domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+        node_i,
+        node_j,
+        e,
+        area,
+        iz,
+        GeomTransf::Linear,
+    )));
+    let pattern = domain.default_pattern();
+    domain.add_element_load(pattern, beam, ElementLoad::UniformTransverse(w));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
@@ -120,7 +129,8 @@ pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
 
     let mut domain = Domain::new();
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2).with_load(0, force));
+    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, force);
 
     domain.add_element(Element::Truss(Truss::new(node_i, node_j, e_area, Material::Elastic { e: e_modulus })));
     domain.add_element(Element::ZeroLength(
@@ -210,7 +220,8 @@ pub fn disp_beam_column_cantilever_tip_deflection(e: f64, area: f64, iz: f64, le
 
     let mut domain = Domain::new();
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([length, 0.0]).with_load(1, tip_load));
+    let node_j = domain.add_node(Node::new([length, 0.0]));
+    domain.load_node(node_j, 1, tip_load);
     domain.add_element(Element::DispBeamColumn(DispBeamColumn::new(
         node_i,
         node_j,

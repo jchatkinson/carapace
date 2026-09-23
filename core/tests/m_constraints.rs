@@ -9,7 +9,8 @@ use carapace_core::model::{Domain, Element, Material, Node, Truss};
 fn truss_to_ground(domain: &mut Domain, y: f64, k: f64, load: f64) -> carapace_core::model::NodeId {
     let (area, length) = (1.0, 100.0);
     let ground = domain.add_node(Node::new([0.0, y]).fix(0).fix(1).fix(2));
-    let free = domain.add_node(Node::new([length, y]).fix(1).fix(2).with_load(0, load));
+    let free = domain.add_node(Node::new([length, y]).fix(1).fix(2));
+    domain.load_node(free, 0, load);
     domain.add_element(Element::Truss(Truss::new(ground, free, area, Material::Elastic { e: k * length / area })));
     free
 }

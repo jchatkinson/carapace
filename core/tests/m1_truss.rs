@@ -13,7 +13,8 @@ fn matches_xara_poc_truss_case_via_real_architecture() {
     // so an unconnected rotation DOF would leave the global system singular
     // (see M3's NDF bump to 3 in implementation-plan.md).
     let node_i = domain.add_node(Node::new([0.0, 100.0]).fix(0).fix(1).fix(2));
-    let node_j = domain.add_node(Node::new([100.0, 100.0]).fix(1).fix(2).with_load(0, 50.0));
+    let node_j = domain.add_node(Node::new([100.0, 100.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, 50.0);
 
     domain.add_element(Element::Truss(Truss::new(
         node_i,

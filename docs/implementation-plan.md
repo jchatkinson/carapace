@@ -164,10 +164,14 @@ another.
 
 - **Static / quasi-static** — same code path (`LoadControl` or
   `DisplacementControl` integrator with small increments); not a distinct
-  architecture.
+  architecture. Multi-phase composition (gravity → pushover, a cyclic
+  quasi-static protocol) and load-controlled load-path protocols are
+  caller-side composition of this same code path, not separate analysis
+  types — see M14 (§6).
 - **Modal** — eigenvalue analysis; see §5 decision #2.
 - **Time history (transient)** — `Newmark` integration, element/nodal mass
-  matrices, Rayleigh damping (linear combination of mass/stiffness).
+  matrices, Rayleigh damping (linear combination of mass/stiffness), and
+  (M14) time-varying load patterns plus ground-motion excitation.
 
 ### 3.4 Supporting infrastructure
 
@@ -462,6 +466,41 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   explicit open decision on smooth (non-piecewise-linear) materials
   (`Steel02`/`Concrete01`/`Concrete02`, §13.4) that needs resolving
   before implementation, not during it.
+
+- **M14 — Load patterns, multi-phase analysis composition, ground
+  motion.** ✅ Done. Generalizes load application from one implicit
+  pattern (`Node::load` + a baked-in element-load field, both scaled by a
+  single global `load_factor`) to `Domain`-owned, independently-scaled
+  `LoadPattern`s (`core/src/model/load_pattern.rs`), each driven by a
+  `LoadSeries` (`Constant`/`Linear`/`Path`, ported from Xara's
+  `TimeSeries` family — `ConstantSeries`/`LinearSeries`/`PathSeries`) and
+  freezable in place (`Domain::hold_pattern_constant`, Xara's
+  `LoadPattern::setLoadConstant`). Multi-phase analyses (gravity →
+  pushover, a cyclic quasi-static protocol, gravity → earthquake) are
+  caller-side composition of existing types, not a new orchestration
+  layer — matches how Xara itself works (Tcl/Python scripts call
+  `analyze()` repeatedly and swap integrators; `Domain` carries state
+  across the swap): `Analysis::into_domain`/`TransientAnalysis::into_domain`
+  hand a finished phase's `Domain` to the next phase's builder, and
+  `Analysis::set_integrator` swaps the integrator in place (no rebuild) for
+  cheap same-phase-type leg changes, e.g. a cyclic protocol's many
+  reversals. A load-controlled load-path protocol (Xara's `Integrator::
+  LoadPath`) falls out of `LoadSeries::Path` + the existing `LoadControl`
+  integrator — no new `Integrator` variant needed.
+  `TransientAnalysis` gained real time-varying load
+  (`assemble_reference_load` now takes the current pseudo-time) and
+  `GroundMotion` (`core/src/analysis/ground_motion.rs`, Xara's
+  `UniformExcitation`): the effective inertial force `-M·ι·ag(t)` via a
+  precomputed direction-influence vector (`Domain::direction_incidence`).
+  Breaking migration: `Node::load` and `ElasticBeamColumn::w_transverse`
+  are gone — loads are added via `Domain::add_nodal_load`/
+  `add_element_load` (or the `default_pattern()`-scoped convenience
+  `Domain::load_node`) after `add_node`/`add_element`, not as node/element
+  builder fields. See `core/tests/m_load_patterns.rs`,
+  `m_cyclic_protocol.rs`, `m_ground_motion.rs`, `m_load_path.rs`, and the
+  doc comments on `LoadSeries`/`LoadPattern`
+  (`core/src/model/load_pattern.rs`), `Domain::hold_pattern_constant`, and
+  `GroundMotion` for the design rationale.
 
 ---
 

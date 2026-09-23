@@ -30,7 +30,8 @@ fn two_fiber_elastic_section_matches_elastic_beam_column_exactly() {
 
         let mut domain = Domain::new();
         let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-        let node_j = domain.add_node(Node::new([length, 0.0]).with_load(1, tip_load));
+        let node_j = domain.add_node(Node::new([length, 0.0]));
+        domain.load_node(node_j, 1, tip_load);
         domain.add_element(Element::DispBeamColumn(carapace_core::model::DispBeamColumn::new(
             node_i,
             node_j,
@@ -51,7 +52,8 @@ fn two_fiber_elastic_section_matches_elastic_beam_column_exactly() {
     let elastic_beam_tip = {
         let mut domain = Domain::new();
         let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-        let node_j = domain.add_node(Node::new([length, 0.0]).with_load(1, tip_load));
+        let node_j = domain.add_node(Node::new([length, 0.0]));
+        domain.load_node(node_j, 1, tip_load);
         domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
             node_i,
             node_j,
@@ -100,7 +102,8 @@ fn lobatto_integration_gives_the_same_exact_result_as_legendre() {
         ];
         let mut domain = Domain::new();
         let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-        let node_j = domain.add_node(Node::new([length, 0.0]).with_load(1, tip_load));
+        let node_j = domain.add_node(Node::new([length, 0.0]));
+        domain.load_node(node_j, 1, tip_load);
         domain.add_element(Element::DispBeamColumn(carapace_core::model::DispBeamColumn::new(
             node_i, node_j, fibers, integration,
         )));

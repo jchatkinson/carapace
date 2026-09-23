@@ -30,6 +30,43 @@ impl Analysis {
         &self.domain
     }
 
+    /// Ends this phase and hands back the `Domain` (nodal state, committed
+    /// material history, load-pattern freeze state, all intact) so a
+    /// caller can compose the next phase — a fresh `AnalysisBuilder::build`
+    /// (a different `Integrator`/`Algorithm`/`ConvergenceTest` allowed) or
+    /// `TransientAnalysis::new` for a dynamic phase. Typically preceded by
+    /// `domain_mut().hold_pattern_constant(pattern, load_factor)` on
+    /// whichever pattern(s) should stop ramping (e.g. gravity) before the
+    /// next phase starts — see implementation-plan's load-pattern/phase-
+    /// composition milestone.
+    pub fn into_domain(self) -> Domain {
+        self.domain
+    }
+
+    /// Mutable access to the domain mid-analysis — needed to call
+    /// `Domain::hold_pattern_constant` right before `into_domain()` (the
+    /// pattern must be frozen while `self.load_factor`, the pseudo-time to
+    /// freeze at, is still known).
+    pub fn domain_mut(&mut self) -> &mut Domain {
+        &mut self.domain
+    }
+
+    /// Swap the integrator without rebuilding `Analysis` — no
+    /// `Domain::number_dofs`, no new `SparseSolver`, `step_count`/
+    /// `load_factor` carry over unchanged. This is what makes a cyclic/
+    /// quasi-static protocol (many small `DisplacementControl` legs with
+    /// varying sign/magnitude) cheap: build one `Analysis`, then loop
+    /// `analysis.set_integrator(Integrator::DisplacementControl { increment: next, .. }); analysis.step()?;`
+    /// over the protocol's prescribed excursions — the protocol itself
+    /// (a `Vec<f64>` of signed increments) is caller-side data, not
+    /// something `Analysis` needs to model. For a bigger phase transition
+    /// (e.g. gravity → pushover, where `Algorithm`/`ConvergenceTest` also
+    /// typically change and a pattern needs freezing), use
+    /// `into_domain()` + a fresh `AnalysisBuilder` instead.
+    pub fn set_integrator(&mut self, integrator: Integrator) {
+        self.integrator = integrator;
+    }
+
     /// Advance one step: the integrator predicts this step's load factor,
     /// then the algorithm resolves equilibrium at that (fixed) load factor.
     /// See implementation-plan §4.4 for the sketch this follows.

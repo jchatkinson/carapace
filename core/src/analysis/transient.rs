@@ -2,7 +2,7 @@ use nalgebra::DVector;
 
 use crate::model::Domain;
 
-use super::{AnalysisError, RayleighDamping, SparseSolver};
+use super::{AnalysisError, GroundMotion, RayleighDamping, SparseSolver};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TransientStepResult {
@@ -38,6 +38,11 @@ pub struct TransientAnalysis {
     solver: SparseSolver,
     time: f64,
     step_count: usize,
+    /// Each active `GroundMotion` paired with its precomputed `mass ⊙
+    /// direction_incidence` (`Domain::direction_incidence`) — computed once
+    /// (here, and again whenever `with_ground_motion` adds one), not every
+    /// step, mirroring how `mass` itself is precomputed once.
+    ground_motions: Vec<(GroundMotion, DVector<f64>)>,
 }
 
 impl TransientAnalysis {
@@ -45,8 +50,10 @@ impl TransientAnalysis {
     /// carry initial conditions (`Node::with_initial_displacement`/
     /// `with_initial_velocity`). Computes the one thing Newmark needs that
     /// isn't a direct initial condition: a consistent initial acceleration
-    /// from equilibrium at t=0, `M*a0 = F0 - K*u0 - C*v0`. `M` is diagonal,
-    /// so this is a single elementwise division, no solve needed.
+    /// from equilibrium at t=0, `M*a0 = F0 - K*u0 - C*v0 - M*ι*ag(0)` (the
+    /// last term only present once `with_ground_motion` adds one — see
+    /// `recompute_initial_acceleration`). `M` is diagonal, so this is a
+    /// single elementwise division, no solve needed.
     pub fn new(mut domain: Domain, damping: RayleighDamping, dt: f64) -> Result<Self, AnalysisError> {
         assert!(dt > 0.0, "Newmark dt must be positive");
 
@@ -58,24 +65,7 @@ impl TransientAnalysis {
             }
         }
 
-        let u0 = domain.gather_displacement();
-        let v0 = domain.gather_velocity();
-        let (_k, resistance0) = domain.assemble_tangent_and_resistance();
-        let load0 = domain.assemble_reference_load();
-        let k_v0 = domain.multiply_stiffness(&v0);
-
-        let mut a0 = DVector::<f64>::zeros(n);
-        for i in 0..n {
-            let c_v0_i = damping.alpha_m * mass[i] * v0[i] + damping.beta_k * k_v0[i];
-            a0[i] = (load0[i] - resistance0[i] - c_v0_i) / mass[i];
-        }
-        domain.scatter_state(&u0, &v0, &a0);
-        // Align committed material state with the given initial condition
-        // (matters if `with_initial_displacement` was used) before any
-        // stepping begins — see `Material`'s doc comment.
-        domain.commit();
-
-        Ok(TransientAnalysis {
+        let mut analysis = TransientAnalysis {
             domain,
             mass,
             damping,
@@ -83,21 +73,80 @@ impl TransientAnalysis {
             solver: SparseSolver::new(),
             time: 0.0,
             step_count: 0,
-        })
+            ground_motions: Vec::new(),
+        };
+        analysis.recompute_initial_acceleration();
+        Ok(analysis)
+    }
+
+    /// Adds a `GroundMotion` and re-derives the initial acceleration to
+    /// include its contribution at `t=0` (usually zero — accelerograms
+    /// conventionally start at `ag(0) = 0` — but not assumed). Must be
+    /// called before any `step()`; re-scatters/re-commits the domain's
+    /// state exactly as `new` did, so it's equivalent to having passed this
+    /// motion to `new` directly.
+    pub fn with_ground_motion(mut self, motion: GroundMotion) -> Self {
+        let incidence = self.domain.direction_incidence(motion.direction);
+        let mass_incidence = self.mass.component_mul(&incidence);
+        self.ground_motions.push((motion, mass_incidence));
+        self.recompute_initial_acceleration();
+        self
+    }
+
+    fn recompute_initial_acceleration(&mut self) {
+        let n = self.domain.num_free_dofs();
+        let u0 = self.domain.gather_displacement();
+        let v0 = self.domain.gather_velocity();
+        let (_k, resistance0) = self.domain.assemble_tangent_and_resistance();
+        let load0 = self.domain.assemble_reference_load(self.time);
+        let k_v0 = self.domain.multiply_stiffness(&v0);
+        let ground_force0 = self.ground_force(self.time);
+
+        let mut a0 = DVector::<f64>::zeros(n);
+        for i in 0..n {
+            let c_v0_i = self.damping.alpha_m * self.mass[i] * v0[i] + self.damping.beta_k * k_v0[i];
+            a0[i] = (load0[i] - resistance0[i] - c_v0_i + ground_force0[i]) / self.mass[i];
+        }
+        self.domain.scatter_state(&u0, &v0, &a0);
+        // Align committed material state with the given initial condition
+        // (matters if `with_initial_displacement` was used) before any
+        // stepping begins — see `Material`'s doc comment.
+        self.domain.commit();
+    }
+
+    /// `-M·ι·ag(t)`, summed over every active `GroundMotion` — the
+    /// effective inertial force contribution to `f_eff` (`try_step`) and to
+    /// the initial-acceleration equilibrium (`recompute_initial_acceleration`).
+    fn ground_force(&self, time: f64) -> DVector<f64> {
+        let mut force = DVector::<f64>::zeros(self.domain.num_free_dofs());
+        for (motion, mass_incidence) in &self.ground_motions {
+            let ag = motion.acceleration(time);
+            if ag != 0.0 {
+                force -= mass_incidence * ag;
+            }
+        }
+        force
     }
 
     pub fn domain(&self) -> &Domain {
         &self.domain
     }
 
+    /// Ends this (dynamic) phase and hands back the `Domain` — symmetric
+    /// with `Analysis::into_domain`, so a dynamic phase can itself be
+    /// followed by another phase (static or dynamic).
+    pub fn into_domain(self) -> Domain {
+        self.domain
+    }
+
     pub fn time(&self) -> f64 {
         self.time
     }
 
-    /// Advance one Newmark step of size `dt`. Constant external load
-    /// (`Domain::assemble_reference_load`) throughout — a time-varying load
-    /// (e.g. ground motion) is out of scope until something needs it (§3.3
-    /// only asks for Newmark integration + Rayleigh damping at M6).
+    /// Advance one Newmark step of size `dt`. External load each step is
+    /// `Domain::assemble_reference_load(time)` (every `LoadPattern`'s
+    /// current/frozen contribution — see its doc comment) plus each active
+    /// `GroundMotion`'s effective inertial force at `time` (`ground_force`).
     ///
     /// On failure, the domain and `time`/`step_count` are restored to their
     /// state before this call — same reasoning as `Analysis::step`.
@@ -147,7 +196,7 @@ impl TransientAnalysis {
             .assemble_newmark_system(&self.mass, mass_coeff, stiffness_coeff, &damp_vec);
 
         let n = self.domain.num_free_dofs();
-        let mut f_eff = self.domain.assemble_reference_load();
+        let mut f_eff = self.domain.assemble_reference_load(self.time) + self.ground_force(self.time);
         for i in 0..n {
             f_eff[i] += self.mass[i] * (mass_vec[i] + self.damping.alpha_m * damp_vec[i])
                 + self.damping.beta_k * k_damp_vec[i];
