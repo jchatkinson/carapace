@@ -1,3 +1,6 @@
 /target
 /pkg
 Cargo.lock
+/comparison/.venv
+/comparison/out
+/comparison/__pycache__

@@ -108,9 +108,22 @@ impl Analysis {
             }
             Algorithm::NewtonRaphson => {
                 let mut converged = false;
-                for _ in 0..self.test.max_iter() {
+                for iteration in 0..self.test.max_iter() {
                     let (k, residual) = self.domain.form_tangent_and_residual(self.load_factor);
-                    let du = self.solver.solve(&k, &residual)?;
+                    let du_bar = self.solver.solve(&k, &residual)?;
+                    // The first iteration uses the same tangent `predict`
+                    // used, so `du_bar` already delivers `predict`'s target
+                    // displacement at the controlled DOF exactly (see
+                    // `Integrator::correct`'s doc comment) — only from the
+                    // second iteration on does the controlled DOF need to
+                    // be actively held there while other DOFs still get
+                    // corrected.
+                    let (delta_lambda, du) = if iteration == 0 {
+                        (0.0, du_bar)
+                    } else {
+                        self.integrator.correct(&self.domain, &self.solver, &k, du_bar, self.load_factor)?
+                    };
+                    self.load_factor += delta_lambda;
                     self.domain.apply_displacement_increment(&du);
                     if self.test.check(&residual, &du) {
                         converged = true;

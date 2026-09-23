@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod model;
+pub mod testkit;
 
 /// Closed-form check value only — `δ = PL/(AE)`. Kept around as the M0
 /// oracle constant; M1 onward computes this through the real

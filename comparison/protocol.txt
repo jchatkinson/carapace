@@ -1,0 +1,16 @@
+# Shared reverse-cyclic displacement protocol, read identically by
+# core/examples/cyclic_material.rs and comparison/protocol.py, so both
+# engines see the exact same loading history.
+#
+# Each non-comment line is "amplitude cycles": ramp 0 -> +amplitude ->
+# -amplitude, `cycles` times, then back to 0 before the next tier.
+#
+# step: the max displacement change per DisplacementControl leg (both
+# engines sub-step no larger than this).
+step 0.0005
+
+# amplitude cycles
+0.005 1
+0.01 1
+0.02 2
+0.03 2

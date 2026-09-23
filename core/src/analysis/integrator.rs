@@ -1,4 +1,6 @@
-use crate::model::{Domain, NodeId};
+use nalgebra::DVector;
+
+use crate::model::{Domain, NodeId, SparseMatrix};
 
 use super::{AnalysisError, SparseSolver};
 
@@ -46,6 +48,56 @@ impl Integrator {
                 let unit_response = solver.solve(&k, &sensitivity)?;
                 let delta_lambda = increment / unit_response[eq];
                 Ok(current_pseudo_time + delta_lambda)
+            }
+        }
+    }
+
+    /// Corrector for the *second and later* Newton iterations of a step
+    /// (the caller must skip this on the first iteration — see below).
+    /// `predict`'s pseudo-time only accounts for the tangent at the *start*
+    /// of the step — exact for `LoadControl` (whose pseudo-time never
+    /// changes mid-step, so `du_bar` unmodified is already the right
+    /// increment every iteration).
+    ///
+    /// For `DisplacementControl`, the first Newton iteration uses that same
+    /// starting tangent (nothing has moved yet), so its residual-driven
+    /// `du_bar` already delivers `predict`'s target displacement at the
+    /// controlled DOF exactly — the caller applies it unmodified, with no
+    /// call to `correct` (equivalent to OpenSees' `newStep`, which predicts
+    /// *and* applies that first increment together). But the tangent used
+    /// by `predict`/iteration 1 can go stale for the *rest* of the step
+    /// (e.g. a step landing exactly on a material's yield breakpoint sees
+    /// the elastic tangent at `predict` time, then the true, much softer,
+    /// post-yield tangent from iteration 2 on) — left uncorrected, ordinary
+    /// fixed-load-factor Newton iteration would then keep driving the
+    /// controlled DOF *past* the target already reached, chasing force
+    /// equilibrium at the wrong load factor instead. This is the standard
+    /// Yang & Shieh consistent Displacement Control corrector: solve the
+    /// current tangent against the reference load sensitivity again
+    /// (`unit_response`, this iteration's version of `predict`'s unit-load
+    /// probe), then pick `delta_lambda` so that adding `delta_lambda *
+    /// unit_response` to `du_bar` cancels `du_bar`'s contribution at the
+    /// controlled DOF — i.e. this iteration leaves the controlled DOF
+    /// exactly where it already was after iteration 1, no matter how far
+    /// the tangent has drifted since, while every other DOF still gets
+    /// `du_bar`'s residual-driven correction.
+    pub(crate) fn correct(
+        &self,
+        domain: &Domain,
+        solver: &SparseSolver,
+        k: &SparseMatrix,
+        du_bar: DVector<f64>,
+        pseudo_time: f64,
+    ) -> Result<(f64, DVector<f64>), AnalysisError> {
+        match self {
+            Integrator::LoadControl { .. } => Ok((0.0, du_bar)),
+            Integrator::DisplacementControl { node, dof, .. } => {
+                let eq = domain.equation_of(*node, *dof).ok_or(AnalysisError::InvalidConstraint)?;
+                let sensitivity = domain.assemble_reference_load_sensitivity(pseudo_time);
+                let unit_response = solver.solve(k, &sensitivity)?;
+                let delta_lambda = -du_bar[eq] / unit_response[eq];
+                let du = du_bar + unit_response * delta_lambda;
+                Ok((delta_lambda, du))
             }
         }
     }
