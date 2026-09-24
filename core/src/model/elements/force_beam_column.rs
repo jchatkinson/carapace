@@ -1,6 +1,10 @@
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
-use super::super::{BeamIntegration, Fiber, Fiber3, FiberSection, FiberSection3, GeomTransf3, Node, Node3, Node3Id, NodeId};
+use super::super::transform::Corotational2d;
+use super::super::{
+    BeamIntegration, Fiber, Fiber3, FiberSection, FiberSection3, GeomTransf, GeomTransf3, Node,
+    Node3, Node3Id, NodeId,
+};
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
 /// A 2-node, force-based (flexibility-method) 2D beam-column (§3.1, M8):
@@ -48,16 +52,18 @@ use super::truss::{SpatialElementMatrix, SpatialElementVector};
 /// b) dx`) — the standard result for force-based elements, from
 /// differentiating the equilibrium `r(q, v) = 0` implicit relation.
 ///
-/// `GeomTransf::Linear` only, no element loads, `BeamIntegration::Lobatto`
-/// the usual choice (endpoints included — plastic hinges concentrate at
-/// member ends) — same M7-deferred scope as `DispBeamColumn` for both;
-/// nothing here needs them yet.
+/// Small-displacement by default, with an opt-in `GeomTransf::Corotational`
+/// transformation that supplies objective chord-relative basic
+/// deformations and the consistent geometric tangent. No element loads;
+/// `BeamIntegration::Lobatto` is the usual choice (endpoints included —
+/// plastic hinges concentrate at member ends).
 #[derive(Debug, Clone)]
 pub struct ForceBeamColumn {
     pub node_i: NodeId,
     pub node_j: NodeId,
     integration: BeamIntegration,
     sections: Vec<FiberSection>,
+    transform: GeomTransf,
     /// Mass per unit volume, applied uniformly over the section's total
     /// fiber area, same convention as `DispBeamColumn`. Zero (the default)
     /// means massless.
@@ -107,6 +113,7 @@ impl ForceBeamColumn {
             node_j,
             integration,
             sections,
+            transform: GeomTransf::Linear,
             density: 0.0,
             q_commit: SVector::<f64, NBD>::zeros(),
             e_commit: vec![(0.0, 0.0); n_points],
@@ -118,6 +125,12 @@ impl ForceBeamColumn {
 
     pub fn with_density(mut self, density: f64) -> Self {
         self.density = density;
+        self
+    }
+
+    /// Use finite-rotation, chord-following kinematics for this member.
+    pub fn with_corotational(mut self) -> Self {
+        self.transform = GeomTransf::Corotational;
         self
     }
 
@@ -343,11 +356,30 @@ impl ForceBeamColumn {
         node_i: &Node,
         node_j: &Node,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
-        let (length, t, d_local) = self.local_displacement(node_i, node_j);
+        let corotational = (self.transform == GeomTransf::Corotational)
+            .then(|| Corotational2d::new(node_i, node_j));
+        let (length, t, d_local) = if let Some(state) = &corotational {
+            (
+                state.initial_length(),
+                SMatrix::<f64, 6, 6>::identity(),
+                SVector::<f64, 6>::zeros(),
+            )
+        } else {
+            self.local_displacement(node_i, node_j)
+        };
         let a = Self::basic_deformation_matrix(length);
-        let v = a * d_local;
+        let v = corotational
+            .as_ref()
+            .map_or_else(|| a * d_local, Corotational2d::basic_deformation);
 
         let (q, _e, k_basic) = self.state_determination(v, length);
+
+        if let Some(state) = &corotational {
+            return (
+                state.global_tangent(&k_basic, &q),
+                state.global_resistance(&q),
+            );
+        }
 
         let k_local = a.transpose() * k_basic * a;
         let r_local = a.transpose() * q;
@@ -356,9 +388,17 @@ impl ForceBeamColumn {
     }
 
     pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node) {
-        let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+        let (length, d_local, corotational) = if self.transform == GeomTransf::Corotational {
+            let state = Corotational2d::new(node_i, node_j);
+            (state.initial_length(), SVector::<f64, 6>::zeros(), Some(state))
+        } else {
+            let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+            (length, d_local, None)
+        };
         let a = Self::basic_deformation_matrix(length);
-        let v = a * d_local;
+        let v = corotational
+            .as_ref()
+            .map_or_else(|| a * d_local, Corotational2d::basic_deformation);
 
         let (q, e, _k_basic) = self.state_determination(v, length);
 

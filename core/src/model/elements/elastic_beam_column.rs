@@ -1,5 +1,6 @@
 use nalgebra::{SMatrix, SVector};
 
+use super::super::transform::Corotational2d;
 use super::super::{GeomTransf, GeomTransf3, Node, Node3, Node3Id, NodeId};
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
@@ -114,6 +115,29 @@ impl ElasticBeamColumn {
         node_i: &Node,
         node_j: &Node,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
+        if self.transform == GeomTransf::Corotational {
+            let transform = Corotational2d::new(node_i, node_j);
+            let l = transform.initial_length();
+            let ea_l = self.e * self.a / l;
+            let eiz_l = self.e * self.iz / l;
+            let k_basic = SMatrix::<f64, 3, 3>::new(
+                ea_l,
+                0.0,
+                0.0,
+                0.0,
+                4.0 * eiz_l,
+                2.0 * eiz_l,
+                0.0,
+                2.0 * eiz_l,
+                4.0 * eiz_l,
+            );
+            let q = k_basic * transform.basic_deformation();
+            return (
+                transform.global_tangent(&k_basic, &q),
+                transform.global_resistance(&q),
+            );
+        }
+
         let (length, cx, cy) = self.geometry(node_i, node_j);
         let t = self.transformation(cx, cy);
         let k_local = self.local_elastic_stiffness(length);
@@ -137,6 +161,7 @@ impl ElasticBeamColumn {
                 let axial_force = resistance_local[3]; // tension-positive axial force at node j
                 k_local + self.geometric_stiffness(axial_force, length)
             }
+            GeomTransf::Corotational => unreachable!("handled above"),
         };
         let k = t.transpose() * k_total_local * t;
 
@@ -153,6 +178,9 @@ impl ElasticBeamColumn {
     pub(super) fn form_load_vector(&self, node_i: &Node, node_j: &Node, w: f64) -> SVector<f64, 6> {
         if w == 0.0 {
             return SVector::<f64, 6>::zeros();
+        }
+        if self.transform == GeomTransf::Corotational {
+            return Corotational2d::new(node_i, node_j).global_uniform_transverse_load(w);
         }
         let (length, cx, cy) = self.geometry(node_i, node_j);
         let t = self.transformation(cx, cy);

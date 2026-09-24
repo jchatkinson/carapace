@@ -1,6 +1,10 @@
 use nalgebra::{SMatrix, SVector};
 
-use super::super::{BeamIntegration, Fiber, Fiber3, FiberSection, FiberSection3, GeomTransf3, Node, Node3, Node3Id, NodeId};
+use super::super::transform::Corotational2d;
+use super::super::{
+    BeamIntegration, Fiber, Fiber3, FiberSection, FiberSection3, GeomTransf, GeomTransf3, Node,
+    Node3, Node3Id, NodeId,
+};
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
 /// A 2-node, displacement-based, fiber-discretized 2D beam-column (§3.1):
@@ -19,10 +23,11 @@ use super::truss::{SpatialElementMatrix, SpatialElementVector};
 /// different section per point) is a natural extension, not built until
 /// needed.
 ///
-/// `GeomTransf::Linear` only — small-displacement, no `PDelta` geometric-
-/// stiffness correction (unlike `ElasticBeamColumn`, whose axial force is a
-/// single scalar; a fiber section's isn't nearly as direct to plug into a
-/// geometric-stiffness formula, so this is deferred, not silently wrong).
+/// Small-displacement by default, with an opt-in `GeomTransf::Corotational`
+/// formulation that integrates fiber response from the three objective
+/// basic deformations. `PDelta` remains unsupported for this element (a
+/// fiber section's force state does not reduce to the scalar axial force
+/// used by `ElasticBeamColumn`'s closed-form correction).
 /// No element loads (`ElasticBeamColumn`'s uniform transverse load) either
 /// — a fiber element's consistent load vector needs the same per-section
 /// integration machinery core to this element, not a closed-form formula,
@@ -34,6 +39,7 @@ pub struct DispBeamColumn {
     pub node_j: NodeId,
     integration: BeamIntegration,
     sections: Vec<FiberSection>,
+    transform: GeomTransf,
     /// Mass per unit volume, applied uniformly over the section's total
     /// fiber area. Zero (the default) means massless.
     pub density: f64,
@@ -48,12 +54,19 @@ impl DispBeamColumn {
             node_j,
             integration,
             sections,
+            transform: GeomTransf::Linear,
             density: 0.0,
         }
     }
 
     pub fn with_density(mut self, density: f64) -> Self {
         self.density = density;
+        self
+    }
+
+    /// Use finite-rotation, chord-following kinematics for this member.
+    pub fn with_corotational(mut self) -> Self {
+        self.transform = GeomTransf::Corotational;
         self
     }
 
@@ -122,7 +135,17 @@ impl DispBeamColumn {
         node_i: &Node,
         node_j: &Node,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
-        let (length, t, d_local) = self.local_displacement(node_i, node_j);
+        let corotational = (self.transform == GeomTransf::Corotational)
+            .then(|| Corotational2d::new(node_i, node_j));
+        let (length, t, d_local) = if let Some(state) = &corotational {
+            (
+                state.initial_length(),
+                SMatrix::<f64, 6, 6>::identity(),
+                Corotational2d::local_basic_modes() * state.basic_deformation(),
+            )
+        } else {
+            self.local_displacement(node_i, node_j)
+        };
 
         let mut k_local = SMatrix::<f64, 6, 6>::zeros();
         let mut r_local = SVector::<f64, 6>::zeros();
@@ -142,11 +165,30 @@ impl DispBeamColumn {
                     + k_section[1][1] * (b_kappa * b_kappa.transpose()));
         }
 
-        (t.transpose() * k_local * t, t.transpose() * r_local)
+        if let Some(state) = &corotational {
+            let modes = Corotational2d::local_basic_modes();
+            let basic_tangent = modes.transpose() * k_local * modes;
+            let basic_resistance = modes.transpose() * r_local;
+            (
+                state.global_tangent(&basic_tangent, &basic_resistance),
+                state.global_resistance(&basic_resistance),
+            )
+        } else {
+            (t.transpose() * k_local * t, t.transpose() * r_local)
+        }
     }
 
     pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node) {
-        let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+        let (length, d_local) = if self.transform == GeomTransf::Corotational {
+            let state = Corotational2d::new(node_i, node_j);
+            (
+                state.initial_length(),
+                Corotational2d::local_basic_modes() * state.basic_deformation(),
+            )
+        } else {
+            let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+            (length, d_local)
+        };
         let points = self.integration.points();
         for ((xi, _w), section) in points.iter().zip(&mut self.sections) {
             let (b_eps0, b_kappa) = Self::strain_displacement(*xi, length);

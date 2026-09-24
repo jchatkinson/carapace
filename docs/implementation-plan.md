@@ -183,15 +183,14 @@ another.
 - **Mass:** lumped (diagonal) mass matrices per element, or nodal mass.
 - **Loads:** nodal loads and element loads (distributed loads on
   beam-columns).
-- **`geomTransf`:** `Linear` and `PDelta` (cheap, small correction terms).
-  **Corotational is a separate, high-complexity milestone (M9)** if/when
-  large-displacement analysis is actually needed — comparable in complexity
-  to force-based elements. Confirm this is actually in scope before starting
-  it; it was flagged as "decide if you need it" during scoping, not
-  committed.
+- **`geomTransf`:** `Linear` and `PDelta` (small-displacement paths), plus
+  the planar co-rotational M9 path for large rotations. Spatial corotation
+  remains separate (M18) because it needs independent rotation/objectivity
+  treatment.
 - **Rayleigh damping:** needed for time-history analysis.
 
-All of the above are done as of M6/M7 — see §6.
+The baseline support above is implemented through M6; planar corotational
+geometry is M9 (see §6).
 
 - **Multi-point constraints:** `Domain::equal_dof`/`rigid_diaphragm`
   (Xara/OpenSees's `equalDOF`/`rigidDiaphragm`), resolved by
@@ -423,9 +422,16 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   asymmetric (axial-bending-coupled) section, plus an `ElasticPP`
   past-yield/permanent-set case — see `core/tests/m8_force_beam_column.rs`.
 
-- **M9 — Corotational geomTransf (large-displacement).** Not started. Only
-  if confirmed still in scope (§3.4) — comparable complexity to M8. Revisit
-  scope with the project owner before starting.
+- **M9 — Corotational geomTransf (planar large-displacement).** Implemented;
+  dedicated acceptance tests remain to be added. `GeomTransf::Corotational`
+  now uses the current chord to form axial extension and both end rotations
+  relative to the chord, then maps basic resistance/tangent to global DOFs
+  with the exact kinematic Jacobian and its geometric Hessian. The option is
+  available on `ElasticBeamColumn`, `DispBeamColumn`, and `ForceBeamColumn`;
+  the nonlinear fiber elements opt in with `.with_corotational()`. The
+  elastic element's uniform transverse load follows the current local frame.
+  Rigid joint offsets and spatial corotation are outside this milestone; the
+  latter remains M18.
 
 - **M10 — pysees handoff and worker execution.** Not started. `pysees` hands
   off an immutable, validated `Model + AnalysisSequence` snapshot on an

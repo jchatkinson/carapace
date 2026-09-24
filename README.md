@@ -13,9 +13,10 @@ for why a direct C++-to-wasm port wasn't the path taken.
 
 ## Status
 
-Milestones M0–M7 are done: `Domain`/`Node`, the full element catalog through
-`DispBeamColumn` (`Truss`, `ZeroLength`, `ElasticBeamColumn`,
-`DispBeamColumn`), the full standard uniaxial material catalog (`Elastic`,
+Milestones M0–M8 are done: `Domain`/`Node`, the full planar element catalog
+through `ForceBeamColumn` (`Truss`, `ZeroLength`, `ElasticBeamColumn`,
+`DispBeamColumn`, `ForceBeamColumn`), the full standard uniaxial material
+catalog (`Elastic`,
 `ElasticPP`, `Gap`, `Ent`, `Steel01`/`02`, `Concrete01`/`02`, `Hysteretic`,
 `Pinching4`, plus the `Parallel`/`Series`/`MinMax` composites), a
 typestate-composed `Analysis` (`LoadControl`/`DisplacementControl` ×
@@ -24,12 +25,13 @@ typestate-composed `Analysis` (`LoadControl`/`DisplacementControl` ×
 all in place and verified on both native and `wasm32` + Node targets, backed
 by a real sparse solver (`faer`'s sparse LU).
 
-Remaining work: `ForceBeamColumn` (M8, nested element-level equilibrium
-iteration), optional corotational geometry (M9), and the JS/TS worker
-integration + results persistence that let `pysees` actually call Carapace
-(M10–M11).
+The planar co-rotational transform (M9) is implemented for all three planar
+beam formulations; dedicated acceptance tests remain. The next integration
+work is the JS/TS worker handoff (M10) and results persistence hardening
+(M11). Spatial modal/transient analysis and diaphragm constraints remain
+open; spatial corotation is a separate optional milestone (M18).
 
-3D (spatial) support is in progress, separately from M8–M11: `Domain`,
+3D (spatial) support is in progress as a separate execution profile: `Domain`,
 `Analysis`, `AnalysisBuilder`, `Integrator`, and `LoadPattern` are each one
 generic implementation covering both a planar and a spatial (six-DOF-per-
 node) profile, with `Domain3`/`Analysis3` as the spatial instantiation.

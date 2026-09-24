@@ -1,15 +1,16 @@
-/// Coordinate-transformation strategy for frame elements: relates an
-/// element's local (basic) stiffness/forces to the global system. Closed
-/// enum (§2.1) — `Linear` and `PDelta` are both "cheap" per the
-/// implementation plan §3.4; `Corotational` (large-displacement) is its own
-/// milestone (M9) if/when actually needed, not a third variant here.
+use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
+
+use super::{Node, Node3, SpatialElementMatrix};
+
+/// Coordinate-transformation strategy for planar frame elements: relates
+/// an element's local (basic) stiffness/forces to the global system. The
+/// co-rotational option follows the deformed chord and removes rigid-body
+/// translation/rotation from the element's basic deformations.
 ///
-/// Purely a behavior-selecting flag: the 2×2 direction-cosine rotation
-/// itself is cheap enough that each planar frame element inlines its own
-/// copy (`ElasticBeamColumn`/`DispBeamColumn`/`ForceBeamColumn` each have
-/// their own `geometry`/`transformation` methods) rather than sharing one
-/// through this type. `GeomTransf3` (below) can't get away with that — see
-/// its doc comment.
+/// `Linear` and `PDelta` select the existing small-displacement paths.
+/// `Corotational2d` centralizes the current-chord kinematics used by the
+/// planar elastic, displacement-based, and force-based frame elements.
+/// `GeomTransf3` (below) remains a separate spatial type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GeomTransf {
     /// Small-displacement: local/global relationship fixed at the element's
@@ -20,11 +21,173 @@ pub enum GeomTransf {
     /// geometric-stiffness correction from the current axial force (a
     /// first-order P-Delta effect) — not full corotational tracking.
     PDelta,
+    /// Finite-rotation planar transformation. The current chord defines the
+    /// element axes; axial extension and end rotations relative to that
+    /// chord are the three objective basic deformations.
+    Corotational,
 }
 
-use nalgebra::{Matrix3, Vector3};
+/// Current co-rotational kinematics for one planar two-node frame member.
+/// Basic displacement order is `[axial extension, theta_i - chord_rotation,
+/// theta_j - chord_rotation]`, matching Xara/OpenSees `CorotCrdTransf2d`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Corotational2d {
+    initial_length: f64,
+    deformed_length: f64,
+    basic: SVector<f64, 3>,
+    /// Derivative of basic deformations with respect to
+    /// `[ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]`.
+    jacobian: SMatrix<f64, 3, 6>,
+    /// Block-diagonal global-to-current-local rotation, used for local loads.
+    global_to_local: SMatrix<f64, 6, 6>,
+    /// Current chord direction in global coordinates.
+    direction: SVector<f64, 2>,
+}
 
-use super::{Node3, SpatialElementMatrix};
+impl Corotational2d {
+    pub(crate) fn new(node_i: &Node, node_j: &Node) -> Self {
+        let reference_dx = node_j.coords[0] - node_i.coords[0];
+        let reference_dy = node_j.coords[1] - node_i.coords[1];
+        let initial_length = reference_dx.hypot(reference_dy);
+        assert!(
+            initial_length > 0.0,
+            "Corotational2d: element endpoints must not coincide"
+        );
+        let reference_angle = reference_dy.atan2(reference_dx);
+
+        let dx = reference_dx + node_j.displacement[0] - node_i.displacement[0];
+        let dy = reference_dy + node_j.displacement[1] - node_i.displacement[1];
+        let deformed_length = dx.hypot(dy);
+        assert!(
+            deformed_length > 1e-12,
+            "Corotational2d: deformed element length must be nonzero"
+        );
+
+        let direction = SVector::<f64, 2>::new(dx / deformed_length, dy / deformed_length);
+        let relative_angle = dy.atan2(dx) - reference_angle;
+        let chord_rotation = relative_angle.sin().atan2(relative_angle.cos());
+        let basic = SVector::<f64, 3>::new(
+            deformed_length - initial_length,
+            node_i.displacement[2] - chord_rotation,
+            node_j.displacement[2] - chord_rotation,
+        );
+
+        // d(theta_chord)/d(relative_position) = [-dy, dx] / length^2.
+        let inv_l2 = 1.0 / (deformed_length * deformed_length);
+        let alpha_dx = -dy * inv_l2;
+        let alpha_dy = dx * inv_l2;
+        let mut jacobian = SMatrix::<f64, 3, 6>::zeros();
+        jacobian[(0, 0)] = -direction[0];
+        jacobian[(0, 1)] = -direction[1];
+        jacobian[(0, 3)] = direction[0];
+        jacobian[(0, 4)] = direction[1];
+        for row in [1, 2] {
+            jacobian[(row, 0)] = alpha_dx;
+            jacobian[(row, 1)] = alpha_dy;
+            jacobian[(row, 3)] = -alpha_dx;
+            jacobian[(row, 4)] = -alpha_dy;
+        }
+        jacobian[(1, 2)] = 1.0;
+        jacobian[(2, 5)] = 1.0;
+
+        let cx = direction[0];
+        let cy = direction[1];
+        #[rustfmt::skip]
+        let block = SMatrix::<f64, 3, 3>::new(
+             cx,  cy, 0.0,
+            -cy,  cx, 0.0,
+            0.0, 0.0, 1.0,
+        );
+        let mut global_to_local = SMatrix::<f64, 6, 6>::zeros();
+        global_to_local.fixed_view_mut::<3, 3>(0, 0).copy_from(&block);
+        global_to_local.fixed_view_mut::<3, 3>(3, 3).copy_from(&block);
+
+        Self {
+            initial_length,
+            deformed_length,
+            basic,
+            jacobian,
+            global_to_local,
+            direction,
+        }
+    }
+
+    pub(crate) fn initial_length(&self) -> f64 {
+        self.initial_length
+    }
+
+    pub(crate) fn basic_deformation(&self) -> SVector<f64, 3> {
+        self.basic
+    }
+
+    /// Map work-conjugate basic forces into the global nodal residual.
+    pub(crate) fn global_resistance(&self, basic_force: &SVector<f64, 3>) -> SVector<f64, 6> {
+        self.jacobian.transpose() * basic_force
+    }
+
+    /// Consistent tangent: `Bᵀ k_basic B` plus the geometric Hessian of the
+    /// basic deformation map (axial-force and end-moment contributions).
+    pub(crate) fn global_tangent(
+        &self,
+        basic_tangent: &SMatrix<f64, 3, 3>,
+        basic_force: &SVector<f64, 3>,
+    ) -> SMatrix<f64, 6, 6> {
+        let mut tangent = self.jacobian.transpose() * basic_tangent * self.jacobian;
+        let dx = self.direction[0] * self.deformed_length;
+        let dy = self.direction[1] * self.deformed_length;
+        let l = self.deformed_length;
+        let inv_l2 = 1.0 / (l * l);
+        let inv_l4 = inv_l2 * inv_l2;
+
+        let h_length =
+            (SMatrix::<f64, 2, 2>::identity() - self.direction * self.direction.transpose()) / l;
+        let h_angle = SMatrix::<f64, 2, 2>::new(
+            2.0 * dx * dy * inv_l4,
+            (dy * dy - dx * dx) * inv_l4,
+            (dy * dy - dx * dx) * inv_l4,
+            -2.0 * dx * dy * inv_l4,
+        );
+        let h_relative = basic_force[0] * h_length - (basic_force[1] + basic_force[2]) * h_angle;
+        for i in 0..2 {
+            for j in 0..2 {
+                tangent[(i, j)] += h_relative[(i, j)];
+                tangent[(i, j + 3)] -= h_relative[(i, j)];
+                tangent[(i + 3, j)] -= h_relative[(i, j)];
+                tangent[(i + 3, j + 3)] += h_relative[(i, j)];
+            }
+        }
+        tangent
+    }
+
+    /// Follower uniform transverse load in the current local frame, integrated
+    /// over the undeformed member length like the reference formulation.
+    pub(crate) fn global_uniform_transverse_load(&self, load: f64) -> SVector<f64, 6> {
+        let local = SVector::<f64, 6>::from_row_slice(&[
+            0.0,
+            load * self.initial_length / 2.0,
+            load * self.initial_length.powi(2) / 12.0,
+            0.0,
+            load * self.initial_length / 2.0,
+            -load * self.initial_length.powi(2) / 12.0,
+        ]);
+        self.global_to_local.transpose() * local
+    }
+
+    /// Local nodal modes for the three basic deformations, used to integrate
+    /// displacement-based fiber section response in the objective basic system.
+    pub(crate) fn local_basic_modes() -> SMatrix<f64, 6, 3> {
+        #[rustfmt::skip]
+        let modes = SMatrix::<f64, 6, 3>::from_row_slice(&[
+            0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0,
+        ]);
+        modes
+    }
+}
 
 /// `GeomTransf`'s spatial counterpart: builds a member's local basis and
 /// local↔global rotation from its two end-node coordinates and an
