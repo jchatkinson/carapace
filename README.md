@@ -16,7 +16,8 @@ for why a direct C++-to-wasm port wasn't the path taken.
 - [x] M0–M8: Planar analysis core.
 - [x] M9: Planar co-rotational transform implementation.
 - [ ] M9: Dedicated co-rotational acceptance tests.
-- [ ] M10: pysees handoff and worker execution.
+- [x] M10: CarapaceInputV1 decode and stepped Session (Rust side).
+- [ ] M10: pysees compiler, wasm-bindgen boundary, and worker execution.
 - [ ] M11: Results database hardening.
 - [ ] M12–M13: Algorithm extensions and event-to-event stepping.
 - [x] M14: Load patterns, multi-phase analysis, and ground motion.

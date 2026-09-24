@@ -197,6 +197,20 @@ guarantee a breaking rework the moment spatial or transient handoff lands —
 work spatial-architecture.md's own "pysees and wasm handoff" section already
 flags as outstanding.
 
+**Implementation status:** the Rust-side half of this document — the
+`CarapaceInputV1` header/table types, the hand-written decoder, and the
+stepped `Session`/`advance` API described below — is implemented in
+`wasm-bridge/src/input_v1/` and exercised end to end (including the
+gravity → frozen-gravity → pushover acceptance case, cross-checked against
+`ForceBeamColumn`'s native tests) in
+`wasm-bridge/tests/m10_carapace_input_v1.rs`. These are still plain Rust
+value types, not yet the transferable typed arrays a real `postMessage`
+would carry — the `wasm_bindgen`/`serde-wasm-bindgen` boundary is deferred
+until `pysees`'s compiler exists to actually produce `CarapaceInputV1`
+bytes. `pysees`'s compiler, the worker, and the SQLite-over-OPFS results
+database (everything from "Compiler and transport" through "Results
+database" below, on the `pysees`/worker side) have not been started.
+
 ## Decode and session model in carapace-wasm
 
 Decoding is hand-written per table, not generic deserialization into `core`

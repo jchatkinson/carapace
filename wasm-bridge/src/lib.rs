@@ -1,12 +1,18 @@
 use wasm_bindgen::prelude::*;
 
+/// M10 (implementation-plan.md / docs/pysees-handoff.md): `CarapaceInputV1`
+/// header/table types, its hand-written decoder, and the stepped `Session`
+/// API. Not yet exposed across the `wasm_bindgen` boundary below — see the
+/// module's own doc comment.
+pub mod input_v1;
+
 use carapace_core::analysis::{
-    modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, RayleighDamping,
-    TransientAnalysis,
+    modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+    RayleighDamping, TransientAnalysis,
 };
 use carapace_core::model::{
-    BeamIntegration, Domain, DispBeamColumn, ElasticBeamColumn, Element, ElementLoad, Fiber, GeomTransf, Material,
-    Node, Truss, ZeroLength,
+    BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementLoad, Fiber,
+    GeomTransf, Material, Node, Truss, ZeroLength,
 };
 
 #[wasm_bindgen]
@@ -75,7 +81,9 @@ pub fn zero_length_ent_displacement(load: f64, modulus: f64) -> f64 {
         })
         .build(domain);
 
-    analysis.step().expect("compressive Ent response should solve");
+    analysis
+        .step()
+        .expect("compressive Ent response should solve");
     analysis.domain().node(node_j).displacement[0]
 }
 
@@ -110,7 +118,9 @@ pub fn simply_supported_beam_end_rotation(e: f64, iz: f64, area: f64, length: f6
         })
         .build(domain);
 
-    analysis.step().expect("simply supported beam under UDL should solve");
+    analysis
+        .step()
+        .expect("simply supported beam under UDL should solve");
     analysis.domain().node(node_i).displacement[2]
 }
 
@@ -132,7 +142,12 @@ pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
     domain.load_node(node_j, 0, force);
 
-    domain.add_element(Element::Truss(Truss::new(node_i, node_j, e_area, Material::Elastic { e: e_modulus })));
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        e_area,
+        Material::Elastic { e: e_modulus },
+    )));
     domain.add_element(Element::ZeroLength(
         ZeroLength::new(node_i, node_j).with_material(0, Material::elastic_pp(e_epp, eyp)),
     ));
@@ -147,7 +162,9 @@ pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
         })
         .build(domain);
 
-    analysis.step().expect("should converge across the EPP yield point");
+    analysis
+        .step()
+        .expect("should converge across the EPP yield point");
     analysis.domain().node(node_j).displacement[0]
 }
 
@@ -169,7 +186,8 @@ pub fn mass_spring_chain_frequencies() -> Vec<f64> {
         ZeroLength::new(m1, m2).with_material(0, Material::Elastic { e: 1.0 }),
     ));
 
-    let modes = modal_analysis(&mut domain, 2).expect("2-DOF chain should have a well-posed eigenproblem");
+    let modes =
+        modal_analysis(&mut domain, 2).expect("2-DOF chain should have a well-posed eigenproblem");
     modes.iter().map(|m| m.frequency).collect()
 }
 
@@ -200,7 +218,9 @@ pub fn damped_sdof_free_vibration_displacement(steps: usize, dt: f64) -> f64 {
     let mut analysis = TransientAnalysis::new(domain, RayleighDamping::new(alpha_m, 0.0), dt)
         .expect("SDOF with assigned mass should have a well-posed transient system");
     for _ in 0..steps {
-        analysis.step().expect("linear damped SDOF should solve every step");
+        analysis
+            .step()
+            .expect("linear damped SDOF should solve every step");
     }
     analysis.domain().node(mass_node).displacement[0]
 }
@@ -211,7 +231,13 @@ pub fn damped_sdof_free_vibration_displacement(steps: usize, dt: f64) -> f64 {
 /// closed-form tip deflection exactly, not approximately. See
 /// `core/tests/m7_disp_beam_column.rs` for the native equivalent.
 #[wasm_bindgen]
-pub fn disp_beam_column_cantilever_tip_deflection(e: f64, area: f64, iz: f64, length: f64, tip_load: f64) -> f64 {
+pub fn disp_beam_column_cantilever_tip_deflection(
+    e: f64,
+    area: f64,
+    iz: f64,
+    length: f64,
+    tip_load: f64,
+) -> f64 {
     let h = (iz / area).sqrt();
     let fibers = vec![
         Fiber::new(h, area / 2.0, Material::Elastic { e }),
@@ -233,9 +259,14 @@ pub fn disp_beam_column_cantilever_tip_deflection(e: f64, area: f64, iz: f64, le
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
-    analysis.step().expect("cantilever DispBeamColumn should solve");
+    analysis
+        .step()
+        .expect("cantilever DispBeamColumn should solve");
     analysis.domain().node(node_j).displacement[1]
 }
