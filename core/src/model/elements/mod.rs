@@ -1,9 +1,10 @@
-use std::convert::Infallible;
-
 use nalgebra::{SMatrix, SVector};
 use slotmap::{new_key_type, Key};
 
-use super::{ElementLoad, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM};
+use super::{
+    ElementLoad, ElementLoad3, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
+    SPATIAL_NDF, SPATIAL_NDIM,
+};
 
 /// What `Domain`'s generic assembly/state plumbing needs from an element
 /// catalog — `Element`/`Element3`'s shared shape, not their (genuinely
@@ -18,11 +19,12 @@ use super::{ElementLoad, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_
 /// yet) — the same reason top-level `ELEMENT_DOF`/`SPATIAL_ELEMENT_DOF`
 /// constants exist instead of inline expressions.
 pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId: Copy> {
-    /// An element-load kind this catalog supports (`ElementLoad` for
-    /// `Element`). `Element3` uses `Infallible` — no spatial element
-    /// carries a load yet, so a `HashMap<_, Infallible>` is always empty
-    /// and `add_element_load` is uncallable (no `Infallible` value exists)
-    /// until a real spatial load type replaces it.
+    /// An element-load kind this catalog supports — `ElementLoad` for
+    /// `Element`, `ElementLoad3` for `Element3` (currently just
+    /// `ElasticBeamColumn3`'s biaxial `wy`/`wz`, the spatial counterpart of
+    /// `ElementLoad::UniformTransverse` — `DispBeamColumn3`/
+    /// `ForceBeamColumn3` don't support element loads yet either, matching
+    /// their planar counterparts).
     type Load;
 
     /// This catalog's own `Domain` element-store key (`ElementId`/
@@ -221,6 +223,21 @@ impl Element3 {
         }
     }
 
+    /// This element's equivalent nodal load vector from `load` — the
+    /// spatial counterpart of `Element::form_load_vector`. Zero when
+    /// `load` is `None`, and for elements with no element-load support
+    /// (`Truss3`, `ZeroLength3`, `DispBeamColumn3`, `ForceBeamColumn3` —
+    /// matching their planar counterparts, see `ElementOps::Load`'s doc
+    /// comment).
+    pub fn form_load_vector(&self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+        match (self, load) {
+            (Element3::ElasticBeamColumn3(b), Some(ElementLoad3::UniformTransverse { wy, wz })) => {
+                b.form_load_vector(node_i, node_j, *wy, *wz)
+            }
+            _ => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
+        }
+    }
+
     /// This element's lumped-mass contribution — see `Element::form_mass`.
     pub fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         match self {
@@ -244,8 +261,7 @@ impl Element3 {
 }
 
 impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Element3 {
-    /// No spatial element carries a load yet — see this trait's doc comment.
-    type Load = Infallible;
+    type Load = ElementLoad3;
     type Id = Element3Id;
 
     fn nodes(&self) -> [Node3Id; 2] {
@@ -260,9 +276,8 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Ele
         Element3::form_tangent_and_resistance(self, node_i, node_j)
     }
 
-    /// Always zero: `Option<&Infallible>` can only ever be `None`.
-    fn form_load_vector(&self, _node_i: &Node3, _node_j: &Node3, _load: Option<&Infallible>) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
-        SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros()
+    fn form_load_vector(&self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+        Element3::form_load_vector(self, node_i, node_j, load)
     }
 
     fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {

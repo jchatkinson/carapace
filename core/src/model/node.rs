@@ -25,6 +25,20 @@ pub enum SpatialDof {
     Rz = 5,
 }
 
+/// A global coordinate axis (`0..SPATIAL_NDIM`) — used where a spatial API
+/// needs to name one of `[x, y, z]` itself rather than a DOF (e.g.
+/// `Domain3::rigid_diaphragm_about`'s diaphragm-normal parameter), where a
+/// bare `usize` would silently also accept a rotational `SpatialDof` index.
+/// `as usize` gives the matching translational `SpatialDof`/coordinate
+/// index directly (`Axis3::Y as usize == SpatialDof::Uy as usize == 1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum Axis3 {
+    X = 0,
+    Y = 1,
+    Z = 2,
+}
+
 new_key_type! {
     /// Generational index into the planar `Domain` node store. Stays valid
     /// across removals of other nodes; using a stale key against a different

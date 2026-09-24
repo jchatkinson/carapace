@@ -25,6 +25,17 @@ analysis worker ──► carapace-wasm ──► carapace-core
 This is deliberately not a live, per-entity RPC API and not an interpreter
 for arbitrary OpenSees commands.
 
+Since this document was first drafted, `core` moved well past the slice this
+handoff originally scoped against: spatial statics, dynamics, ground motion,
+and true rigid-diaphragm constraints are all done (M15-M20; see
+[`spatial-architecture.md`](spatial-architecture.md)), not just the planar
+static path. `CarapaceInputV1` and the worker protocol below are designed to
+be profile- and stage-generic from the start — the `space` and stage-kind
+discriminants exist in the wire format even though the first decoder only
+implements the planar-static arm — so extending to spatial/modal/transient
+handoff later means adding table/stage variants, not a breaking format
+rewrite. See "Staged decode support, not a staged wire format" below.
+
 Runs are **snapshots, not reactive bindings**. Pressing Run captures the
 current model and sequence, assigns a `run_id`, and executes that snapshot.
 Edits made while it runs do not modify or cancel it. A later explicit run
@@ -112,7 +123,146 @@ The transport contains small structured-clone metadata and newly allocated,
 transferable numeric buffers: node tags/coordinates/fixities/masses, flattened
 fiber tables with offsets, typed element/load/pattern tables, and the compiled
 sequence. Never transfer a buffer owned by the editor store: transferring an
-`ArrayBuffer` detaches it from its sender.
+`ArrayBuffer` detaches it from its sender. The exact table layout is defined
+below.
+
+## CarapaceInputV1 wire format
+
+Structured as a small header plus one flat table per (profile, element kind,
+entity kind), mirroring `core`'s closed-enum catalog instead of a generic
+tagged-record array. This keeps `carapace-wasm`'s decoder a fixed set of
+per-table loops, each calling the same constructors native code calls
+(`Element::Truss(Truss::new(..))`), rather than growing a runtime
+broker/dispatch layer that `core` deliberately doesn't have
+(implementation-plan.md §2.1) — the wire format should be exactly as closed
+and enumerable as the Rust catalog it feeds.
+
+**Header** (structured-clone, not typed arrays — these are all O(1) counts):
+
+- `schemaVersion` — the wire format's own version, independent of
+  `engineVersion` below. Bump it only when a table's shape changes, not when
+  a new table is added (a new table is additive and absent from older
+  producers' headers).
+- `space: 2 | 3` — the execution profile discriminant from
+  spatial-architecture.md's "Decision: two execution profiles, selected
+  once." Selects planar vs. spatial *once*, at decode time, not per entity.
+- `engineVersion` — `carapace-core`'s version, recorded for run provenance
+  alongside the model/sequence hashes (see "Results database").
+- `tables` — a directory of which per-kind tables are present. A table for a
+  variant the current decoder doesn't yet support is simply absent, not
+  present-but-ignored; see "Staged decode support" below.
+
+**Bulk tables** (transferable typed arrays; never a buffer the editor store
+still owns — transferring an `ArrayBuffer` detaches it from its sender):
+
+- **Node table**: `coords: Float64Array` (stride `NDIM`), `fixed: Uint8Array`
+  (bitmask, `NDOF` bits per node), optional `mass: Float64Array` (stride
+  `NDOF`, addressed via a parallel node-index array rather than a dense
+  zero-filled table, since most nodes carry no mass).
+- **Per-(profile, element-kind) tables**: one table per concrete Rust type
+  (`Truss`/`Truss3`, `ElasticBeamColumn`/`ElasticBeamColumn3`,
+  `DispBeamColumn`/`DispBeamColumn3`, `ForceBeamColumn`/`ForceBeamColumn3`,
+  `ZeroLength`/`ZeroLength3`), each a flat struct-of-arrays: node-id pairs,
+  section/material-arena indices, and `geomTransf`/`vec_xz` params. There is
+  no generic "element record" — the table shapes are the enum variants.
+- **Fiber tables**: flattened per fiber section, offset-indexed, per this
+  document's existing fiber-flattening rule (rectangular/circular patches
+  expanded to area-weighted literal fibers before handoff; planar sections
+  carry one signed `yloc`, spatial sections carry `y`/`z`).
+- **Materials/sections arena**: a small indexed arena, not flattened
+  SoA — materials recurse (`Parallel`/`Series`/`MinMax`) and some leaves are
+  boxed in `core` (see `core/src/model/materials/mod.rs`'s porting recipe),
+  so element and fiber tables reference a material by arena index, and a
+  composite entry references other arena indices in turn. This mirrors
+  `core`'s own arena-of-indices philosophy (implementation-plan.md §2.2)
+  instead of duplicating material definitions per fiber.
+- **Load patterns / time series**: small counts as structured-clone tagged
+  unions (`Constant`/`Linear`/`Path`), except a `Path` series's sample array,
+  which is numeric-heavy and transferable.
+- **Compiled `AnalysisSequence`**: structured-clone; stage count is always
+  small enough that this never needs a typed-array table.
+
+### Staged decode support, not a staged wire format
+
+`space` and per-stage-kind fields exist in the header from the start
+(`static`/`modal`/`transient`; `2`/`3`), even though M10's first decoder only
+implements the `static` + planar arms. Rejecting spatial input or a transient
+stage returns a structured `unsupported_space`/`unsupported_stage` diagnostic
+from *decode*, not a schema-version bump later. This is the one deliberate
+departure from the original M10 scoping in implementation-plan.md, which
+scoped `CarapaceInputV1` itself to the static-planar slice: given `core`
+already has full spatial statics/dynamics/diaphragms (M15-M20) and
+transient/modal for both profiles, a wire format narrower than that would
+guarantee a breaking rework the moment spatial or transient handoff lands —
+work spatial-architecture.md's own "pysees and wasm handoff" section already
+flags as outstanding.
+
+## Decode and session model in carapace-wasm
+
+Decoding is hand-written per table, not generic deserialization into `core`
+types: small structured-clone fields decode via `serde-wasm-bindgen` into
+DTOs that live in `carapace-wasm` only, then an explicit translation step
+calls the same `Domain`/`Element`/`Material` constructors native code calls.
+`core` gains no serde derives, no reflection, and no knowledge that wasm
+exists — this is the existing responsibility split below, just made
+concrete: "`carapace-core`: numerical model and analysis, no JS, worker, or
+database concepts."
+
+Decode returns `Result<Session, DecodeError>` and must not panic on
+malformed input, even though `pysees`'s compiler is a full validation
+boundary and is expected to catch entity-level problems first. Decode is
+defense in depth against what the compiler can't see — engine/schema version
+skew, a stale compiled snapshot run against a newer or older wasm build — and
+a wasm panic tears down the whole worker with no unwind, which the
+cooperative-cancellation design below can't recover from. `DecodeError`
+follows `AnalysisError`'s style (implementation-plan.md §2.8): tagged
+variants carrying context (`UnknownMaterialIndex { table, row }`,
+`UnsupportedSpace { got }`, ...), not sentinel codes.
+
+`Session` is chosen once, at decode time, from the header's `space`
+discriminant, and never branches on it again:
+
+```rust
+enum Session {
+    Planar(ProfileSession<Domain, Analysis, TransientAnalysis>),
+    Spatial(ProfileSession<Domain3, Analysis3, TransientAnalysis3>),
+}
+
+enum StageRunner {
+    Static(Analysis),          // or Analysis3, inside the Spatial arm
+    Modal,                     // one-shot solve; no stepping
+    Transient(TransientAnalysis), // or TransientAnalysis3
+}
+```
+
+This is the wasm-boundary expression of spatial-architecture.md's "two
+execution profiles, selected once": one opaque handle exposed to JS, one
+`match` on `space` inside decode, nothing downstream ever branches on
+profile again.
+
+Stepping is driven by the worker, not run to completion inside one wasm
+call:
+
+```ts
+session.advance(stepBudget: number): StepOutcome
+// { done, stageComplete, stepsTaken, progressSnapshot, recorderBatch? }
+```
+
+The worker loop calls `advance(N)` repeatedly, posts the throttled
+`progress` message from `progressSnapshot`, appends `recorderBatch` (already
+shaped as the `response_blocks` blob layout — see "Results database") to
+OPFS, and checks for a pending `cancel` between calls. This is the concrete
+mechanism behind "static execution advances a bounded number of steps per
+worker turn, then yields" — a step budget passed into wasm, not a separate
+polling or interrupt channel. Stage transitions reuse `core`'s existing
+multi-phase composition: `Analysis::into_domain`/`TransientAnalysis::
+into_domain` hand a finished stage's `Domain` to the next stage's builder,
+and `Analysis::set_integrator` swaps the integrator in place for a
+same-phase leg change (a cyclic protocol's reversals) — exactly what
+`core`'s own M14 multi-phase tests already exercise natively. A stage's
+`AnalysisError` stops the sequence: the run is marked `failed` with the
+error's structured detail in `error_json`, and later stages are not
+attempted.
 
 ## Worker protocol and ownership
 
@@ -127,8 +277,13 @@ The main-thread API is coarse and run-oriented:
 The worker returns `accepted`, throttled `progress`, `complete`, `cancelled`,
 and structured `error` messages. Every response carries its run/request ID;
 the UI ignores responses for a run it is no longer displaying. Cancellation is
-explicit and cooperative: static execution advances a bounded number of steps
-per worker turn, then yields so a cancel message can be handled.
+explicit and cooperative, implemented directly by the `session.advance(
+stepBudget)` loop described above: each call only ever executes up to
+`stepBudget` steps before returning control to the worker's event loop, where
+a pending `cancel` message is checked before the next call. This applies to
+every stage kind that steps (`static`, `transient`) uniformly; a `modal`
+stage's single `advance` call is checked for cancellation only at its start,
+since the eigensolve itself doesn't have a natural yield point.
 
 Responsibilities are intentionally narrow:
 
@@ -165,6 +320,15 @@ the static pushover. The schema is intentionally general enough for later
 node velocity/acceleration, reactions, element response, modal, and transient
 channels. M11 hardens this layer with migrations, indexing/paging, retention,
 export, recovery, and large-run tests.
+
+`values_blob`'s row layout (`[pseudo_time, component_0..N]` per sample) is
+decided first, and `carapace-wasm`'s `recorderBatch` (see "Decode and session
+model" above) is produced in exactly that shape. The worker's write is then a
+raw append of the batch's bytes into the blob — no JS-side reshaping loop
+between wasm's output and SQLite's input, the same "internal and external
+representations should be the same shape from the start" principle
+implementation-plan.md §2.7 already applies to in-process result storage,
+extended across the wasm boundary.
 
 ## Required first acceptance case
 

@@ -115,6 +115,21 @@ pub enum ElementLoad {
     UniformTransverse(f64),
 }
 
+/// `ElementLoad`'s spatial counterpart — `ElasticBeamColumn3`'s uniform
+/// transverse load, biaxial (local `y` and `z` both carry bending in a
+/// spatial member, unlike planar's single transverse direction).
+/// Xara/OpenSees's `Beam3dUniformLoad`'s `wy`/`wz` components; its axial
+/// `wx` component isn't included yet — add when a model actually needs it,
+/// same "not built until needed" reasoning as everywhere else in this
+/// catalog. `ElementOps::Load` for the spatial profile — see that trait's
+/// doc comment for why it used to be the uninhabited `Infallible`.
+#[derive(Debug, Clone, Copy)]
+pub enum ElementLoad3 {
+    /// Uniform transverse load (force/length) in the element's local `+y`
+    /// and `+z` directions.
+    UniformTransverse { wy: f64, wz: f64 },
+}
+
 /// A named collection of reference loads (nodal and element), scaled by a
 /// `LoadSeries` function of pseudo-time — Xara/OpenSees's `LoadPattern`.
 /// `Domain` owns any number of these; multiple patterns coexist and sum

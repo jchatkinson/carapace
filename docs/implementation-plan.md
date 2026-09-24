@@ -436,17 +436,31 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
 - **M10 — pysees handoff and worker execution.** Not started. `pysees` hands
   off an immutable, validated `Model + AnalysisSequence` snapshot on an
   explicit Run action — not a live model binding and not a replay of arbitrary
-  OpenSees commands. Compile it once to a versioned `CarapaceInputV1` with
-  small metadata plus transferable typed-array tables; `carapace-wasm` decodes
-  it once and owns a batched in-progress session in an analysis Web Worker.
-  The first vertical slice is a 2D fiber-column gravity → frozen-gravity →
-  displacement-controlled pushover, with selected node response history
-  written directly to the worker-owned SQLite-over-OPFS run database. Progress
-  messages are small and throttled; complete histories are queried through the
-  worker, never held in Zustand or posted every step. Each run persists its
+  OpenSees commands. Compile it once to a versioned `CarapaceInputV1`: a small
+  structured-clone header plus one flat transferable table per (profile,
+  element-kind) pair, mirroring `core`'s closed-enum catalog rather than a
+  generic tagged-record array (§2.1). `carapace-wasm` decodes it once,
+  panic-free (`Result<Session, DecodeError>`, §2.8, since the compiler's own
+  validation can't see engine/schema version skew), into a `Session` chosen
+  once from the `space` discriminant, and steps it via a worker-driven
+  `advance(stepBudget)` call — the mechanism behind cooperative cancellation.
+  Both `space` (2/3) and stage kind (`static`/`modal`/`transient`) are real
+  discriminants in the wire format from the start, even though the first
+  decoder only implements the static-planar arm: `core` already has full
+  spatial statics/dynamics/diaphragms (M15-M20) and transient/modal for both
+  profiles, so scoping the format itself to the first vertical slice would
+  guarantee a breaking rework once those land. The first vertical slice is a
+  2D fiber-column gravity → frozen-gravity → displacement-controlled pushover,
+  with selected node response history written directly to the worker-owned
+  SQLite-over-OPFS run database in the same row layout `carapace-wasm`
+  produces it in (§2.7, extended across the wasm boundary — no JS-side
+  reshaping between wasm output and the SQLite blob). Progress messages are
+  small and throttled; complete histories are queried through the worker,
+  never held in Zustand or posted every step. Each run persists its
   input/engine provenance so later editor changes do not invalidate its
   snapshot. See [`pysees-handoff.md`](pysees-handoff.md) for the exact
-  contract, compiler requirements, worker protocol, and first acceptance case.
+  contract, wire format, session/decode model, worker protocol, and first
+  acceptance case.
 
 - **M11 — Results database hardening.** Not started. Build on M10's initial
   SQLite-over-OPFS recorder/write path: schema migrations, efficient
@@ -599,6 +613,55 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   started. Revisit after M15–M17; spatial and planar corotational transforms
   need different rotation handling and independent objectivity tests. See
   [`spatial-architecture.md`](spatial-architecture.md).
+
+- **M19 — Spatial dynamics: modal/transient analysis (3D).** Done.
+  `modal_analysis` and `TransientAnalysis`
+  (`core/src/analysis/modal.rs`, `core/src/analysis/transient.rs`)
+  generalized to the same `<NDIM, NDOF, ELEMENT_DOF, NId, E>` profile as
+  `Domain`/`Analysis`, with `TransientAnalysis3` as the spatial type alias
+  (`modal_analysis` infers its profile from the `domain` argument, needing
+  no separate spatial entry point). No dynamics formula changed — Lanczos,
+  Newmark-beta, the initial-acceleration solve, and `GroundMotion`'s
+  effective inertial force already went through `Domain`'s generic free-DOF
+  interface. Verified through the full `Domain3`/`Analysis3` stack
+  (`core/tests/m19_spatial_dynamics.rs`): a spatial `Truss3` SDOF natural
+  frequency, undamped/Rayleigh-damped spatial `ZeroLength3` SDOF free
+  vibration on two different translational DOFs, and two simultaneous,
+  independent `GroundMotion`s (`ux`/`uz`) driving an uncoupled spatial mass
+  with no cross-talk — the 3D ground-motion case. See
+  [`spatial-architecture.md`](spatial-architecture.md).
+
+- **M20 — Spatial beam loads and true rigid-diaphragm constraints.** Done.
+  `ElementLoad3::UniformTransverse { wy, wz }`
+  (`core/src/model/load_pattern.rs`) is `ElasticBeamColumn3`'s biaxial
+  local transverse load, `ElementOps::Load` for the spatial profile in
+  place of the uninhabited `Infallible` (scope matches the planar profile
+  exactly — only `ElasticBeamColumn3`, not `DispBeamColumn3`/
+  `ForceBeamColumn3`, same as their planar counterparts). Verified against
+  Xara/OpenSees's `ElasticBeam3d::addLoad` fixed-end-force derivation and
+  through the full `Domain3`/`Analysis3` stack
+  (`core/tests/m20_spatial_beam_loads.rs`).
+  `Domain3::rigid_diaphragm`/`rigid_diaphragm_about` replace identity
+  aliasing with a genuine `AffineConstraint` transformation
+  (`core/src/model/domain.rs`): each constrained node's two in-plane
+  translations (the axes other than an explicit `normal: Axis3`, default
+  `Y`) tie to the retained node's same-axis translations plus a lever-arm
+  term from its rotation about `normal` — every rotational dof and the
+  out-of-plane translation stay completely free, narrower in scope than
+  Xara/OpenSees's `rigidDiaphragm` by design. Resolved once at
+  `Domain::number_dofs` time into a `dof_transform` map that every
+  assembly hot loop (stiffness, mass, load) and state-scatter path reads
+  through one shared `dof_terms` helper, rather than three separate code
+  paths for free/identity-tied/affine-tied dofs. `assemble_mass_diagonal`
+  panics rather than silently dropping physics if nonzero mass ever lands
+  on an affine-tied dof (the lumped-mass diagonal can't represent the
+  resulting rotational inertia at the retained node). Verified through the
+  full `Domain3`/`Analysis3` stack (`core/tests/m20_rigid_diaphragm3.rs`):
+  the classic asymmetric-diaphragm torsion problem against an
+  independently-derived closed-form stiffness matrix, rigid-rotation
+  invariance of every untied dof, and an explicit non-default `normal`
+  cross-checked against Xara/OpenSees's own documented `RigidDiaphragm`
+  equations. See [`spatial-architecture.md`](spatial-architecture.md).
 
 ---
 

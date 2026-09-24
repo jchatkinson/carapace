@@ -22,4 +22,4 @@ pub use ground_motion::GroundMotion;
 pub use integrator::Integrator;
 pub use modal::{modal_analysis, Mode};
 pub use solver::SparseSolver;
-pub use transient::{TransientAnalysis, TransientStepResult};
+pub use transient::{TransientAnalysis, TransientAnalysis3, TransientStepResult};

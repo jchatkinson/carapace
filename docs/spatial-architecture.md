@@ -37,9 +37,15 @@ themselves — and every concrete formulation inside them (`Truss` vs
 implementing that trait; their actual formulas differ (different direction-
 cosine counts, biaxial bending, torsion) in ways no amount of genericity
 unifies, so this is real, irreducible duplication, not an oversight.
-`TransientAnalysis`/`modal_analysis` have **not** been generalized this way
-yet — they still only accept the planar `Domain` (see the M15 status in
-`implementation-plan.md`).
+`TransientAnalysis`/`modal_analysis` are now generalized the same way (see
+the M19 status below): `pub fn modal_analysis<const NDIM: usize, const NDOF:
+usize, const ELEMENT_DOF: usize, NId, E>(domain: &mut Domain<NDIM, NDOF,
+ELEMENT_DOF, NId, E>, ...)` and `TransientAnalysis<NDIM, NDOF, ELEMENT_DOF,
+NId, E>` (with `TransientAnalysis3` the spatial type alias), inferred from
+`domain`'s concrete type at each call site exactly like
+`AnalysisBuilder::build`. Neither needed a single DOF-count-specific line:
+Lanczos, Newmark, and ground-motion excitation only ever touch `Domain`
+through its already-generic free-DOF interface.
 
 This preserves fixed-size hot-loop matrices:
 
@@ -90,20 +96,46 @@ remain unchanged.
   profile-sized fixed arrays (`Node<NDIM, NDOF>`).
 - **Done** for static assembly/scatter/gather (`Domain::assemble_*`,
   `apply_displacement_increment`, `gather_*`, `scatter_state` are one
-  generic implementation, profile-aware via `NDOF`/`ELEMENT_DOF`). **Not
-  done** for ground-motion incidence/recorder layout — `TransientAnalysis`
-  and `modal_analysis` haven't been generalized yet (see below).
+  generic implementation, profile-aware via `NDOF`/`ELEMENT_DOF`). **Done**
+  for ground-motion incidence too — `direction_incidence` was already
+  generic; `GroundMotion::direction` in `0..NDOF` selects `ux`/`uy`/`uz` (and
+  is simply out of the planar 0..3 range) with no change needed. **Not
+  done**: recorder/result-layout code outside `core` (worker/pysees
+  handoff — see "pysees and wasm handoff" below) still assumes a
+  three-value-per-node planar layout.
 - **Done.** Spatial nodal loads have six components
   (`Domain::add_nodal_load`/`load_node` take a `dof` index up to `NDOF`,
   generic over profile).
-- **Not done.** Element loads are still the planar `ElementLoad` enum
-  (`UniformTransverse`); the spatial profile's `ElementOps::Load` is
-  `Infallible` (uninhabited — no spatial element load exists yet, so
-  `add_element_load` is uncallable there until a real one lands, e.g. a
-  beam's local `wy`/`wz`).
-- **Not done.** `TransientAnalysis`/`modal_analysis` still only accept the
-  planar `Domain`; three-translation-plus-rotational-inertia state handling
-  for the spatial profile hasn't been built.
+- **Done (M20).** `ElementLoad3` (`core/src/model/load_pattern.rs`) —
+  `ElasticBeamColumn3`'s biaxial local `wy`/`wz` uniform transverse load,
+  the spatial counterpart of planar `ElementLoad::UniformTransverse`, is
+  now `ElementOps::Load` for the spatial profile (no longer the
+  uninhabited `Infallible`). Scope matches the planar profile exactly:
+  only `ElasticBeamColumn3` supports it (`DispBeamColumn3`/
+  `ForceBeamColumn3` don't, same as their planar counterparts). Verified
+  against Xara/OpenSees's `ElasticBeam3d::addLoad`'s `Beam3dUniformLoad`
+  fixed-end-force derivation and through the full `Domain3`/`Analysis3`
+  stack (`core/tests/m20_spatial_beam_loads.rs`): a simply-supported
+  spatial beam under simultaneous biaxial UDL matches the same closed-form
+  end rotation `theta = w*L^3/(24*E*I)` independently in both bending
+  planes.
+- **Done (M19).** `TransientAnalysis<NDIM, NDOF, ELEMENT_DOF, NId, E>` and
+  `modal_analysis<const NDIM, const NDOF, const ELEMENT_DOF, NId, E>` are
+  generic over the same kinematic profile as `Domain`/`Analysis`
+  (`TransientAnalysis3` is the spatial type alias, mirroring `Analysis3`).
+  Newmark stepping, the Lanczos eigensolver, initial-acceleration
+  equilibrium, and ground-motion excitation only ever went through
+  `Domain`'s already-generic free-DOF interface (mass diagonal,
+  gather/scatter, tangent assembly, `direction_incidence`), so no
+  DOF-count-specific logic needed writing — this was a mechanical
+  generalization, not new dynamics code. Verified through the full
+  `Domain3`/`Analysis3` stack: a spatial SDOF truss's natural frequency
+  (`core/tests/m19_spatial_dynamics.rs`'s
+  `spatial_truss_mass_matches_sdof_closed_form_frequency_via_modal_
+  analysis3`), undamped and Rayleigh-damped spatial SDOF free vibration on
+  two different translational DOFs, and two simultaneous, independent
+  `GroundMotion`s (`ux` and `uz`) driving an uncoupled spatial mass with no
+  cross-talk between directions — the spatial "3D ground motion" case.
 
 ### Elements and transforms
 
@@ -187,23 +219,61 @@ added to it.
 
 ### Constraints
 
-**Partially done.** `Domain::equal_dof` (identity ties on selected DOFs) is
-already generic and works unchanged for `Domain3` — the reasoning below
-about *why* a real spatial rigid diaphragm can't reuse this still holds, so
-`rigid_diaphragm` itself stays planar-only (a separate, non-generic `impl
-Domain` block; see `Domain`'s doc comment in `core/src/model/domain.rs`).
-The transformation matrix described below is **not started**.
+**Done (M20).** `Domain::equal_dof` (identity ties on selected DOFs) stays
+exactly as before — still generic, still resolved by plain equation
+aliasing (the "fast path" the plan below calls for keeping). Planar
+`Domain::rigid_diaphragm` is unchanged too (its own non-generic `impl
+Domain` block, still an identity alias on `x` only).
 
-`equal_dof` generalizes to selected DOFs. The current transformation handler
-is equation aliasing and is correct only for identity ties. It cannot implement
-a true spatial rigid diaphragm: slave translation includes retained-node
-rotation through the lever arm.
+A genuine affine multi-point constraint now exists alongside it:
+`AffineConstraint<NId>` (`core/src/model/domain.rs`) expresses `u_c[dof] =
+sum(coeff * u_r[retained_dof])` — a linear combination of *several*
+retained dofs with real coefficients, not just an identity alias. Resolved
+at `Domain::number_dofs` time into `dof_transform: HashMap<(NId, usize),
+Vec<(usize, f64)>>` (retained-dof references become actual free-DOF
+equation numbers there; a retained dof that's fixed contributes nothing
+and is dropped, one that's itself another diaphragm's slave is rejected
+with a panic — chained diaphragms aren't supported). Every assembly hot
+loop (`assemble_stiffness_triplets`, `assemble_mass_diagonal`,
+`assemble_load_with`) and state-scatter path (`apply_displacement_
+increment`, `scatter_state`) reads a shared `dof_terms` helper instead of
+`node.equation[dof]` directly, so ordinary free dofs, identity-tied dofs,
+and affine-tied dofs are all handled by one code path — not three.
+`assemble_mass_diagonal` is the one deliberate exception: it panics if
+nonzero nodal/element mass ever lands on an affine-tied dof with more than
+one term, since the lumped-mass *diagonal* it returns can't represent the
+resulting rotational inertia at the retained node (a real limitation,
+documented and tested, not silently wrong physics — see
+`core/tests/m20_rigid_diaphragm3.rs`'s panic test).
 
-Before exposing spatial `rigidDiaphragm`, implement a sparse constraint
-transformation `u_full = C * u_reduced` (or equivalent verified reduction).
-Retain the identity-tie fast path for planar `equal_dof`. The spatial API names
-the retained node and diaphragm normal, rejecting unsupported affine/mixed
-constraints instead of silently aliasing them.
+`Domain3::rigid_diaphragm`/`rigid_diaphragm_about` (its own non-generic
+`impl Domain3` block, spatial-only — the kinematics need real 3D
+coordinates and a rotation-about-normal dof neither the trait bound nor
+the planar profile has) build one `AffineConstraint` per constrained node:
+its two in-plane translations (the two axes other than `normal`, an
+`Axis3`, default `Axis3::Y` — this crate's "up" axis) each tie to the
+retained node's same-axis translation plus a lever-arm term from the
+retained node's rotation about `normal`. Per this milestone's explicit
+scope (**narrower than Xara/OpenSees's `rigidDiaphragm`**): only those two
+translations are ever tied — every rotational dof of the constrained node
+(including rotation about `normal` itself) and its out-of-plane
+translation stay completely free, never constrained by this call. A floor
+diaphragm is rigid in its own plane; this doesn't impose a shared rotation
+on whatever's attached to it or claim any out-of-plane stiffness.
+
+Verified through the full `Domain3`/`Analysis3` stack
+(`core/tests/m20_rigid_diaphragm3.rs`): the classic asymmetric-diaphragm
+torsion problem (two offset lateral springs reproduce the standard
+`[[sum(k), sum(k*z)], [sum(k*z), sum(k*z^2)]]` rigid-diaphragm torsional
+stiffness matrix, derived independently in the test, not copied from the
+implementation) with both the closed-form translation/rotation solution
+and each wall's raw kinematic displacement checked; rigid-rotation
+invariance (a constrained node's vertical translation and every rotational
+dof survive a large master-node rotation completely untouched, while its
+two in-plane translations respond exactly per the lever-arm formula); and
+an explicit non-default `normal` (`Axis3::Z`) cross-checked against
+Xara/OpenSees's own documented `RigidDiaphragm` constraint equations for
+their default z-normal case.
 
 ## pysees and wasm handoff
 
@@ -230,10 +300,8 @@ the `Domain3` assembly level (`core/src/model/domain.rs`'s
 `domain3_tests`), element-level `Truss3`/`ZeroLength3` tests, and unchanged
 results for every existing planar test.
 
-Not done: spatial modal/transient plumbing (`TransientAnalysis`/
-`modal_analysis` still only accept the planar `Domain`), and a
-ground-motion acceptance case (no spatial transient support to verify it
-against yet).
+Spatial modal/transient plumbing and a ground-motion acceptance case are now
+covered by M19 below, not part of this milestone's original scope.
 
 ### M16 — Spatial elastic frame and constraints
 
@@ -249,14 +317,12 @@ axis-aligned member (isolating the local-stiffness formula) and a skew one
 (isolating the transform), plus P-Delta's zero-axial-force/compressive-
 softening checks in both bending planes.
 
-Not done: local `wy`/`wz` element loads and the true spatial diaphragm
-transformation (`Domain::equal_dof` on `Domain3` only does the identity
-ties it already could; see "Constraints" above). Not yet verified: rigid
-rotation invariance, diaphragm lever-arm kinematics, or diagnostics for
-invalid orientation hints (`vec_xz` parallel to the member axis, or a
-zero-length member, currently just panics via a plain `assert!` in
-`GeomTransf3::local_axes` — not the structured `AnalysisError`-style
-diagnostic a real API would want).
+Local `wy`/`wz` element loads and the true spatial diaphragm transformation
+are now done — see M20 below and the "Constraints" section above. Still
+not done: structured diagnostics for invalid orientation hints (`vec_xz`
+parallel to the member axis, or a zero-length member, currently just
+panics via a plain `assert!` in `GeomTransf3::local_axes` — not the
+structured `AnalysisError`-style diagnostic a real API would want).
 
 ### M17 — Spatial fiber and nonlinear frames
 
@@ -282,6 +348,66 @@ used so far have zero product-of-inertia coupling by construction.
 
 Revisit only after M15–M17. Planar and spatial corotational transforms need
 different rotation parameterizations and independent objectivity tests.
+
+### M19 — Spatial dynamics (modal/transient, 3D)
+
+**Done.** `modal_analysis` and `TransientAnalysis` (`core/src/analysis/
+modal.rs`, `core/src/analysis/transient.rs`) generalized to the same
+`<const NDIM, const NDOF, const ELEMENT_DOF, NId, E>` profile as `Domain`/
+`Analysis` — `TransientAnalysis3` is the new spatial type alias;
+`modal_analysis` is a free function whose profile is inferred from its
+`domain` argument, so no separate `modal_analysis3` is needed. This closed
+out the one piece M15's "Required core changes" table had flagged as not
+done for ground-motion/dynamic state handling. No dynamics formula needed
+to change: the Lanczos shift-invert eigensolver, Newmark-beta stepping, the
+initial-acceleration equilibrium solve, and `GroundMotion`'s effective
+inertial force all already went through `Domain`'s generic free-DOF
+interface (mass diagonal, gather/scatter, tangent assembly,
+`direction_incidence`) rather than anything hardcoded to three planar DOFs.
+
+Verified through the full `Domain3`/`Analysis3` stack
+(`core/tests/m19_spatial_dynamics.rs`): a spatial `Truss3`'s lumped-mass
+natural frequency against the closed-form SDOF `omega = sqrt(k/m)` via
+`modal_analysis`; undamped and Rayleigh-damped `ZeroLength3` SDOF free
+vibration against Chopra's closed forms via `TransientAnalysis3`, each
+isolating a different one of the three spatial translational DOFs; and two
+simultaneous, independent `GroundMotion`s (`ux` and `uz`) driving an
+uncoupled two-direction spatial mass, each direction matching the same
+single-direction step-response closed form `m_ground_motion.rs` already
+verifies for the planar case, with no cross-talk between directions — this
+is the spatial "3D ground motion" acceptance case referenced above.
+
+Not covered by this milestone (tracked separately, see M20 below and the
+top-level summary): spatial beam-load assembly, the true rigid-diaphragm
+constraint transformation, and the pysees/WASM handoff for spatial
+models/results.
+
+### M20 — Spatial beam loads and true rigid-diaphragm constraints
+
+**Done.** Both pieces M19 explicitly left for later:
+
+- `ElementLoad3::UniformTransverse { wy, wz }` (`core/src/model/
+  load_pattern.rs`) — `ElasticBeamColumn3`'s biaxial local transverse load,
+  `ElementOps::Load` for the spatial profile in place of `Infallible`. See
+  "Required core changes" above for the acceptance detail.
+- `Domain3::rigid_diaphragm`/`rigid_diaphragm_about`, backed by a genuine
+  `AffineConstraint` transformation (not identity aliasing) generalized
+  through every assembly hot loop via a shared `dof_terms` helper. See
+  "Constraints" above for the full design and acceptance detail.
+
+Both are verified through the full `Domain3`/`Analysis3` stack
+(`core/tests/m20_spatial_beam_loads.rs`, `core/tests/
+m20_rigid_diaphragm3.rs`), independently of each other.
+
+Not covered by this milestone: axial (`wx`) spatial beam loads,
+`DispBeamColumn3`/`ForceBeamColumn3` element-load support (neither exists
+for their planar counterparts either — no scope creep beyond parity),
+chained rigid diaphragms (a diaphragm's retained node can't itself be
+another diaphragm's slave — rejected with a panic, not silently wrong),
+and dynamic (nodal-mass) analysis of a diaphragm-tied translation (the
+lumped mass *diagonal* can't represent the rotational inertia a real
+tributary mass there would induce at the retained node — also rejected
+with a panic; see "Constraints" above).
 
 No M15+ implementation belongs inside M10. M10 must cleanly reject spatial
 input, but its public handoff contract must preserve the profile discriminant.

@@ -13,47 +13,21 @@ for why a direct C++-to-wasm port wasn't the path taken.
 
 ## Status
 
-Milestones M0–M8 are done: `Domain`/`Node`, the full planar element catalog
-through `ForceBeamColumn` (`Truss`, `ZeroLength`, `ElasticBeamColumn`,
-`DispBeamColumn`, `ForceBeamColumn`), the full standard uniaxial material
-catalog (`Elastic`,
-`ElasticPP`, `Gap`, `Ent`, `Steel01`/`02`, `Concrete01`/`02`, `Hysteretic`,
-`Pinching4`, plus the `Parallel`/`Series`/`MinMax` composites), a
-typestate-composed `Analysis` (`LoadControl`/`DisplacementControl` ×
-`Linear`/`NewtonRaphson`), modal analysis (shift-invert Lanczos), and
-`TransientAnalysis` (Newmark-beta time-history with Rayleigh damping) are
-all in place and verified on both native and `wasm32` + Node targets, backed
-by a real sparse solver (`faer`'s sparse LU).
+- [x] M0–M8: Planar analysis core.
+- [x] M9: Planar co-rotational transform implementation.
+- [ ] M9: Dedicated co-rotational acceptance tests.
+- [ ] M10: pysees handoff and worker execution.
+- [ ] M11: Results database hardening.
+- [ ] M12–M13: Algorithm extensions and event-to-event stepping.
+- [x] M14: Load patterns, multi-phase analysis, and ground motion.
+- [x] M15: Spatial modal and transient analysis.
+- [x] M16: Spatial beam loads and diaphragm constraints.
+- [ ] M17: Asymmetric biaxial section coverage.
+- [ ] M18 (optional): Spatial co-rotational geometry.
 
-The planar co-rotational transform (M9) is implemented for all three planar
-beam formulations; dedicated acceptance tests remain. The next integration
-work is the JS/TS worker handoff (M10) and results persistence hardening
-(M11). Spatial modal/transient analysis and diaphragm constraints remain
-open; spatial corotation is a separate optional milestone (M18).
-
-3D (spatial) support is in progress as a separate execution profile: `Domain`,
-`Analysis`, `AnalysisBuilder`, `Integrator`, and `LoadPattern` are each one
-generic implementation covering both a planar and a spatial (six-DOF-per-
-node) profile, with `Domain3`/`Analysis3` as the spatial instantiation.
-`Truss3`, `ZeroLength3`, `ElasticBeamColumn3` (linear-elastic 3D
-Euler-Bernoulli, axial/torsion/biaxial bending, `Linear3` or `PDelta3`
-geometry via the reusable `GeomTransf3` transform), and the nonlinear
-fiber-section pair `DispBeamColumn3`/`ForceBeamColumn3` (biaxial bending via
-a new `FiberSection3`, decoupled elastic `G*J` torsion) are implemented and
-verified end to end (`Domain3` → `Analysis3::step`) against closed-form
-cases, elastic equivalence to `ElasticBeamColumn3` in both bending planes,
-and, for the beam, against Xara's `ElasticBeam3d`/`FiberSection3d` reference
-formulas — see `core/tests/m15_spatial_truss.rs`,
-`core/tests/m16_elastic_beam3.rs`, `core/tests/m16_pdelta3.rs`,
-`core/tests/m17_disp_beam_column3.rs`, and
-`core/tests/m17_force_beam_column3.rs`.
-A true spatial rigid diaphragm and spatial modal/transient analysis are not
-yet implemented. See
-[`docs/spatial-architecture.md`](docs/spatial-architecture.md) for the full
-status and remaining milestones (M15–M18).
-
-See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the
-full design, scope, and milestone-by-milestone plan.
+See [`docs/implementation-plan.md`](docs/implementation-plan.md) and
+[`docs/spatial-architecture.md`](docs/spatial-architecture.md) for milestone
+details.
 
 ## Workspace layout
 

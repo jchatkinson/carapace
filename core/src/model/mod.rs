@@ -15,10 +15,10 @@ pub use elements::{
 };
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
 pub use integration::BeamIntegration;
-pub use load_pattern::{ElementLoad, LoadPatternId, LoadSeries};
+pub use load_pattern::{ElementLoad, ElementLoad3, LoadPatternId, LoadSeries};
 pub use materials::{Material, Pinching4DmgCyc, Pinching4State};
 pub use node::{
-    Node, Node2, Node3, Node3Id, NodeId, SpatialDof, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
+    Axis3, Node, Node2, Node3, Node3Id, NodeId, SpatialDof, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
     SPATIAL_NDF, SPATIAL_NDIM,
 };
 pub use transform::{GeomTransf, GeomTransf3};

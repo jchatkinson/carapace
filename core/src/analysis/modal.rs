@@ -1,6 +1,7 @@
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
+use slotmap::Key;
 
-use crate::model::Domain;
+use crate::model::{Domain, ElementOps};
 
 use super::{AnalysisError, SparseSolver};
 
@@ -49,7 +50,23 @@ pub struct Mode {
 /// `M` (lumped, `Node::mass`) must be diagonal and strictly positive on
 /// every free DOF — a real physical requirement of modal analysis, not an
 /// implementation gap.
-pub fn modal_analysis(domain: &mut Domain, num_modes: usize) -> Result<Vec<Mode>, AnalysisError> {
+///
+/// Generic over the same kinematic profile as `Domain`/`Analysis` (see
+/// `Domain`'s doc comment) — the Lanczos recurrence and mass-normalization
+/// above only ever touch `domain` through its generic free-DOF assembly
+/// interface (`assemble_mass_diagonal`, `num_free_dofs`,
+/// `assemble_tangent_and_resistance`), never anything DOF-count-specific,
+/// so one implementation covers both `Domain`/`Domain3` — inferred from
+/// `domain`'s concrete type at each call site, same as
+/// `AnalysisBuilder::build`.
+pub fn modal_analysis<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>(
+    domain: &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+    num_modes: usize,
+) -> Result<Vec<Mode>, AnalysisError>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+{
     let mass = domain.assemble_mass_diagonal();
     let n = domain.num_free_dofs();
 

@@ -406,6 +406,44 @@ impl ElasticBeamColumn3 {
         (k, resistance)
     }
 
+    /// Equivalent nodal load (global coordinates) from local transverse
+    /// loads `wy`/`wz` (force/length, local `+y`/`+z` directions) — the
+    /// direct spatial generalization of planar `ElasticBeamColumn::
+    /// form_load_vector`'s consistent (virtual-work) Hermite-cubic
+    /// equivalent load, applied independently in each bending plane. The
+    /// `wy`-induced terms (`[v, rz]`, indices `[1,5,7,11]`) are numerically
+    /// identical to the planar formula; the `wz`-induced terms (`[w, ry]`,
+    /// indices `[2,4,8,10]`) carry the same rotation-coefficient sign flip
+    /// as `local_elastic_stiffness`'s `y_block` relative to `z_block` (`ry
+    /// = -dw/dx` vs `rz = +dv/dx`) — verified against Xara/OpenSees's
+    /// `ElasticBeam3d::addLoad`'s `Beam3dUniformLoad` fixed-end-force
+    /// derivation (`q0`: `MI=-Mz, MJ=Mz` for the `wy`-driven `z`-bending
+    /// pair and `MI=My, MJ=-My` for the `wz`-driven `y`-bending pair, each
+    /// negated here since a fixed-end restraint force is the negative of
+    /// the equivalent nodal load it corresponds to), not just asserted by
+    /// analogy to the planar case.
+    pub(super) fn form_load_vector(&self, node_i: &Node3, node_j: &Node3, wy: f64, wz: f64) -> SpatialElementVector {
+        if wy == 0.0 && wz == 0.0 {
+            return SpatialElementVector::zeros();
+        }
+        let (length, r) = self.transform.local_axes(node_i, node_j);
+        let t = GeomTransf3::rotation_matrix(&r);
+        let l = length;
+
+        let mut local = SpatialElementVector::zeros();
+        local[1] = wy * l / 2.0;
+        local[5] = wy * l * l / 12.0;
+        local[7] = wy * l / 2.0;
+        local[11] = -wy * l * l / 12.0;
+
+        local[2] = wz * l / 2.0;
+        local[4] = -wz * l * l / 12.0;
+        local[8] = wz * l / 2.0;
+        local[10] = wz * l * l / 12.0;
+
+        t.transpose() * local
+    }
+
     /// Lumped mass: half the element's total mass at each node's three
     /// translational DOFs, zero rotational contribution — same
     /// simplification as planar `ElasticBeamColumn::form_mass`.

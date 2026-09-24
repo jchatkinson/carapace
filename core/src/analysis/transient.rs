@@ -1,6 +1,7 @@
 use nalgebra::DVector;
+use slotmap::Key;
 
-use crate::model::Domain;
+use crate::model::{Domain, Element, Element3, ElementOps, Node3Id, NodeId, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM, NDF};
 
 use super::{AnalysisError, GroundMotion, RayleighDamping, SparseSolver};
 
@@ -30,8 +31,28 @@ pub struct TransientStepResult {
 /// Linear`'s same caveat for the static case. A Newton-iterated corrector
 /// (needed once nonlinear materials are driven dynamically) is a natural
 /// extension, not built until something needs it.
-pub struct TransientAnalysis {
-    domain: Domain,
+///
+/// Generic over the same kinematic profile as `Domain`/`Analysis` (see
+/// `Domain`'s doc comment) — Newmark stepping, the initial-acceleration
+/// solve, and ground-motion excitation only ever touch `domain` through its
+/// generic free-DOF interface (mass diagonal, gather/scatter, tangent
+/// assembly, `direction_incidence`), never anything DOF-count-specific, so
+/// one implementation covers both `Domain`/`Domain3`. Defaults to the
+/// planar profile, so bare `TransientAnalysis` keeps working unchanged;
+/// `TransientAnalysis3` (spatial) is a type alias below. A spatial
+/// `GroundMotion::direction` of `0..3` selects `ux`/`uy`/`uz`, unchanged
+/// from planar beyond the extra valid index.
+pub struct TransientAnalysis<
+    const NDIM: usize = PLANAR_NDIM,
+    const NDOF: usize = NDF,
+    const ELEMENT_DOF: usize = { crate::model::ELEMENT_DOF },
+    NId = NodeId,
+    E = Element,
+> where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+{
+    domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
     mass: DVector<f64>,
     damping: RayleighDamping,
     dt: f64,
@@ -45,7 +66,19 @@ pub struct TransientAnalysis {
     ground_motions: Vec<(GroundMotion, DVector<f64>)>,
 }
 
-impl TransientAnalysis {
+/// `TransientAnalysis`'s spatial instantiation — see `Domain3`'s doc
+/// comment for why this is a type alias rather than a hand-duplicated
+/// struct.
+pub type TransientAnalysis3 =
+    TransientAnalysis<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id, Element3>;
+
+impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
+    TransientAnalysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E::Load: Clone,
+{
     /// Builds a transient analysis from a domain whose nodes may already
     /// carry initial conditions (`Node::with_initial_displacement`/
     /// `with_initial_velocity`). Computes the one thing Newmark needs that
@@ -54,7 +87,11 @@ impl TransientAnalysis {
     /// last term only present once `with_ground_motion` adds one — see
     /// `recompute_initial_acceleration`). `M` is diagonal, so this is a
     /// single elementwise division, no solve needed.
-    pub fn new(mut domain: Domain, damping: RayleighDamping, dt: f64) -> Result<Self, AnalysisError> {
+    pub fn new(
+        mut domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        damping: RayleighDamping,
+        dt: f64,
+    ) -> Result<Self, AnalysisError> {
         assert!(dt > 0.0, "Newmark dt must be positive");
 
         let mass = domain.assemble_mass_diagonal();
@@ -128,14 +165,14 @@ impl TransientAnalysis {
         force
     }
 
-    pub fn domain(&self) -> &Domain {
+    pub fn domain(&self) -> &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
         &self.domain
     }
 
     /// Ends this (dynamic) phase and hands back the `Domain` — symmetric
     /// with `Analysis::into_domain`, so a dynamic phase can itself be
     /// followed by another phase (static or dynamic).
-    pub fn into_domain(self) -> Domain {
+    pub fn into_domain(self) -> Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
         self.domain
     }
 
