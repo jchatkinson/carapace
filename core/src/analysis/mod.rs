@@ -12,7 +12,7 @@ mod state;
 mod transient;
 
 pub use algorithm::Algorithm;
-pub use state::{Analysis, StepResult};
+pub use state::{Analysis, Analysis3, StepResult};
 pub use builder::AnalysisBuilder;
 pub use constraint::ConstraintHandler;
 pub use convergence::ConvergenceTest;

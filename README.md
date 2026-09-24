@@ -29,6 +29,27 @@ iteration), optional corotational geometry (M9), and the JS/TS worker
 integration + results persistence that let `pysees` actually call Carapace
 (M10–M11).
 
+3D (spatial) support is in progress, separately from M8–M11: `Domain`,
+`Analysis`, `AnalysisBuilder`, `Integrator`, and `LoadPattern` are each one
+generic implementation covering both a planar and a spatial (six-DOF-per-
+node) profile, with `Domain3`/`Analysis3` as the spatial instantiation.
+`Truss3`, `ZeroLength3`, `ElasticBeamColumn3` (linear-elastic 3D
+Euler-Bernoulli, axial/torsion/biaxial bending, `Linear3` or `PDelta3`
+geometry via the reusable `GeomTransf3` transform), and the nonlinear
+fiber-section pair `DispBeamColumn3`/`ForceBeamColumn3` (biaxial bending via
+a new `FiberSection3`, decoupled elastic `G*J` torsion) are implemented and
+verified end to end (`Domain3` → `Analysis3::step`) against closed-form
+cases, elastic equivalence to `ElasticBeamColumn3` in both bending planes,
+and, for the beam, against Xara's `ElasticBeam3d`/`FiberSection3d` reference
+formulas — see `core/tests/m15_spatial_truss.rs`,
+`core/tests/m16_elastic_beam3.rs`, `core/tests/m16_pdelta3.rs`,
+`core/tests/m17_disp_beam_column3.rs`, and
+`core/tests/m17_force_beam_column3.rs`.
+A true spatial rigid diaphragm and spatial modal/transient analysis are not
+yet implemented. See
+[`docs/spatial-architecture.md`](docs/spatial-architecture.md) for the full
+status and remaining milestones (M15–M18).
+
 See [`docs/implementation-plan.md`](docs/implementation-plan.md) for the
 full design, scope, and milestone-by-milestone plan.
 
@@ -79,6 +100,6 @@ For the frontend/worker boundary, then read
 model and analysis-sequence contract, run lifecycle, transport, and results
 database design for M10/M11.
 
-For the planned 3D profile, read
+For the 3D (spatial) profile — in progress, see Status above — read
 **[`docs/spatial-architecture.md`](docs/spatial-architecture.md)** before
 changing node DOFs, element transformations, fiber sections, or constraints.

@@ -1,6 +1,7 @@
-use nalgebra::{SMatrix, SVector};
+use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
-use super::super::{BeamIntegration, Fiber, FiberSection, Node, NodeId};
+use super::super::{BeamIntegration, Fiber, Fiber3, FiberSection, FiberSection3, GeomTransf3, Node, Node3, Node3Id, NodeId};
+use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
 /// A 2-node, force-based (flexibility-method) 2D beam-column (§3.1, M8):
 /// unlike every other element in the catalog, its section forces are
@@ -374,5 +375,308 @@ impl ForceBeamColumn {
         let total_area = self.sections[0].total_area();
         let half = self.density * total_area * length / 2.0;
         SVector::<f64, 6>::from_column_slice(&[half, half, 0.0, half, half, 0.0])
+    }
+}
+
+/// `3` — number of section force/deformation components for
+/// `ForceBeamColumn3` (`N`, `Mz`, `My` — biaxial bending, no torsion; see
+/// `FiberSection3`'s doc comment for why).
+const NSD3: usize = 3;
+/// `5` — number of basic (reduced) dof for `ForceBeamColumn3`: axial
+/// elongation plus two chord-relative end rotations in *each* bending
+/// plane. Torsion is excluded from the basic system entirely (unlike
+/// `NSD3`'s `N`/`Mz`/`My`, there's no `q6`/`v6` pair) — it's a decoupled
+/// elastic term folded onto the local tangent/resistance directly, the
+/// same treatment `DispBeamColumn3` uses.
+const NBD3: usize = 5;
+
+/// `(basic force, per-section (eps0, kappa_z, kappa_y), basic tangent
+/// stiffness)` — `ForceBeamColumn3`'s counterpart to `StateDeterminationResult`.
+type StateDeterminationResult3 = (SVector<f64, NBD3>, Vec<(f64, f64, f64)>, SMatrix<f64, NBD3, NBD3>);
+
+/// `ForceBeamColumn`'s spatial (biaxial) counterpart: a 2-node, force-based
+/// 3D beam-column. Basic system, force interpolation, and state-
+/// determination algorithm are the direct biaxial generalization of
+/// `ForceBeamColumn`'s (see that type's doc comment for the algorithm
+/// itself, ported unchanged in structure — only `NSD`/`NBD` and the
+/// matrices below grow); torsion is excluded from the basic system and
+/// handled as a decoupled elastic `G*J/L` term, same as `DispBeamColumn3`.
+///
+/// **Basic system**, `v = [v1..v5]`: `v1` axial elongation (same as
+/// `ForceBeamColumn`'s `v1`); `v2`/`v3` the z-bending chord-relative end
+/// rotations, numerically identical in form to `ForceBeamColumn`'s
+/// `v2`/`v3` since local z-bending uses the same `[v, rz]` convention;
+/// `v4`/`v5` the y-bending chord-relative end rotations, built by
+/// substituting `theta_equiv = -ry` into the same construction (matching
+/// `DispBeamColumn3::strain_displacement`'s `b_kappa_y` substitution) —
+/// this flips the sign of `v4`/`v5`'s *rotation* coefficient relative to
+/// `v2`/`v3`'s (their translation coefficients are unchanged, since the
+/// chord slope `psi` is purely geometric and doesn't depend on the
+/// rotation sign convention). Basic forces `q = [q1..q5]` are then
+/// automatically work-conjugate to `v` by construction (`A`/`A^T` share the
+/// same matrix — the standard force-method contragredience), with `q1=N`,
+/// `(q2,q3)` conjugate to `(Mz`'s end values`)`, `(q4,q5)` conjugate to
+/// `My`'s. This whole construction — not just guessed by analogy — is
+/// verified against `ElasticBeamColumn3`'s exact biaxial-bending elastic
+/// stiffness in `core/tests/m17_force_beam_column3.rs`, the same role
+/// `core/tests/m8_force_beam_column.rs` plays for the planar element.
+#[derive(Debug, Clone)]
+pub struct ForceBeamColumn3 {
+    pub node_i: Node3Id,
+    pub node_j: Node3Id,
+    pub g: f64,
+    pub j: f64,
+    vec_xz: [f64; 3],
+    integration: BeamIntegration,
+    sections: Vec<FiberSection3>,
+    /// Mass per unit volume, same convention as `ForceBeamColumn::density`.
+    pub density: f64,
+    q_commit: SVector<f64, NBD3>,
+    e_commit: Vec<(f64, f64, f64)>,
+    v_commit: SVector<f64, NBD3>,
+    max_iters: usize,
+    tolerance: f64,
+}
+
+impl ForceBeamColumn3 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        node_i: Node3Id,
+        node_j: Node3Id,
+        g: f64,
+        j: f64,
+        vec_xz: [f64; 3],
+        fibers: Vec<Fiber3>,
+        integration: BeamIntegration,
+    ) -> Self {
+        let n_points = integration.points().len();
+        let sections = (0..n_points).map(|_| FiberSection3::new(fibers.clone())).collect();
+        ForceBeamColumn3 {
+            node_i,
+            node_j,
+            g,
+            j,
+            vec_xz,
+            integration,
+            sections,
+            density: 0.0,
+            q_commit: SVector::<f64, NBD3>::zeros(),
+            e_commit: vec![(0.0, 0.0, 0.0); n_points],
+            v_commit: SVector::<f64, NBD3>::zeros(),
+            max_iters: 50,
+            tolerance: 1e-6,
+        }
+    }
+
+    pub fn with_density(mut self, density: f64) -> Self {
+        self.density = density;
+        self
+    }
+
+    fn local_displacement(&self, node_i: &Node3, node_j: &Node3) -> (f64, SpatialElementMatrix, SpatialElementVector) {
+        let transform = GeomTransf3::linear(self.vec_xz);
+        let (length, r) = transform.local_axes(node_i, node_j);
+        let t = GeomTransf3::rotation_matrix(&r);
+        let d_global = SpatialElementVector::from_iterator(node_i.displacement.iter().chain(node_j.displacement.iter()).copied());
+        (length, t, t * d_global)
+    }
+
+    fn torsion_stiffness(&self, length: f64) -> SpatialElementMatrix {
+        let gj_l = self.g * self.j / length;
+        let mut k = SpatialElementMatrix::zeros();
+        k[(3, 3)] = gj_l;
+        k[(9, 9)] = gj_l;
+        k[(3, 9)] = -gj_l;
+        k[(9, 3)] = -gj_l;
+        k
+    }
+
+    /// Basic deformation `v = A * d_local` — see the type doc comment for
+    /// `A`'s rows. `d_local` is `[u,v,w,rx,ry,rz]` per node; rows here skip
+    /// the torsion columns (`3`, `9`) entirely, since torsion isn't part of
+    /// the basic system.
+    fn basic_deformation_matrix(length: f64) -> SMatrix<f64, NBD3, 12> {
+        let l_inv = 1.0 / length;
+        let mut a = SMatrix::<f64, NBD3, 12>::zeros();
+        // v1: axial.
+        a[(0, 0)] = -1.0;
+        a[(0, 6)] = 1.0;
+        // v2, v3: z-bending ([v, rz] at indices 1,5,7,11).
+        a[(1, 1)] = l_inv;
+        a[(1, 5)] = 1.0;
+        a[(1, 7)] = -l_inv;
+        a[(2, 1)] = l_inv;
+        a[(2, 7)] = -l_inv;
+        a[(2, 11)] = 1.0;
+        // v4, v5: y-bending ([w, ry] at indices 2,4,8,10), rotation
+        // coefficient sign-flipped relative to z-bending (see doc comment).
+        a[(3, 2)] = l_inv;
+        a[(3, 4)] = -1.0;
+        a[(3, 8)] = -l_inv;
+        a[(4, 2)] = l_inv;
+        a[(4, 8)] = -l_inv;
+        a[(4, 10)] = -1.0;
+        a
+    }
+
+    /// Force interpolation `s(x) = b(xi) * q`, `s = [N, Mz, My]` — `Mz`'s
+    /// row is `ForceBeamColumn::b_matrix`'s unchanged (same `[v, rz]`
+    /// convention); `My`'s row has the identical `[xi-1, xi]` form against
+    /// `q4`/`q5`, with no further sign change needed — the rotation-sign
+    /// flip is already fully absorbed into `v4`/`v5`'s definition, and
+    /// work-conjugacy (`q` conjugate to `v`, `My` conjugate to `kappa_y`,
+    /// both by the same construction) carries it through consistently.
+    fn b_matrix(xi: f64) -> SMatrix<f64, NSD3, NBD3> {
+        let mut b = SMatrix::<f64, NSD3, NBD3>::zeros();
+        b[(0, 0)] = 1.0;
+        b[(1, 1)] = xi - 1.0;
+        b[(1, 2)] = xi;
+        b[(2, 3)] = xi - 1.0;
+        b[(2, 4)] = xi;
+        b
+    }
+
+    /// See `ForceBeamColumn::state_determination`'s doc comment — identical
+    /// bisection-subdivision structure, `NSD3`/`NBD3` in place of `NSD`/`NBD`.
+    fn state_determination(&self, v: SVector<f64, NBD3>, length: f64) -> StateDeterminationResult3 {
+        let mut divisions = 1;
+        loop {
+            let mut q = self.q_commit;
+            let mut e = self.e_commit.clone();
+            let mut k_basic = SMatrix::<f64, NBD3, NBD3>::identity();
+            let mut all_converged = true;
+
+            for step in 1..=divisions {
+                let v_step = self.v_commit + (v - self.v_commit) * (step as f64 / divisions as f64);
+                let ((q2, e2, k2), converged) = self.try_state_determination(v_step, length, q, e);
+                q = q2;
+                e = e2;
+                k_basic = k2;
+                if !converged {
+                    all_converged = false;
+                    break;
+                }
+            }
+
+            if all_converged || divisions >= 256 {
+                return (q, e, k_basic);
+            }
+            divisions *= 4;
+        }
+    }
+
+    /// See `ForceBeamColumn::try_state_determination`'s doc comment —
+    /// identical two-stage-per-section-correction, energy-based-convergence
+    /// algorithm, `NSD3`/`NBD3` in place of `NSD`/`NBD` and a 3x3 section
+    /// flexibility (`nalgebra`'s `try_inverse`) in place of the hand-rolled
+    /// `invert_2x2`.
+    fn try_state_determination(
+        &self,
+        v: SVector<f64, NBD3>,
+        length: f64,
+        q0: SVector<f64, NBD3>,
+        e0: Vec<(f64, f64, f64)>,
+    ) -> (StateDeterminationResult3, bool) {
+        let points = self.integration.points();
+        let mut q = q0;
+        let mut e = e0;
+        let mut k_basic = SMatrix::<f64, NBD3, NBD3>::identity();
+        let mut converged = false;
+
+        for _ in 0..self.max_iters {
+            let mut flexibility = SMatrix::<f64, NBD3, NBD3>::zeros();
+            let mut vr = SVector::<f64, NBD3>::zeros();
+
+            for (i, (xi, w)) in points.iter().enumerate() {
+                let b = Self::b_matrix(*xi);
+                let target = b * q;
+                let scale = w * length;
+
+                let (n0, mz0, my0, k_sec0) = self.sections[i].trial(e[i].0, e[i].1, e[i].2);
+                let f_sec0 = Matrix3::from_row_slice(&[
+                    k_sec0[0][0], k_sec0[0][1], k_sec0[0][2], k_sec0[1][0], k_sec0[1][1], k_sec0[1][2], k_sec0[2][0], k_sec0[2][1],
+                    k_sec0[2][2],
+                ])
+                .try_inverse()
+                .expect("fiber section tangent should be nonsingular for a real cross-section");
+                let d0 = f_sec0 * (target - Vector3::new(n0, mz0, my0));
+                e[i].0 += d0[0];
+                e[i].1 += d0[1];
+                e[i].2 += d0[2];
+
+                let (n1, mz1, my1, k_sec1) = self.sections[i].trial(e[i].0, e[i].1, e[i].2);
+                let f_sec1 = Matrix3::from_row_slice(&[
+                    k_sec1[0][0], k_sec1[0][1], k_sec1[0][2], k_sec1[1][0], k_sec1[1][1], k_sec1[1][2], k_sec1[2][0], k_sec1[2][1],
+                    k_sec1[2][2],
+                ])
+                .try_inverse()
+                .expect("fiber section tangent should be nonsingular for a real cross-section");
+
+                let d1 = f_sec1 * (target - Vector3::new(n1, mz1, my1));
+                let e_star = Vector3::new(e[i].0 + d1[0], e[i].1 + d1[1], e[i].2 + d1[2]);
+
+                flexibility += scale * (b.transpose() * f_sec1 * b);
+                vr += scale * (b.transpose() * e_star);
+            }
+
+            k_basic = match flexibility.try_inverse() {
+                Some(k) if k.iter().all(|x| x.is_finite()) => k,
+                _ => break,
+            };
+            let dv = v - vr;
+            let dq = k_basic * dv;
+            if !dq.iter().all(|x| x.is_finite()) {
+                break;
+            }
+            q += dq;
+
+            if dv.dot(&dq).abs() < self.tolerance {
+                converged = true;
+                break;
+            }
+        }
+
+        ((q, e, k_basic), converged)
+    }
+
+    pub(super) fn form_tangent_and_resistance(&self, node_i: &Node3, node_j: &Node3) -> (SpatialElementMatrix, SpatialElementVector) {
+        let (length, t, d_local) = self.local_displacement(node_i, node_j);
+        let a = Self::basic_deformation_matrix(length);
+        let v = a * d_local;
+
+        let (q, _e, k_basic) = self.state_determination(v, length);
+
+        let k_torsion = self.torsion_stiffness(length);
+        let k_local = a.transpose() * k_basic * a + k_torsion;
+        let r_local = a.transpose() * q + k_torsion * d_local;
+
+        (t.transpose() * k_local * t, t.transpose() * r_local)
+    }
+
+    pub(super) fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
+        let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+        let a = Self::basic_deformation_matrix(length);
+        let v = a * d_local;
+
+        let (q, e, _k_basic) = self.state_determination(v, length);
+
+        for (i, (eps0, kappa_z, kappa_y)) in e.iter().enumerate() {
+            self.sections[i].commit(*eps0, *kappa_z, *kappa_y);
+        }
+        self.q_commit = q;
+        self.e_commit = e;
+        self.v_commit = v;
+    }
+
+    pub(super) fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {
+        let transform = GeomTransf3::linear(self.vec_xz);
+        let (length, _r) = transform.local_axes(node_i, node_j);
+        let total_area = self.sections[0].total_area();
+        let half = self.density * total_area * length / 2.0;
+        let mut mass = SpatialElementVector::zeros();
+        for dof in [0, 1, 2, 6, 7, 8] {
+            mass[dof] = half;
+        }
+        mass
     }
 }

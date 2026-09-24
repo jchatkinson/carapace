@@ -1,4 +1,6 @@
-use crate::model::Domain;
+use slotmap::Key;
+
+use crate::model::{Domain, ElementOps, NodeId};
 
 use super::{Algorithm, Analysis, ConstraintHandler, ConvergenceTest, Integrator, SparseSolver};
 
@@ -7,7 +9,13 @@ use super::{Algorithm, Analysis, ConstraintHandler, ConvergenceTest, Integrator,
 /// `.build()`. Illegal sequencing (e.g. calling `.build()` before an
 /// algorithm is set) is a compile error, not a runtime `setLinks` ordering
 /// bug like Xara's `BasicAnalysisBuilder`.
-pub struct AnalysisBuilder<S> {
+///
+/// `AnalysisBuilder<S>` itself isn't generic over the kinematic profile —
+/// only its state markers are (`WithIntegrator<NId>` etc., defaulted to the
+/// planar profile), since an `Integrator<NId>` only commits to which node ID
+/// type it controls. The rest of the profile (`NDIM`/`NDOF`/`ELEMENT_DOF`/
+/// `E::Id`/`E`) is inferred at `.build(domain)` time from `domain` itself.
+pub struct AnalysisBuilder<S = Unwired> {
     state: S,
 }
 
@@ -17,20 +25,20 @@ pub struct WithConstraintHandler {
     constraint_handler: ConstraintHandler,
 }
 
-pub struct WithIntegrator {
+pub struct WithIntegrator<NId = NodeId> {
     constraint_handler: ConstraintHandler,
-    integrator: Integrator,
+    integrator: Integrator<NId>,
 }
 
-pub struct WithAlgorithm {
+pub struct WithAlgorithm<NId = NodeId> {
     constraint_handler: ConstraintHandler,
-    integrator: Integrator,
+    integrator: Integrator<NId>,
     algorithm: Algorithm,
 }
 
-pub struct Ready {
+pub struct Ready<NId = NodeId> {
     constraint_handler: ConstraintHandler,
-    integrator: Integrator,
+    integrator: Integrator<NId>,
     algorithm: Algorithm,
     test: ConvergenceTest,
 }
@@ -54,7 +62,7 @@ impl AnalysisBuilder<Unwired> {
 }
 
 impl AnalysisBuilder<WithConstraintHandler> {
-    pub fn integrator(self, integrator: Integrator) -> AnalysisBuilder<WithIntegrator> {
+    pub fn integrator<NId>(self, integrator: Integrator<NId>) -> AnalysisBuilder<WithIntegrator<NId>> {
         AnalysisBuilder {
             state: WithIntegrator {
                 constraint_handler: self.state.constraint_handler,
@@ -64,8 +72,8 @@ impl AnalysisBuilder<WithConstraintHandler> {
     }
 }
 
-impl AnalysisBuilder<WithIntegrator> {
-    pub fn algorithm(self, algorithm: Algorithm) -> AnalysisBuilder<WithAlgorithm> {
+impl<NId> AnalysisBuilder<WithIntegrator<NId>> {
+    pub fn algorithm(self, algorithm: Algorithm) -> AnalysisBuilder<WithAlgorithm<NId>> {
         AnalysisBuilder {
             state: WithAlgorithm {
                 constraint_handler: self.state.constraint_handler,
@@ -76,8 +84,8 @@ impl AnalysisBuilder<WithIntegrator> {
     }
 }
 
-impl AnalysisBuilder<WithAlgorithm> {
-    pub fn test(self, test: ConvergenceTest) -> AnalysisBuilder<Ready> {
+impl<NId> AnalysisBuilder<WithAlgorithm<NId>> {
+    pub fn test(self, test: ConvergenceTest) -> AnalysisBuilder<Ready<NId>> {
         AnalysisBuilder {
             state: Ready {
                 constraint_handler: self.state.constraint_handler,
@@ -89,9 +97,12 @@ impl AnalysisBuilder<WithAlgorithm> {
     }
 }
 
-impl AnalysisBuilder<Ready> {
+impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
     /// Numbers DOFs and builds the sparsity/solver setup once, here — not
-    /// re-checked every step (§4.4; no live re-solve loop per §1).
+    /// re-checked every step (§4.4; no live re-solve loop per §1). Generic
+    /// over the rest of the profile (`NDIM`/`NDOF`/`ELEMENT_DOF`/`E::Id`/`E`),
+    /// inferred from `domain`'s type — this is what lets one `.build()`
+    /// serve both `Domain`/`Analysis` and `Domain3`/`Analysis3`.
     ///
     /// # Panics
     /// If `domain` has any `equal_dof`/`rigid_diaphragm` constraint but
@@ -100,7 +111,14 @@ impl AnalysisBuilder<Ready> {
     /// This is a model-construction error, not a runtime condition, so it's
     /// caught here rather than threaded through `Result` (§2.8 is about
     /// real runtime failure, not misuse of the builder).
-    pub fn build(self, mut domain: Domain) -> Analysis {
+    pub fn build<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
+        self,
+        mut domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+    ) -> Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+    where
+        NId: Key,
+        E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    {
         assert!(
             !(matches!(self.state.constraint_handler, ConstraintHandler::Plain) && domain.has_mp_constraints()),
             "ConstraintHandler::Plain can't resolve multi-point constraints (equal_dof/rigid_diaphragm) — use ConstraintHandler::Transformation"

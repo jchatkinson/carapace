@@ -1,6 +1,7 @@
 use nalgebra::{SMatrix, SVector};
 
-use super::super::{BeamIntegration, Fiber, FiberSection, Node, NodeId};
+use super::super::{BeamIntegration, Fiber, Fiber3, FiberSection, FiberSection3, GeomTransf3, Node, Node3, Node3Id, NodeId};
+use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
 /// A 2-node, displacement-based, fiber-discretized 2D beam-column (§3.1):
 /// nodal displacements directly give the strain/curvature field along the
@@ -163,5 +164,176 @@ impl DispBeamColumn {
         let total_area = self.sections[0].total_area();
         let half = self.density * total_area * length / 2.0;
         SVector::<f64, 6>::from_column_slice(&[half, half, 0.0, half, half, 0.0])
+    }
+}
+
+/// `DispBeamColumn`'s spatial (biaxial) counterpart: a 2-node,
+/// displacement-based, fiber-discretized 3D beam-column. Bending in both
+/// planes comes directly from `FiberSection3` the same way `DispBeamColumn`
+/// gets its single bending plane from `FiberSection`; torsion is *not*
+/// fiber-derived (see `FiberSection3`'s doc comment) and is instead a
+/// simple decoupled elastic `G*J/L` term, folded directly into the local
+/// tangent/resistance alongside the fiber-integrated axial/biaxial-bending
+/// terms — the same decoupling `ElasticBeamColumn3` uses for torsion.
+///
+/// `vec_xz` plus `Node3`'s coordinates give the local axes via the same
+/// `GeomTransf3::local_axes`/`rotation_matrix` machinery `ElasticBeamColumn3`
+/// uses, but only ever in its `Linear3` sense — no `PDelta3` option is
+/// exposed, matching planar `DispBeamColumn`'s "`GeomTransf::Linear` only"
+/// scope (see its doc comment: a fiber section's state isn't a single
+/// scalar axial force, so it doesn't plug into the closed-form geometric-
+/// stiffness formula directly, and building the right generalization is
+/// deferred, not silently wrong).
+///
+/// Local DOF order per node `[u, v, w, rx, ry, rz]`, matching
+/// `ElasticBeamColumn3`/`SpatialDof` exactly.
+#[derive(Debug, Clone)]
+pub struct DispBeamColumn3 {
+    pub node_i: Node3Id,
+    pub node_j: Node3Id,
+    pub g: f64,
+    pub j: f64,
+    vec_xz: [f64; 3],
+    integration: BeamIntegration,
+    sections: Vec<FiberSection3>,
+    /// Mass per unit volume, same convention as `DispBeamColumn::density`.
+    pub density: f64,
+}
+
+impl DispBeamColumn3 {
+    pub fn new(
+        node_i: Node3Id,
+        node_j: Node3Id,
+        g: f64,
+        j: f64,
+        vec_xz: [f64; 3],
+        fibers: Vec<Fiber3>,
+        integration: BeamIntegration,
+    ) -> Self {
+        let n_points = integration.points().len();
+        let sections = (0..n_points).map(|_| FiberSection3::new(fibers.clone())).collect();
+        DispBeamColumn3 {
+            node_i,
+            node_j,
+            g,
+            j,
+            vec_xz,
+            integration,
+            sections,
+            density: 0.0,
+        }
+    }
+
+    pub fn with_density(mut self, density: f64) -> Self {
+        self.density = density;
+        self
+    }
+
+    /// Strain-displacement vectors `(b_eps0, b_kappa_z, b_kappa_y)` at `xi`
+    /// in `[0,1]`, relating local nodal displacements
+    /// `[u1,v1,w1,rx1,ry1,rz1,u2,v2,w2,rx2,ry2,rz2]` to `[eps0, kappa_z,
+    /// kappa_y]`. `b_eps0`/`b_kappa_z` are `DispBeamColumn::strain_
+    /// displacement`'s `b_eps0`/`b_kappa` re-indexed onto `[u,v,rz]`'s
+    /// spatial slots (`0,1,5` / `6,7,11`); `b_kappa_y` is the same Hermite
+    /// curvature operator re-derived for `[w, ry]`'s slots (`2,4` / `8,10`)
+    /// with its rotation-column signs flipped, from substituting
+    /// `theta_equiv = -ry` (the standard-Hermite formula assumes
+    /// `theta = dv/dx`, but this element's convention is `ry = -dw/dx`, see
+    /// `ElasticBeamColumn3::local_elastic_stiffness`'s doc comment) into the
+    /// unmodified `b_kappa_z` formula — the same substitution
+    /// `ElasticBeamColumn3::geometric_stiffness`'s `y_block` uses relative
+    /// to `z_block`. Verified, not just plausible-by-analogy, in
+    /// `core/tests/m17_disp_beam_column3.rs` against `ElasticBeamColumn3`'s
+    /// exact closed-form biaxial-bending stiffness.
+    fn strain_displacement(xi: f64, length: f64) -> (SpatialElementVector, SpatialElementVector, SpatialElementVector) {
+        let l = length;
+        let mut b_eps0 = SpatialElementVector::zeros();
+        b_eps0[0] = -1.0 / l;
+        b_eps0[6] = 1.0 / l;
+
+        let mut b_kappa_z = SpatialElementVector::zeros();
+        b_kappa_z[1] = (-6.0 + 12.0 * xi) / (l * l);
+        b_kappa_z[5] = (-4.0 + 6.0 * xi) / l;
+        b_kappa_z[7] = (6.0 - 12.0 * xi) / (l * l);
+        b_kappa_z[11] = (-2.0 + 6.0 * xi) / l;
+
+        let mut b_kappa_y = SpatialElementVector::zeros();
+        b_kappa_y[2] = (-6.0 + 12.0 * xi) / (l * l);
+        b_kappa_y[4] = (4.0 - 6.0 * xi) / l;
+        b_kappa_y[8] = (6.0 - 12.0 * xi) / (l * l);
+        b_kappa_y[10] = (2.0 - 6.0 * xi) / l;
+
+        (b_eps0, b_kappa_z, b_kappa_y)
+    }
+
+    fn local_displacement(&self, node_i: &Node3, node_j: &Node3) -> (f64, SpatialElementMatrix, SpatialElementVector) {
+        let transform = GeomTransf3::linear(self.vec_xz);
+        let (length, r) = transform.local_axes(node_i, node_j);
+        let t = GeomTransf3::rotation_matrix(&r);
+        let d_global = SpatialElementVector::from_iterator(node_i.displacement.iter().chain(node_j.displacement.iter()).copied());
+        (length, t, t * d_global)
+    }
+
+    /// Decoupled elastic torsion contribution `[rx1, rx2]` — see the type
+    /// doc comment for why torsion isn't fiber-derived.
+    fn torsion_stiffness(&self, length: f64) -> SpatialElementMatrix {
+        let gj_l = self.g * self.j / length;
+        let mut k = SpatialElementMatrix::zeros();
+        k[(3, 3)] = gj_l;
+        k[(9, 9)] = gj_l;
+        k[(3, 9)] = -gj_l;
+        k[(9, 3)] = -gj_l;
+        k
+    }
+
+    pub(super) fn form_tangent_and_resistance(&self, node_i: &Node3, node_j: &Node3) -> (SpatialElementMatrix, SpatialElementVector) {
+        let (length, t, d_local) = self.local_displacement(node_i, node_j);
+
+        let mut k_local = self.torsion_stiffness(length);
+        let mut r_local = k_local * d_local;
+
+        for ((xi, w), section) in self.integration.points().iter().zip(&self.sections) {
+            let (b_eps0, b_kappa_z, b_kappa_y) = Self::strain_displacement(*xi, length);
+            let eps0 = b_eps0.dot(&d_local);
+            let kappa_z = b_kappa_z.dot(&d_local);
+            let kappa_y = b_kappa_y.dot(&d_local);
+            let (n, mz, my, k_section) = section.trial(eps0, kappa_z, kappa_y);
+
+            let scale = w * length;
+            r_local += scale * (b_eps0 * n + b_kappa_z * mz + b_kappa_y * my);
+
+            let b = [&b_eps0, &b_kappa_z, &b_kappa_y];
+            for (bi, row_i) in b.iter().enumerate() {
+                for (bj, row_j) in b.iter().enumerate() {
+                    k_local += scale * k_section[bi][bj] * (*row_i * row_j.transpose());
+                }
+            }
+        }
+
+        (t.transpose() * k_local * t, t.transpose() * r_local)
+    }
+
+    pub(super) fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
+        let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+        let points = self.integration.points();
+        for ((xi, _w), section) in points.iter().zip(&mut self.sections) {
+            let (b_eps0, b_kappa_z, b_kappa_y) = Self::strain_displacement(*xi, length);
+            let eps0 = b_eps0.dot(&d_local);
+            let kappa_z = b_kappa_z.dot(&d_local);
+            let kappa_y = b_kappa_y.dot(&d_local);
+            section.commit(eps0, kappa_z, kappa_y);
+        }
+    }
+
+    pub(super) fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {
+        let transform = GeomTransf3::linear(self.vec_xz);
+        let (length, _r) = transform.local_axes(node_i, node_j);
+        let total_area = self.sections[0].total_area();
+        let half = self.density * total_area * length / 2.0;
+        let mut mass = SpatialElementVector::zeros();
+        for dof in [0, 1, 2, 6, 7, 8] {
+            mass[dof] = half;
+        }
+        mass
     }
 }

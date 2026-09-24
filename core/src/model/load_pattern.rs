@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use slotmap::new_key_type;
 
@@ -121,8 +122,18 @@ pub enum ElementLoad {
 /// gravity can be ramped to full scale and then held constant
 /// (`Domain::hold_pattern_constant`) while a separate lateral pattern
 /// continues ramping in a later analysis phase.
+///
+/// Generic over `NDOF` (nodal-load array size), the node/element ID types,
+/// and `EL` (the element-load kind — `ElementLoad` for the planar profile,
+/// `Infallible` for the spatial one, matching `ElementOps::Load`; see its
+/// doc comment). `NDOF` defaults to the planar profile so bare `LoadPattern`
+/// keeps working unchanged, the same trick `Node`'s defaults use.
 #[derive(Debug, Clone)]
-pub(crate) struct LoadPattern {
+pub(crate) struct LoadPattern<const NDOF: usize = NDF, NId = NodeId, EId = ElementId, EL = ElementLoad>
+where
+    NId: Eq + Hash + Copy,
+    EId: Eq + Hash + Copy,
+{
     series: LoadSeries,
     scale_factor: f64,
     /// `Some(frozen_factor)` once `Domain::hold_pattern_constant` has been
@@ -132,11 +143,15 @@ pub(crate) struct LoadPattern {
     /// implementation-plan discussion). `None` means "still driven by
     /// `series`".
     frozen_factor: Option<f64>,
-    nodal_loads: HashMap<NodeId, [f64; NDF]>,
-    element_loads: HashMap<ElementId, ElementLoad>,
+    nodal_loads: HashMap<NId, [f64; NDOF]>,
+    element_loads: HashMap<EId, EL>,
 }
 
-impl LoadPattern {
+impl<const NDOF: usize, NId, EId, EL> LoadPattern<NDOF, NId, EId, EL>
+where
+    NId: Eq + Hash + Copy,
+    EId: Eq + Hash + Copy,
+{
     pub(crate) fn new(series: LoadSeries) -> Self {
         LoadPattern {
             series,
@@ -170,19 +185,19 @@ impl LoadPattern {
         self.frozen_factor = Some(self.factor(pseudo_time));
     }
 
-    pub(crate) fn add_nodal_load(&mut self, node: NodeId, dof: usize, value: f64) {
-        self.nodal_loads.entry(node).or_insert([0.0; NDF])[dof] = value;
+    pub(crate) fn add_nodal_load(&mut self, node: NId, dof: usize, value: f64) {
+        self.nodal_loads.entry(node).or_insert([0.0; NDOF])[dof] = value;
     }
 
-    pub(crate) fn add_element_load(&mut self, element: ElementId, load: ElementLoad) {
+    pub(crate) fn add_element_load(&mut self, element: EId, load: EL) {
         self.element_loads.insert(element, load);
     }
 
-    pub(crate) fn nodal_load(&self, node: NodeId) -> Option<&[f64; NDF]> {
+    pub(crate) fn nodal_load(&self, node: NId) -> Option<&[f64; NDOF]> {
         self.nodal_loads.get(&node)
     }
 
-    pub(crate) fn element_load(&self, element: ElementId) -> Option<&ElementLoad> {
+    pub(crate) fn element_load(&self, element: EId) -> Option<&EL> {
         self.element_loads.get(&element)
     }
 }

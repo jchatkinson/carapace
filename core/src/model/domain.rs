@@ -2,10 +2,13 @@ use std::collections::HashSet;
 
 use faer::sparse::Triplet;
 use nalgebra::DVector;
-use slotmap::SlotMap;
+use slotmap::{Key, SlotMap};
 
 use super::load_pattern::LoadPattern;
-use super::{Element, ElementId, ElementLoad, LoadPatternId, LoadSeries, Node, NodeId, SparseMatrix, ELEMENT_DOF, NDF};
+use super::{
+    Element, Element3, ElementOps, LoadPatternId, LoadSeries, Node, Node3Id, NodeId, SparseMatrix, NDF, PLANAR_NDIM,
+    SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
+};
 
 /// A multi-point constraint tying `dofs` of `constrained` exactly to the
 /// same DOFs of `retained` (`u_c[dof] = u_r[dof]`) — identity ties only, no
@@ -14,9 +17,9 @@ use super::{Element, ElementId, ElementLoad, LoadPatternId, LoadSeries, Node, No
 /// transformation matrix) and why that's sufficient for `equal_dof`/
 /// `rigid_diaphragm` specifically.
 #[derive(Debug, Clone)]
-struct MpConstraint {
-    retained: NodeId,
-    constrained: NodeId,
+struct MpConstraint<NId> {
+    retained: NId,
+    constrained: NId,
     dofs: Vec<usize>,
 }
 
@@ -30,17 +33,91 @@ struct MpConstraint {
 /// `Analysis::into_domain`/`TransientAnalysis::into_domain` hand this same
 /// `Domain` (nodal state, committed material history, and load-pattern
 /// freeze state all intact) to the next phase's builder.
-#[derive(Debug, Clone)]
-pub struct Domain {
-    nodes: SlotMap<NodeId, Node>,
-    elements: SlotMap<ElementId, Element>,
-    mp_constraints: Vec<MpConstraint>,
-    load_patterns: SlotMap<LoadPatternId, LoadPattern>,
+///
+/// Generic over the kinematic profile: `NDIM`/`NDOF`/`ELEMENT_DOF` (const
+/// generics, kept as separate parameters rather than computed from each
+/// other — stable Rust can't evaluate `2 * NDOF` inside a generic item), the
+/// node ID type, and `E: ElementOps<...>` (the element catalog — `Element`
+/// or `Element3`; its `Domain`-element-store key comes from `E::Id`, an
+/// `ElementOps` associated type rather than a further generic parameter
+/// here — see `ElementOps::Id`'s doc comment for why: a truly independent
+/// `EId` parameter had nothing else to constrain it and broke type
+/// inference at every `Domain::new()` call site). This bookkeeping
+/// (equation numbering, sparse assembly, state gather/scatter) doesn't care
+/// about element physics, only about DOF counts and `ElementOps`'s uniform
+/// shape, so it's genuinely one implementation rather than two — unlike
+/// `Truss`/`Truss3`, whose actual formulas differ and stay separate
+/// concrete types (see `ElementOps`'s doc comment for why that part can't
+/// be unified the same way).
+///
+/// All five parameters default to the planar profile, the same trick `Node`
+/// uses, so every existing bare `Domain` usage (`Domain::new()`, `fn f(d:
+/// &Domain)`, ...) keeps compiling unchanged. `Domain3` is the spatial
+/// instantiation.
+#[derive(Debug)]
+pub struct Domain<
+    const NDIM: usize = PLANAR_NDIM,
+    const NDOF: usize = NDF,
+    const ELEMENT_DOF: usize = { super::ELEMENT_DOF },
+    NId = NodeId,
+    E = Element,
+> where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+{
+    nodes: SlotMap<NId, Node<NDIM, NDOF>>,
+    elements: SlotMap<E::Id, E>,
+    mp_constraints: Vec<MpConstraint<NId>>,
+    load_patterns: SlotMap<LoadPatternId, LoadPattern<NDOF, NId, E::Id, E::Load>>,
     default_pattern: LoadPatternId,
     num_free_dofs: usize,
 }
 
-impl Domain {
+/// `Domain`'s spatial instantiation — six-DOF `Node3`/`Element3`. See
+/// `Domain`'s doc comment for why this is a type alias over one generic
+/// implementation rather than a hand-duplicated struct.
+pub type Domain3 = Domain<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id, Element3>;
+
+/// Manual rather than `#[derive(Clone)]`: the derive macro only adds `E:
+/// Clone`, not `E::Load: Clone` (it can't see through the associated type),
+/// so it under-constrains this struct and fails to compile at every call
+/// site instead. `Analysis::step`'s snapshot-and-restore-on-failure needs
+/// this — see `Domain`'s doc comment.
+impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Clone
+    for Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E::Load: Clone,
+{
+    fn clone(&self) -> Self {
+        Domain {
+            nodes: self.nodes.clone(),
+            elements: self.elements.clone(),
+            mp_constraints: self.mp_constraints.clone(),
+            load_patterns: self.load_patterns.clone(),
+            default_pattern: self.default_pattern,
+            num_free_dofs: self.num_free_dofs,
+        }
+    }
+}
+
+impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Default
+    for Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+{
     /// A fresh, empty model — already carrying one `LoadPattern`
     /// (`default_pattern`, `LoadSeries::Linear { slope: 1.0 }`, unscaled)
     /// so simple single-pattern models (the common case) don't need to
@@ -60,15 +137,15 @@ impl Domain {
         }
     }
 
-    pub fn add_node(&mut self, node: Node) -> NodeId {
+    pub fn add_node(&mut self, node: Node<NDIM, NDOF>) -> NId {
         self.nodes.insert(node)
     }
 
-    pub fn add_element(&mut self, element: Element) -> ElementId {
+    pub fn add_element(&mut self, element: E) -> E::Id {
         self.elements.insert(element)
     }
 
-    pub fn node(&self, id: NodeId) -> &Node {
+    pub fn node(&self, id: NId) -> &Node<NDIM, NDOF> {
         &self.nodes[id]
     }
 
@@ -93,7 +170,7 @@ impl Domain {
 
     /// Add a nodal load to `pattern` — Xara/OpenSees's `load <node> <...>`
     /// inside a `pattern` block.
-    pub fn add_nodal_load(&mut self, pattern: LoadPatternId, node: NodeId, dof: usize, value: f64) {
+    pub fn add_nodal_load(&mut self, pattern: LoadPatternId, node: NId, dof: usize, value: f64) {
         self.load_patterns[pattern].add_nodal_load(node, dof, value);
     }
 
@@ -101,13 +178,17 @@ impl Domain {
     /// `default_pattern()` directly, so simple models don't need to name a
     /// pattern (`domain.load_node(id, 0, force)` instead of
     /// `domain.add_nodal_load(domain.default_pattern(), id, 0, force)`).
-    pub fn load_node(&mut self, node: NodeId, dof: usize, value: f64) {
+    pub fn load_node(&mut self, node: NId, dof: usize, value: f64) {
         self.add_nodal_load(self.default_pattern, node, dof, value);
     }
 
     /// Add an element load (e.g. a beam-column's uniform transverse load)
     /// to `pattern` — Xara/OpenSees's `eleLoad` inside a `pattern` block.
-    pub fn add_element_load(&mut self, pattern: LoadPatternId, element: ElementId, load: ElementLoad) {
+    /// `load`'s type is this profile's `ElementOps::Load` — `ElementLoad`
+    /// for the planar profile, and the uninhabited `Infallible` for the
+    /// spatial one (so this is uncallable there until a real spatial
+    /// element-load type exists — see `ElementOps`'s doc comment).
+    pub fn add_element_load(&mut self, pattern: LoadPatternId, element: E::Id, load: E::Load) {
         self.load_patterns[pattern].add_element_load(element, load);
     }
 
@@ -128,7 +209,7 @@ impl Domain {
     /// (`u_c = u_r` for each listed dof) — Xara/OpenSees's `equalDOF`.
     /// Requires `ConstraintHandler::Transformation`; see its doc comment
     /// for how this is resolved.
-    pub fn equal_dof(&mut self, retained: NodeId, constrained: NodeId, dofs: &[usize]) {
+    pub fn equal_dof(&mut self, retained: NId, constrained: NId, dofs: &[usize]) {
         self.mp_constraints.push(MpConstraint {
             retained,
             constrained,
@@ -136,23 +217,10 @@ impl Domain {
         });
     }
 
-    /// Tie the x-translation DOF of every node in `constrained` to
-    /// `retained`'s — the standard 2D-frame simplification for a rigid
-    /// floor diaphragm (Xara/OpenSees's `rigidDiaphragm` is inherently 3D:
-    /// it ties in-plane translations *and* rotation-about-axis through a
-    /// lever arm to nodes in a plane perpendicular to a given axis, which
-    /// doesn't map onto a single-plane 2D model). Equivalent to calling
-    /// `equal_dof(retained, c, &[0])` for each `c` in `constrained`.
-    pub fn rigid_diaphragm(&mut self, retained: NodeId, constrained: &[NodeId]) {
-        for &c in constrained {
-            self.equal_dof(retained, c, &[0]);
-        }
-    }
-
     /// Equation number of a node's DOF, or `None` if it's fixed. Used by
     /// `Integrator::DisplacementControl` to locate its controlled DOF in
     /// the free-DOF system.
-    pub(crate) fn equation_of(&self, node: NodeId, dof: usize) -> Option<usize> {
+    pub(crate) fn equation_of(&self, node: NId, dof: usize) -> Option<usize> {
         self.nodes[node].equation[dof]
     }
 
@@ -172,7 +240,7 @@ impl Domain {
     ///
     /// Returns the number of free DOFs (the size of the global system).
     pub(crate) fn number_dofs(&mut self) -> usize {
-        let constrained_dofs: HashSet<(NodeId, usize)> = self
+        let constrained_dofs: HashSet<(NId, usize)> = self
             .mp_constraints
             .iter()
             .flat_map(|c| c.dofs.iter().map(move |&dof| (c.constrained, dof)))
@@ -180,7 +248,7 @@ impl Domain {
 
         let mut next = 0;
         for (id, node) in self.nodes.iter_mut() {
-            for dof in 0..NDF {
+            for dof in 0..NDOF {
                 node.equation[dof] = if node.fixed[dof] || constrained_dofs.contains(&(id, dof)) {
                     None
                 } else {
@@ -228,7 +296,7 @@ impl Domain {
         let n = self.num_free_dofs;
         let mut mass = DVector::<f64>::zeros(n);
         for (_, node) in self.nodes.iter() {
-            for dof in 0..NDF {
+            for dof in 0..NDOF {
                 if let Some(eq) = node.equation[dof] {
                     mass[eq] += node.mass[dof];
                 }
@@ -242,8 +310,8 @@ impl Domain {
             let mass_local = element.form_mass(node_i, node_j);
 
             let mut equations = [None; ELEMENT_DOF];
-            equations[..NDF].copy_from_slice(&node_i.equation);
-            equations[NDF..].copy_from_slice(&node_j.equation);
+            equations[..NDOF].copy_from_slice(&node_i.equation);
+            equations[NDOF..].copy_from_slice(&node_j.equation);
 
             for (a, eq_a) in equations.iter().enumerate() {
                 let Some(eq_a) = eq_a else { continue };
@@ -271,8 +339,8 @@ impl Domain {
             let (k_local, r_local) = element.form_tangent_and_resistance(node_i, node_j);
 
             let mut equations = [None; ELEMENT_DOF];
-            equations[..NDF].copy_from_slice(&node_i.equation);
-            equations[NDF..].copy_from_slice(&node_j.equation);
+            equations[..NDOF].copy_from_slice(&node_i.equation);
+            equations[NDOF..].copy_from_slice(&node_j.equation);
 
             for (a, eq_a) in equations.iter().enumerate() {
                 let Some(eq_a) = eq_a else { continue };
@@ -327,7 +395,7 @@ impl Domain {
     /// pattern's nodal + element reference load, each scaled by whatever
     /// `pattern_factor` computes for that pattern (its current factor, or
     /// its sensitivity — the only difference between the two callers).
-    fn assemble_load_with(&self, pattern_factor: impl Fn(&LoadPattern) -> f64) -> DVector<f64> {
+    fn assemble_load_with(&self, pattern_factor: impl Fn(&LoadPattern<NDOF, NId, E::Id, E::Load>) -> f64) -> DVector<f64> {
         let n = self.num_free_dofs;
         let mut load = DVector::<f64>::zeros(n);
 
@@ -339,7 +407,7 @@ impl Domain {
 
             for (node_id, node) in self.nodes.iter() {
                 let Some(nodal_load) = pattern.nodal_load(node_id) else { continue };
-                for dof in 0..NDF {
+                for dof in 0..NDOF {
                     if let Some(eq) = node.equation[dof] {
                         load[eq] += factor * nodal_load[dof];
                     }
@@ -354,8 +422,8 @@ impl Domain {
                 let load_local = element.form_load_vector(node_i, node_j, Some(element_load));
 
                 let mut equations = [None; ELEMENT_DOF];
-                equations[..NDF].copy_from_slice(&node_i.equation);
-                equations[NDF..].copy_from_slice(&node_j.equation);
+                equations[..NDOF].copy_from_slice(&node_i.equation);
+                equations[NDOF..].copy_from_slice(&node_j.equation);
 
                 for (a, eq_a) in equations.iter().enumerate() {
                     let Some(eq_a) = eq_a else { continue };
@@ -415,7 +483,7 @@ impl Domain {
     /// Scatter a global free-DOF displacement increment back onto nodes.
     pub(crate) fn apply_displacement_increment(&mut self, du: &DVector<f64>) {
         for (_, node) in self.nodes.iter_mut() {
-            for dof in 0..NDF {
+            for dof in 0..NDOF {
                 if let Some(eq) = node.equation[dof] {
                     node.displacement[dof] += du[eq];
                 }
@@ -435,10 +503,10 @@ impl Domain {
     pub(crate) fn gather_acceleration(&self) -> DVector<f64> {
         self.gather(|node, dof| node.acceleration[dof])
     }
-    fn gather(&self, get: impl Fn(&Node, usize) -> f64) -> DVector<f64> {
+    fn gather(&self, get: impl Fn(&Node<NDIM, NDOF>, usize) -> f64) -> DVector<f64> {
         let mut v = DVector::<f64>::zeros(self.num_free_dofs);
         for (_, node) in self.nodes.iter() {
-            for dof in 0..NDF {
+            for dof in 0..NDOF {
                 if let Some(eq) = node.equation[dof] {
                     v[eq] = get(node, dof);
                 }
@@ -452,7 +520,7 @@ impl Domain {
     /// velocity, and acceleration.
     pub(crate) fn scatter_state(&mut self, u: &DVector<f64>, v: &DVector<f64>, a: &DVector<f64>) {
         for (_, node) in self.nodes.iter_mut() {
-            for dof in 0..NDF {
+            for dof in 0..NDOF {
                 if let Some(eq) = node.equation[dof] {
                     node.displacement[dof] = u[eq];
                     node.velocity[dof] = v[eq];
@@ -508,5 +576,81 @@ impl Domain {
         let k_eff = SparseMatrix::try_new_from_triplets(n, n, &eff_triplets)
             .expect("equation numbers are always in [0, num_free_dofs)");
         (k_eff, k_damp)
+    }
+}
+
+/// Tie the x-translation DOF of every node in `constrained` to `retained`'s
+/// — the standard 2D-frame simplification for a rigid floor diaphragm
+/// (Xara/OpenSees's `rigidDiaphragm` is inherently 3D: it ties in-plane
+/// translations *and* rotation-about-axis through a lever arm to nodes in a
+/// plane perpendicular to a given axis, which doesn't map onto a
+/// single-plane 2D model). Equivalent to calling `equal_dof(retained, c,
+/// &[0])` for each `c` in `constrained`.
+///
+/// Planar-only, in its own impl block rather than the shared generic one:
+/// naively reusing this identity-tie approach for the spatial profile would
+/// silently produce a wrong diaphragm (missing the lever-arm term) instead
+/// of refusing to compile — see the spatial-architecture plan's
+/// "Constraints" section. A real spatial rigid diaphragm needs a genuine
+/// transformation matrix, not exposed yet.
+impl Domain {
+    pub fn rigid_diaphragm(&mut self, retained: NodeId, constrained: &[NodeId]) {
+        for &c in constrained {
+            self.equal_dof(retained, c, &[0]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod domain3_tests {
+    use super::*;
+    use crate::analysis::SparseSolver;
+    use crate::model::{Material, SpatialDof, Truss3};
+
+    /// A skew 3D truss cantilever: end load projected onto the bar axis
+    /// should reproduce simple axial-bar elongation, exercised through the
+    /// full `Domain3` assembly/equation-numbering path (not just `Truss3`
+    /// in isolation, which `truss.rs`'s own tests already cover).
+    #[test]
+    fn cantilever_truss3_matches_analytical_axial_stiffness() {
+        let mut domain = Domain3::new();
+        let fixed = domain.add_node(
+            crate::model::Node3::new([0.0, 0.0, 0.0])
+                .fix(SpatialDof::Ux as usize)
+                .fix(SpatialDof::Uy as usize)
+                .fix(SpatialDof::Uz as usize)
+                .fix(SpatialDof::Rx as usize)
+                .fix(SpatialDof::Ry as usize)
+                .fix(SpatialDof::Rz as usize),
+        );
+        let free = domain.add_node(
+            crate::model::Node3::new([3.0, 4.0, 0.0])
+                .fix(SpatialDof::Uz as usize)
+                .fix(SpatialDof::Rx as usize)
+                .fix(SpatialDof::Ry as usize)
+                .fix(SpatialDof::Rz as usize),
+        );
+
+        let area = 2.0;
+        let e = 1000.0;
+        let length = 5.0; // 3-4-5 triangle
+        domain.add_element(Element3::Truss3(Truss3::new(fixed, free, area, Material::Elastic { e })));
+
+        let force = 100.0;
+        domain.load_node(free, SpatialDof::Ux as usize, force * 3.0 / 5.0);
+        domain.load_node(free, SpatialDof::Uy as usize, force * 4.0 / 5.0);
+
+        domain.number_dofs();
+        assert_eq!(domain.num_free_dofs(), 2);
+
+        let (k, residual) = domain.form_tangent_and_residual(1.0);
+        let du = SparseSolver::new().solve(&k, &residual).expect("well-posed system");
+        domain.apply_displacement_increment(&du);
+
+        let expected_elongation = force * length / (area * e);
+        let node = domain.node(free);
+        let axial_disp = node.displacement[SpatialDof::Ux as usize] * 3.0 / 5.0
+            + node.displacement[SpatialDof::Uy as usize] * 4.0 / 5.0;
+        assert!((axial_disp - expected_elongation).abs() < 1e-9);
     }
 }

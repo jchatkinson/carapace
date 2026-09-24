@@ -522,30 +522,71 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   (`core/src/model/load_pattern.rs`), `Domain::hold_pattern_constant`, and
   `GroundMotion` for the design rationale.
 
-- **M15 — Spatial foundation (3D).** In progress. The first kernel slice is
-  generic `Node<NDIM, NDOF>` in `core/src/model/node.rs`, specialized as
-  `Node3 = Node<3, 6>`, plus `Truss3` colocated with `Truss` in
-  `core/src/model/elements/truss.rs`:
-  fixed-size `[ux, uy, uz, rx, ry, rz]` layout, direction-cosine stiffness,
-  and three-translation lumped mass, with element-level skew-bar tests.
-  Remaining: `Domain3`, profile-aware assembly/state/load handling,
-  `ZeroLength3`, spatial modal/transient plumbing, and identity `equal_dof`.
-  M10's handoff carries an explicit profile and rejects spatial input until
-  this foundation is complete. See
-  [`spatial-architecture.md`](spatial-architecture.md).
+- **M15 — Spatial foundation (3D).** Done, except transient/modal.
+  `Node<NDIM, NDOF>` (generic, `core/src/model/node.rs`) is specialized as
+  `Node3 = Node<3, 6>`. `Domain`, `Analysis`, `AnalysisBuilder`,
+  `Integrator`, and `LoadPattern` are each a single generic implementation
+  (an `ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>` trait — `core/src/model/
+  elements/mod.rs` — abstracts the per-profile element catalog out of
+  `Domain`'s bookkeeping), not hand-duplicated planar/spatial pairs;
+  `Domain3`/`Analysis3` are type aliases for the spatial instantiation.
+  `Truss3` and `ZeroLength3` (`core/src/model/elements/`) are the spatial
+  elements: fixed-size `[ux, uy, uz, rx, ry, rz]` layout, direction-cosine
+  truss stiffness, independent per-global-direction zero-length materials,
+  three-translation lumped mass. A full static solve (`Domain3` →
+  `AnalysisBuilder` → `Analysis3::step`) is verified end to end in
+  `core/tests/m15_spatial_truss.rs` against a closed-form space truss.
+  Element formulas themselves (`Truss` vs `Truss3`) stay separate concrete
+  types — see `ElementOps`'s doc comment for why that part isn't unified
+  the same way.
+  Remaining: spatial modal/transient plumbing (`TransientAnalysis`/
+  `modal_analysis` still only accept the planar `Domain`), a real spatial
+  `equal_dof`/`rigid_diaphragm` beyond planar identity ties, and the M10
+  wasm handoff (still rejects spatial input entirely — unrelated to this
+  core-side progress). See [`spatial-architecture.md`](spatial-architecture.md).
 
-- **M16 — Spatial elastic frame and constraints (3D).** Not started. Add a
-  right-handed, explicitly oriented `Linear3` transform, `ElasticBeamColumn3`
-  (axial, torsion, biaxial bending), local-y/local-z beam loads, and a real
-  constraint transformation for spatial rigid diaphragms; identity DOF
-  aliasing cannot express lever-arm kinematics. See
-  [`spatial-architecture.md`](spatial-architecture.md).
+- **M16 — Spatial elastic frame and constraints (3D).** Partially done.
+  `GeomTransf3` (`core/src/model/transform.rs`) is a first-class, reusable
+  3D geometric-transform type — local axes built from a `vec_xz`
+  orientation vector, plus the block-diagonal local↔global rotation — the
+  spatial counterpart of planar `GeomTransf`, so future spatial frame
+  elements share it rather than each inlining their own copy. It has two
+  variants: `Linear3`, and `PDelta3` (a linearized geometric-stiffness
+  correction from axial force in both bending planes — the `Iy`-plane
+  block is a hand-derived sign flip of the `Iz`-plane one, verified by
+  exercising both planes in `core/tests/m16_pdelta3.rs`, not just asserted
+  by analogy). `ElasticBeamColumn3`
+  (`core/src/model/elements/elastic_beam_column.rs`), which holds one, is a
+  12×12 Euler-Bernoulli frame (axial, torsion, biaxial bending via `E, G,
+  A, J, Iy, Iz`). Verified against Xara's `ElasticBeam3d`/
+  `LinearCrdTransf3d` and closed-form cantilever deflections, at the
+  transform level (`transform.rs`'s own tests), element level
+  (`spatial_tests` in `elastic_beam_column.rs`), and through the full
+  `Domain3`/`Analysis3` stack (`core/tests/m16_elastic_beam3.rs`,
+  `core/tests/m16_pdelta3.rs`).
+  Remaining: local-y/local-z beam loads and a real constraint
+  transformation for spatial rigid diaphragms (identity DOF aliasing cannot
+  express lever-arm kinematics). See [`spatial-architecture.md`](spatial-architecture.md).
 
-- **M17 — Spatial fiber/nonlinear frame elements (3D).** Not started.
-  `FiberSection3` has local y/z fiber locations and coupled `[N, My, Mz]`
-  response with explicit torsional stiffness; `DispBeamColumn3` and
-  `ForceBeamColumn3` follow as independently verified formulations, not 3D
-  constructor flags on their planar counterparts. See
+- **M17 — Spatial fiber/nonlinear frame elements (3D).** Done.
+  `FiberSection3` (`core/src/model/fiber_section.rs`) has local y/z fiber
+  locations and coupled `[N, Mz, My]` response with a 3×3 tangent
+  (product-of-inertia coupling included); torsion is explicit `G`/`J` on
+  the element (decoupled elastic `G*J/L`), not a fiber-derived quantity.
+  `DispBeamColumn3` and `ForceBeamColumn3`
+  (`core/src/model/elements/disp_beam_column.rs`,
+  `.../force_beam_column.rs`) are independently verified formulations, not
+  3D constructor flags on their planar counterparts —
+  `ForceBeamColumn3`'s basic system generalizes `ForceBeamColumn`'s to five
+  dof (axial plus chord-relative end rotations in both bending planes),
+  with the y-bending rows' rotation-coefficient sign flipped relative to
+  z-bending's (`ry = -dw/dx` vs `rz = +dv/dx`, the same substitution used
+  throughout the spatial bending code). Verified against
+  `ElasticBeamColumn3`'s exact closed-form biaxial elastic stiffness
+  (`core/tests/m17_disp_beam_column3.rs`,
+  `core/tests/m17_force_beam_column3.rs`) and, for `ForceBeamColumn3`, a
+  doubly-symmetric `ElasticPP` section yielding independently in both
+  bending planes with permanent set on unload. See
   [`spatial-architecture.md`](spatial-architecture.md).
 
 - **M18 — Spatial corotational geometry (3D), if confirmed in scope.** Not

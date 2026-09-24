@@ -1,6 +1,7 @@
 use nalgebra::DVector;
+use slotmap::Key;
 
-use crate::model::{Domain, NodeId, SparseMatrix};
+use crate::model::{Domain, ElementOps, NodeId, SparseMatrix};
 
 use super::{AnalysisError, SparseSolver};
 
@@ -8,8 +9,16 @@ use super::{AnalysisError, SparseSolver};
 /// variants only ever change how this *step's* load factor is chosen (the
 /// "predictor") — the iteration that follows (§ `Algorithm`) proceeds
 /// identically regardless of which one picked it.
+///
+/// Generic over `NId` (the controlled node's ID type — `NodeId` or
+/// `Node3Id`), defaulted to the planar profile so bare `Integrator` keeps
+/// working, the same trick `Domain` uses. `predict`/`correct` take the rest
+/// of the profile (`NDIM`/`NDOF`/`ELEMENT_DOF`/`E`) as their own
+/// generic parameters instead of `Integrator`'s, since an integrator's
+/// identity only depends on which node/DOF it controls, not which `Domain`
+/// it's later used with.
 #[derive(Debug, Clone, Copy)]
-pub enum Integrator {
+pub enum Integrator<NId = NodeId> {
     LoadControl {
         increment: f64,
     },
@@ -24,21 +33,25 @@ pub enum Integrator {
     /// doesn't respond to pseudo-time at all) once, then scale by whatever
     /// factor makes the controlled DOF's response match `increment`.
     DisplacementControl {
-        node: NodeId,
+        node: NId,
         dof: usize,
         increment: f64,
     },
 }
 
-impl Integrator {
+impl<NId: Copy> Integrator<NId> {
     /// Compute this step's new pseudo-time, given the domain's state as of
     /// the end of the *previous* (converged) step.
-    pub(crate) fn predict(
+    pub(crate) fn predict<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
         &self,
-        domain: &Domain,
+        domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
         solver: &SparseSolver,
         current_pseudo_time: f64,
-    ) -> Result<f64, AnalysisError> {
+    ) -> Result<f64, AnalysisError>
+    where
+        NId: Key,
+        E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    {
         match self {
             Integrator::LoadControl { increment } => Ok(current_pseudo_time + increment),
             Integrator::DisplacementControl { node, dof, increment } => {
@@ -81,14 +94,18 @@ impl Integrator {
     /// exactly where it already was after iteration 1, no matter how far
     /// the tangent has drifted since, while every other DOF still gets
     /// `du_bar`'s residual-driven correction.
-    pub(crate) fn correct(
+    pub(crate) fn correct<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
         &self,
-        domain: &Domain,
+        domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
         solver: &SparseSolver,
         k: &SparseMatrix,
         du_bar: DVector<f64>,
         pseudo_time: f64,
-    ) -> Result<(f64, DVector<f64>), AnalysisError> {
+    ) -> Result<(f64, DVector<f64>), AnalysisError>
+    where
+        NId: Key,
+        E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    {
         match self {
             Integrator::LoadControl { .. } => Ok((0.0, du_bar)),
             Integrator::DisplacementControl { node, dof, .. } => {

@@ -1,17 +1,38 @@
-use crate::model::Domain;
+use slotmap::Key;
+
+use crate::model::{
+    Domain, Element, Element3, ElementOps, Node3Id, NodeId, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF,
+    SPATIAL_NDIM, NDF,
+};
 
 use super::{Algorithm, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator, SparseSolver};
 
 /// A fully-wired analysis (only buildable via `AnalysisBuilder<Ready>::build`).
-pub struct Analysis {
-    pub(crate) domain: Domain,
+///
+/// Generic over the same kinematic profile as `Domain` (see its doc
+/// comment) — `Analysis`'s step/iteration logic doesn't care about element
+/// physics either, only about `Domain`'s generic assembly interface, so one
+/// implementation covers both profiles. Defaults to the planar profile, so
+/// bare `Analysis` keeps working unchanged; `Analysis3` (spatial) is a type
+/// alias below.
+pub struct Analysis<
+    const NDIM: usize = PLANAR_NDIM,
+    const NDOF: usize = NDF,
+    const ELEMENT_DOF: usize = { crate::model::ELEMENT_DOF },
+    NId = NodeId,
+    E = Element,
+> where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+{
+    pub(crate) domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
     /// Only actually consulted at `AnalysisBuilder<Ready>::build` time (to
     /// reject `Plain` against a domain with multi-point constraints) —
     /// kept here rather than dropped after `build` so `Analysis` still
     /// records which strategy it was built with.
     #[allow(dead_code)]
     pub(crate) constraint_handler: ConstraintHandler,
-    pub(crate) integrator: Integrator,
+    pub(crate) integrator: Integrator<NId>,
     pub(crate) algorithm: Algorithm,
     pub(crate) test: ConvergenceTest,
     pub(crate) solver: SparseSolver,
@@ -25,8 +46,13 @@ pub struct StepResult {
     pub load_factor: f64,
 }
 
-impl Analysis {
-    pub fn domain(&self) -> &Domain {
+impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E::Load: Clone,
+{
+    pub fn domain(&self) -> &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
         &self.domain
     }
 
@@ -39,7 +65,7 @@ impl Analysis {
     /// whichever pattern(s) should stop ramping (e.g. gravity) before the
     /// next phase starts — see implementation-plan's load-pattern/phase-
     /// composition milestone.
-    pub fn into_domain(self) -> Domain {
+    pub fn into_domain(self) -> Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
         self.domain
     }
 
@@ -47,7 +73,7 @@ impl Analysis {
     /// `Domain::hold_pattern_constant` right before `into_domain()` (the
     /// pattern must be frozen while `self.load_factor`, the pseudo-time to
     /// freeze at, is still known).
-    pub fn domain_mut(&mut self) -> &mut Domain {
+    pub fn domain_mut(&mut self) -> &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
         &mut self.domain
     }
 
@@ -63,7 +89,7 @@ impl Analysis {
     /// (e.g. gravity → pushover, where `Algorithm`/`ConvergenceTest` also
     /// typically change and a pattern needs freezing), use
     /// `into_domain()` + a fresh `AnalysisBuilder` instead.
-    pub fn set_integrator(&mut self, integrator: Integrator) {
+    pub fn set_integrator(&mut self, integrator: Integrator<NId>) {
         self.integrator = integrator;
     }
 
@@ -142,3 +168,7 @@ impl Analysis {
         })
     }
 }
+
+/// `Analysis`'s spatial instantiation — see `Domain3`'s doc comment for why
+/// this is a type alias rather than a hand-duplicated struct.
+pub type Analysis3 = Analysis<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id, Element3>;

@@ -7,12 +7,13 @@ mod materials;
 mod node;
 mod transform;
 
-pub use domain::Domain;
+pub use domain::{Domain, Domain3};
 pub use elements::{
-    DispBeamColumn, Element, ElasticBeamColumn, ElementId, ForceBeamColumn, SpatialElementMatrix,
-    SpatialElementVector, Truss, Truss3, ZeroLength,
+    DispBeamColumn, DispBeamColumn3, Element, Element3, Element3Id, ElasticBeamColumn, ElasticBeamColumn3, ElementId,
+    ElementOps, ForceBeamColumn, ForceBeamColumn3, SpatialElementMatrix, SpatialElementVector, Truss, Truss3,
+    ZeroLength, ZeroLength3,
 };
-pub use fiber_section::{Fiber, FiberSection};
+pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
 pub use integration::BeamIntegration;
 pub use load_pattern::{ElementLoad, LoadPatternId, LoadSeries};
 pub use materials::{Material, Pinching4DmgCyc, Pinching4State};
@@ -20,7 +21,7 @@ pub use node::{
     Node, Node2, Node3, Node3Id, NodeId, SpatialDof, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
     SPATIAL_NDF, SPATIAL_NDIM,
 };
-pub use transform::GeomTransf;
+pub use transform::{GeomTransf, GeomTransf3};
 
 /// Degrees of freedom per node: 2D translation (x, y) plus in-plane
 /// rotation (z). Bumped from 2 to 3 at M3 to carry `ElasticBeamColumn`'s
