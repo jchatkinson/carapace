@@ -7,20 +7,27 @@
 //! happens upstream of decode, so decode only ever sees plain array
 //! indices, never sparse OpenSees-style tags.
 //!
-//! These are plain Rust `Vec`-backed structs, not yet the transferable
-//! `Float64Array`/`Uint8Array` values the handoff's wire format specifies
-//! crossing `postMessage`: that binding (via `wasm-bindgen`/
-//! `serde-wasm-bindgen`) is deferred until `pysees`'s compiler exists to
-//! actually produce the bytes. Once it lands, each `Vec<f64>`/`Vec<u32>`
-//! here is exactly the shape a `Float64Array`/`Uint32Array` copies into.
-//! Likewise, the handoff's per-table `tables` presence directory (a table
-//! for an unsupported variant is *absent*, not present-but-empty) isn't
-//! modeled yet — every table below is always present, possibly empty.
+//! Each field is a plain `Vec`, not yet the transferable `Float64Array`/
+//! `Uint8Array` values the handoff's wire format ultimately specifies for
+//! `postMessage`: `boundary.rs`'s `serde-wasm-bindgen` decoding today
+//! accepts an ordinary JS array for each of these (or a typed array,
+//! copied element-by-element) rather than transferring one. Once real
+//! transferable-array support lands, each `Vec<f64>`/`Vec<u32>` here is
+//! exactly the shape a `Float64Array`/`Uint32Array` copies into. Likewise,
+//! the handoff's per-table `tables` presence directory (a table for an
+//! unsupported variant is *absent*, not present-but-empty) isn't modeled
+//! yet — every table below is always present, possibly empty.
+//!
+//! `#[serde(rename_all = "camelCase")]` throughout so the JS/TS shape
+//! matches pysees-handoff.md's own naming (`nodeI`, not `node_i`).
+
+use serde::{Deserialize, Serialize};
 
 /// Node table: `coords` stride 2 (x, y); `fixed` one bitmask byte per node
 /// (bit 0 = ux, bit 1 = uy, bit 2 = rz); mass is sparse, addressed via a
 /// parallel node-index array since most nodes carry none.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodeTable {
     pub coords: Vec<f64>,
     pub fixed: Vec<u8>,
@@ -35,20 +42,27 @@ impl NodeTable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TransformSpec {
     Linear,
     PDelta,
     Corotational,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum IntegrationSpec {
     Legendre { points: u32 },
     Lobatto { points: u32 },
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TrussTable {
     pub node_i: Vec<u32>,
     pub node_j: Vec<u32>,
@@ -58,7 +72,8 @@ pub struct TrussTable {
     pub density: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ElasticBeamColumnTable {
     pub node_i: Vec<u32>,
     pub node_j: Vec<u32>,
@@ -72,7 +87,8 @@ pub struct ElasticBeamColumnTable {
 /// Shared shape for `DispBeamColumn` and `ForceBeamColumn` — both are one
 /// prismatic fiber section (see [`FiberTable`]) replicated across
 /// integration points by `core`'s own element constructors.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FiberBeamColumnTable {
     pub node_i: Vec<u32>,
     pub node_j: Vec<u32>,
@@ -83,7 +99,8 @@ pub struct FiberBeamColumnTable {
     pub density: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ZeroLengthTable {
     pub node_i: Vec<u32>,
     pub node_j: Vec<u32>,
@@ -96,7 +113,8 @@ pub struct ZeroLengthTable {
 /// and offset-indexed: section `k` occupies
 /// `section_offsets[k]..section_offsets[k + 1]` in `y`/`area`/`material`.
 /// `section_offsets` therefore has `num_sections + 1` entries.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FiberTable {
     pub section_offsets: Vec<u32>,
     pub y: Vec<f64>,
@@ -111,20 +129,27 @@ impl FiberTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum TimeSeriesSpec {
     Constant,
     Linear { slope: f64 },
     Path { times: Vec<f64>, factors: Vec<f64> },
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoadPatternTable {
     pub series: Vec<TimeSeriesSpec>,
     pub scale_factor: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NodalLoadTable {
     /// Index into `LoadPatternTable`.
     pub pattern: Vec<u32>,
@@ -143,7 +168,8 @@ pub struct NodalLoadTable {
     pub stage: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ElementKind {
     Truss,
     ElasticBeamColumn,
@@ -152,16 +178,26 @@ pub enum ElementKind {
     ZeroLength,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ElementLoadSpec {
     /// Only `ElasticBeamColumn` currently honors this (`core`'s
     /// `Element::form_load_vector` falls through to zero for every other
     /// kind) — decode rejects any other `element_kind` explicitly rather
     /// than silently accepting a load that will never apply.
-    UniformTransverse(f64),
+    ///
+    /// A struct-like (not tuple) variant: serde's internally-tagged enum
+    /// representation (`tag = "kind"`, needed for a JS-friendly
+    /// discriminated union) can't tag a bare-scalar tuple variant.
+    UniformTransverse { w: f64 },
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ElementLoadTable {
     pub pattern: Vec<u32>,
     pub element_kind: Vec<ElementKind>,

@@ -5,7 +5,16 @@
 //! against a newer/older wasm build) — the compiler is expected to catch
 //! entity-level problems (missing tags, unsupported materials, ...) first.
 
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+/// `Serialize`, not `Deserialize` — a `DecodeError` only ever flows *out*
+/// to JS (`boundary.rs`), as a `{ kind: "...", ... }`-shaped object.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum DecodeError {
     /// `header.space` is neither the planar profile this decoder
     /// implements nor (yet) any other recognized value.
@@ -16,7 +25,7 @@ pub enum DecodeError {
     /// (`modal`/`transient` today).
     UnsupportedStage {
         stage_id: String,
-        kind: &'static str,
+        stage_kind: &'static str,
     },
     UnknownNodeIndex {
         table: &'static str,
@@ -37,7 +46,7 @@ pub enum DecodeError {
         row: u32,
     },
     UnknownElementIndex {
-        kind: &'static str,
+        table: &'static str,
         row: u32,
     },
     UnknownStageIndex {

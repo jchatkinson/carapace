@@ -4,6 +4,7 @@
 //! them inline, mirroring `core`'s own arena-of-indices philosophy.
 
 use carapace_core::model::Material;
+use serde::{Deserialize, Serialize};
 
 use super::error::DecodeError;
 
@@ -14,7 +15,12 @@ use super::error::DecodeError;
 /// first decoder: `Hysteretic`/`Pinching4` are not yet supported (their
 /// wire representation would need to mirror their large field lists, and
 /// neither is needed by the first acceptance case).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum MaterialSpec {
     Elastic {
         e: f64,

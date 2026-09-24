@@ -165,11 +165,11 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
             *elastic_beam_ids
                 .get(row as usize)
                 .ok_or(DecodeError::UnknownElementIndex {
-                    kind: "elastic_beam_columns",
+                    table: "elastic_beam_columns",
                     row,
                 })?;
         let load = match input.element_loads.load[i] {
-            ElementLoadSpec::UniformTransverse(w) => ElementLoad::UniformTransverse(w),
+            ElementLoadSpec::UniformTransverse { w } => ElementLoad::UniformTransverse(w),
         };
         let stage = input.element_loads.stage[i];
         element_loads_by_stage
@@ -219,13 +219,13 @@ fn check_supported_stages(stages: &[StageSpec]) -> Result<(), DecodeError> {
             StageSpec::Modal { id, .. } => {
                 return Err(DecodeError::UnsupportedStage {
                     stage_id: id.clone(),
-                    kind: "modal",
+                    stage_kind: "modal",
                 })
             }
             StageSpec::Transient { id } => {
                 return Err(DecodeError::UnsupportedStage {
                     stage_id: id.clone(),
-                    kind: "transient",
+                    stage_kind: "transient",
                 })
             }
             StageSpec::Static { .. } => {}
@@ -305,7 +305,7 @@ fn add_zero_lengths(
         materials_by_row
             .get_mut(row as usize)
             .ok_or(DecodeError::UnknownElementIndex {
-                kind: "zero_lengths",
+                table: "zero_lengths",
                 row,
             })?
             .push((dof, material_index));

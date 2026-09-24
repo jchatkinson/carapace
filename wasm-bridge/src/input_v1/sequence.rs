@@ -6,7 +6,14 @@
 //! decodes structurally and fails with a named diagnostic, not a parse
 //! error, when it uses a stage kind this decoder doesn't implement yet.
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum IntegratorSpec {
     LoadControl {
         increment: f64,
@@ -22,13 +29,19 @@ pub enum IntegratorSpec {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AlgorithmSpec {
     Linear,
     NewtonRaphson,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ConvergenceSpec {
     NormUnbalance { tol: f64, max_iter: u32 },
     NormDispIncr { tol: f64, max_iter: u32 },
@@ -45,7 +58,12 @@ impl ConvergenceSpec {
     };
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum StageSpec {
     Static {
         id: String,
@@ -83,14 +101,16 @@ impl StageSpec {
 /// narrower than the handoff's general `RecorderSpec` sketch (target
 /// kind/tags, response kind, component layout, sampling spec) — those
 /// belong to the worker/SQLite layer this Rust-side decoder doesn't own.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecorderSpec {
     /// Index into `NodeTable`.
     pub node: u32,
     pub dof: u8,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SequenceSpec {
     pub stages: Vec<StageSpec>,
     pub recorders: Vec<RecorderSpec>,

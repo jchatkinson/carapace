@@ -9,11 +9,17 @@ use carapace_core::analysis::{
     Integrator,
 };
 use carapace_core::model::{Domain, ElementId, ElementLoad, LoadPatternId, NodeId};
+use serde::Serialize;
 
 /// `AnalysisError`'s fields, restated so `advance`'s result doesn't need to
 /// name `carapace_core`'s error type directly — kept in the same tagged-
 /// variant style (implementation-plan.md §2.8).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AnalysisErrorDetail {
     FailedToConverge { step: usize },
     SingularSystem,
@@ -79,7 +85,8 @@ enum StageRunner {
 /// the raw signal those would be built from. `error`, once set, is sticky —
 /// later stages are not attempted, matching "a stage's `AnalysisError`
 /// stops the sequence".
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StepOutcome {
     pub done: bool,
     pub stage_complete: bool,

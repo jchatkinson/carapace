@@ -121,7 +121,7 @@ fn rejects_a_modal_stage_with_a_named_diagnostic_not_a_panic() {
         err,
         carapace_wasm::input_v1::DecodeError::UnsupportedStage {
             stage_id: "modes".to_string(),
-            kind: "modal"
+            stage_kind: "modal"
         }
     );
 }

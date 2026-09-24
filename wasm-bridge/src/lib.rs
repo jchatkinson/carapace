@@ -2,9 +2,13 @@ use wasm_bindgen::prelude::*;
 
 /// M10 (implementation-plan.md / docs/pysees-handoff.md): `CarapaceInputV1`
 /// header/table types, its hand-written decoder, and the stepped `Session`
-/// API. Not yet exposed across the `wasm_bindgen` boundary below — see the
-/// module's own doc comment.
+/// API. Exposed across the `wasm_bindgen` boundary by `boundary` — see
+/// both modules' own doc comments for exactly what that boundary does and
+/// doesn't do yet.
 pub mod input_v1;
+
+mod boundary;
+pub use boundary::{decode_input, WasmSession};
 
 use carapace_core::analysis::{
     modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
