@@ -218,3 +218,135 @@ fn elastic_pp_section_softens_past_yield_in_both_planes_and_shows_permanent_set_
         assert!(u3.abs() < u2.abs(), "dof {disp_dof}: unloaded displacement should be smaller in magnitude than at peak load");
     }
 }
+
+/// M17 acceptance (spatial-architecture.md's noted gap): the two tests above
+/// both use doubly-symmetric fiber layouts with zero product of inertia
+/// (`Iyz = 0`), so neither exercises `FiberSection3::trial`'s `eiyz` tangent
+/// term or the resulting cross-coupling between the two bending planes that
+/// a real, non-doubly-symmetric section has. This is the spatial analogue of
+/// `m8_force_beam_column.rs`'s `asymmetric_elastic_section_matches_hand_
+/// derived_closed_form`, generalized from a 2x2 to a 3x3 section flexibility.
+///
+/// Same technique as that planar test: for a single-element cantilever with
+/// only tip forces applied (no end moments), all five basic forces
+/// `q = [q1..q5]` are fixed by nodal equilibrium alone, independent of
+/// section properties (`q1` = axial, `q3 = q5 = 0` since there's no applied
+/// end moment in either plane, and `q2`/`q4` follow from the tip shear
+/// balance in each plane via `basic_deformation_matrix`'s `A^T` map, exactly
+/// as the planar test derives `q2 = -tip_transverse * length`). Then
+/// `v = F*q` gives the exact basic deformation from the section's *elastic*
+/// flexibility (constant along the member, since an elastic material's
+/// tangent doesn't depend on strain), with `F = integral(b^T f b) dx`
+/// evaluated in closed form from `b_matrix`'s `(xi-1)`/`xi` shape functions
+/// (`integral (xi-1)^2 = integral xi^2 = 1/3`, `integral (xi-1)*xi = -1/6`,
+/// `integral (xi-1) = -1/2`, `integral xi = 1/2` over `xi` in `[0,1]`) — the
+/// same integrals the planar test evaluates by hand, just applied to a 3x3
+/// `f` instead of a 2x2 one. `f = k^-1` (`k` `FiberSection3::trial`'s
+/// tangent) is inverted here via the explicit 3x3 cofactor/determinant
+/// formula, independently of the `nalgebra` inversion the element itself
+/// uses. Only `v1`/`v2`/`v4` are needed (not `v3`/`v5`, which fix the tip
+/// *rotations* `Rz`/`Ry`): with node_i fully fixed, `basic_deformation_
+/// matrix`'s `v2`/`v4` rows depend only on `Uy_j`/`Uz_j`, giving the tip
+/// translations directly.
+#[test]
+fn asymmetric_biaxial_section_matches_hand_derived_closed_form() {
+    let (e, g, j, length): (f64, f64, f64, f64) = (30_000.0, 12_000.0, 50.0, 100.0);
+    let tip_axial = 500.0;
+    let (fy, fz) = (-10.0, 6.0);
+
+    // An asymmetric layout (no symmetry about either axis and no fiber at
+    // the centroid), giving nonzero EQz, EQy, *and* EIyz — the section
+    // property this test exists to exercise.
+    let fibers = vec![
+        Fiber3::new(6.0, 1.0, 1.0, Material::Elastic { e }),
+        Fiber3::new(1.0, 2.0, 2.0, Material::Elastic { e }),
+        Fiber3::new(-4.0, -1.0, 3.0, Material::Elastic { e }),
+    ];
+
+    let mut domain = Domain3::new();
+    let node_i = domain.add_node(
+        Node3::new([0.0, 0.0, 0.0])
+            .fix(SpatialDof::Ux as usize)
+            .fix(SpatialDof::Uy as usize)
+            .fix(SpatialDof::Uz as usize)
+            .fix(SpatialDof::Rx as usize)
+            .fix(SpatialDof::Ry as usize)
+            .fix(SpatialDof::Rz as usize),
+    );
+    let node_j = domain.add_node(Node3::new([length, 0.0, 0.0]));
+    domain.load_node(node_j, SpatialDof::Ux as usize, tip_axial);
+    domain.load_node(node_j, SpatialDof::Uy as usize, fy);
+    domain.load_node(node_j, SpatialDof::Uz as usize, fz);
+    domain.add_element(Element3::ForceBeamColumn3(ForceBeamColumn3::new(
+        node_i,
+        node_j,
+        g,
+        j,
+        [0.0, 0.0, 1.0],
+        fibers,
+        BeamIntegration::Lobatto { points: 4 },
+    )));
+
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::LoadControl { increment: 1.0 })
+        .algorithm(Algorithm::Linear)
+        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .build(domain);
+    analysis.step().expect("cantilever ForceBeamColumn3 should solve");
+    let d = analysis.domain().node(node_j).displacement;
+
+    // Section stiffness sums (EA, EQz, EQy, EIzz, EIyy, EIyz), matching
+    // `FiberSection3::trial`'s tangent exactly but computed independently
+    // here from the fiber layout rather than by calling `trial`.
+    let ea = e * (1.0 + 2.0 + 3.0);
+    let eqz = e * (6.0 * 1.0 + 1.0 * 2.0 + -4.0 * 3.0);
+    let eqy = e * (1.0 * 1.0 + 2.0 * 2.0 + -1.0 * 3.0);
+    let eizz = e * (36.0 * 1.0 + 1.0 * 2.0 + 16.0 * 3.0);
+    let eiyy = e * (1.0 * 1.0 + 4.0 * 2.0 + 1.0 * 3.0);
+    let eiyz = e * (6.0 * 1.0 * 1.0 + 1.0 * 2.0 * 2.0 + -4.0 * -1.0 * 3.0);
+
+    // k = [[a,b,c],[b,d,g],[c,g,f]], matching `FiberSection3::trial`'s
+    // `[[ea,-eqz,eqy],[-eqz,eizz,-eiyz],[eqy,-eiyz,eiyy]]`. Inverted here by
+    // the explicit symmetric-3x3 cofactor/determinant formula.
+    let (ka, kb, kc, kd, ke, kf) = (ea, -eqz, eqy, eizz, -eiyz, eiyy);
+    let det = ka * kd * kf - ka * ke * ke - kb * kb * kf + 2.0 * kb * kc * ke - kc * kc * kd;
+
+    let f11 = (kd * kf - ke * ke) / det;
+    let f12 = (kc * ke - kb * kf) / det;
+    let f13 = (kb * ke - kc * kd) / det;
+    let f22 = (ka * kf - kc * kc) / det;
+    let f23 = (kb * kc - ka * ke) / det;
+    let f33 = (ka * kd - kb * kb) / det;
+
+    // Nodal equilibrium at the free tip alone, no applied end moments:
+    // q1 = axial, q3 = q5 = 0, and (q2, q4) from the tip shear balance in
+    // each plane, the direct biaxial extension of the planar test's
+    // `q2 = -tip_transverse * length`.
+    let (q1, q2, q4) = (tip_axial, -fy * length, -fz * length);
+
+    let l = length;
+    let v1 = l * f11 * q1 - (l * f12 / 2.0) * q2 - (l * f13 / 2.0) * q4;
+    let v2 = -(l * f12 / 2.0) * q1 + (l * f22 / 3.0) * q2 + (l * f23 / 3.0) * q4;
+    let v4 = -(l * f13 / 2.0) * q1 + (l * f23 / 3.0) * q2 + (l * f33 / 3.0) * q4;
+
+    let expected_axial = v1;
+    let expected_uy = -l * v2;
+    let expected_uz = -l * v4;
+
+    assert!(
+        (d[0] - expected_axial).abs() < 1e-6,
+        "axial: got {}, expected {expected_axial}",
+        d[0]
+    );
+    assert!(
+        (d[1] - expected_uy).abs() < 1e-6,
+        "uy: got {}, expected {expected_uy}",
+        d[1]
+    );
+    assert!(
+        (d[2] - expected_uz).abs() < 1e-6,
+        "uz: got {}, expected {expected_uz}",
+        d[2]
+    );
+}

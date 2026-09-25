@@ -7,8 +7,10 @@ to IndexedDB and serves result queries. The solver does not own a database
 and does not retain a complete recorder history in memory.
 
 This extends the ownership and worker protocol in
-[`pysees-handoff.md`](pysees-handoff.md). It does not require SQLite, OPFS,
-or changes to `carapace-core`.
+[`pysees-handoff.md`](obsolete/pysees-handoff.md) (moved to `docs/obsolete/`
+as a superseded planning doc, but still the source for the run
+lifecycle/worker-protocol concepts this plan builds on). It does not require
+SQLite, OPFS, or changes to `carapace-core`.
 
 ## Goals and invariants
 

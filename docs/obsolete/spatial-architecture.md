@@ -338,11 +338,23 @@ doubly-symmetric `ElasticPP` section yielding independently under a
 past_yield_in_both_planes_and_shows_permanent_set_on_unload`), the spatial
 analogue of `m8_force_beam_column.rs`'s equivalent planar test.
 
-Not done: asymmetric (non-doubly-symmetric) biaxial section coupling isn't
-exercised by a dedicated test the way `m8_force_beam_column.rs`'s
-`asymmetric_elastic_section_matches_hand_derived_closed_form` covers the
-planar element — the four-corner and doubly-symmetric-eight-fiber sections
-used so far have zero product-of-inertia coupling by construction.
+**Done.** Asymmetric (non-doubly-symmetric) biaxial section coupling —
+`asymmetric_biaxial_section_matches_hand_derived_closed_form`
+(`core/tests/m17_force_beam_column3.rs`), the spatial analogue of
+`m8_force_beam_column.rs`'s `asymmetric_elastic_section_matches_hand_
+derived_closed_form`. A three-fiber section with no symmetry about either
+axis (nonzero `EQz`, `EQy`, *and* `EIyz`) is checked against a hand-derived
+closed form: nodal equilibrium alone fixes all five basic forces `q`
+(`q3 = q5 = 0`, no applied end moments), then `v = F*q` from the element
+flexibility `F = integral(b^T f b) dx`, evaluated in closed form from
+`b_matrix`'s `(xi-1)`/`xi` shape-function integrals over `[0,1]`, with the
+3x3 section flexibility `f = k^-1` inverted via the explicit cofactor/
+determinant formula — independent of both `FiberSection3::trial`'s own
+tangent assembly and the `nalgebra` inversion `ForceBeamColumn3` uses
+internally. This was M17's one remaining gap — the four-corner and
+doubly-symmetric-eight-fiber sections used elsewhere still have zero
+product-of-inertia coupling by construction, so this is the only test
+exercising `eiyz`/`f12`/`f13`/`f23`.
 
 ### M18 — Spatial corotational geometry, if needed
 

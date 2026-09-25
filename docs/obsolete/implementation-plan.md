@@ -622,7 +622,12 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   (`core/tests/m17_disp_beam_column3.rs`,
   `core/tests/m17_force_beam_column3.rs`) and, for `ForceBeamColumn3`, a
   doubly-symmetric `ElasticPP` section yielding independently in both
-  bending planes with permanent set on unload. See
+  bending planes with permanent set on unload, plus (closing this
+  milestone's last open item) an asymmetric, non-doubly-symmetric section
+  with nonzero product of inertia against a hand-derived closed form
+  (`asymmetric_biaxial_section_matches_hand_derived_closed_form`), the
+  spatial analogue of `m8_force_beam_column.rs`'s
+  `asymmetric_elastic_section_matches_hand_derived_closed_form`. See
   [`spatial-architecture.md`](spatial-architecture.md).
 
 - **M18 — Spatial corotational geometry (3D), if confirmed in scope.** Not

@@ -12,7 +12,7 @@ WebAssembly — `f2c` for the Fortran BLAS/LAPACK/ARPACK dependencies, `emcc`
 for the C++ — and produced correct results under Node. This worked: it's a
 real, running proof that the numerics and toolchain are sound, and it's the
 numerical oracle Carapace's own tests verify against (see
-`docs/implementation-plan.md` §8, "Verification methodology"). The spike
+`docs/obsolete/implementation-plan.md` §8, "Verification methodology"). The spike
 itself is preserved at `reference/xara-spike/` (source-level artifacts and
 dependency-closure lists, not build outputs) — see that directory's README
 for what's there.
@@ -68,7 +68,7 @@ None of this is a knock on Xara — it's 90s/2000s C++ architected for
 arbitrary extensibility, MPI parallelism, and database persistence, none of
 which a single-threaded browser worker needs. Carapace's architecture
 (enum-dispatched closed catalogs, typestate-enforced analysis wiring, no
-broker/serialization layer — see `docs/implementation-plan.md` §3) is
+broker/serialization layer — see `docs/obsolete/implementation-plan.md` §3) is
 designed around what's actually being built, not what OpenSees needed to be
 in 1997.
 

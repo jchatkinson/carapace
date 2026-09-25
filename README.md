@@ -11,24 +11,74 @@ Carapace is heavily inspired by [OpenSees](https://opensees.berkeley.edu/) /
 reimplementation. See [`docs/xara-feasibility.md`](docs/xara-feasibility.md)
 for why a direct C++-to-wasm port wasn't the path taken.
 
-## Status
+## Features
 
-- [x] M0–M8: Planar analysis core.
-- [x] M9: Planar co-rotational transform implementation.
-- [ ] M9: Dedicated co-rotational acceptance tests.
-- [x] M10: CarapaceInputV1 decode and stepped Session (Rust side).
-- [ ] M10: pysees compiler, wasm-bindgen boundary, and worker execution.
-- [ ] M11: Results database hardening.
-- [ ] M12–M13: Algorithm extensions and event-to-event stepping.
-- [x] M14: Load patterns, multi-phase analysis, and ground motion.
-- [x] M15: Spatial modal and transient analysis.
-- [x] M16: Spatial beam loads and diaphragm constraints.
-- [ ] M17: Asymmetric biaxial section coverage.
-- [ ] M18 (optional): Spatial co-rotational geometry.
+Both a 2D (`ux, uy, rz`) and 3D (`ux, uy, uz, rx, ry, rz`) execution
+profile exist side by side as one generic implementation (const-generic
+over `NDIM`/`NDOF`/`ELEMENT_DOF`), not a hand-duplicated second engine —
+see each element/section entry below for which profile(s) it covers.
 
-See [`docs/implementation-plan.md`](docs/implementation-plan.md) and
-[`docs/spatial-architecture.md`](docs/spatial-architecture.md) for milestone
-details.
+**Elements**
+- [x] Truss (2D + 3D)
+- [x] ZeroLength — independent per-DOF materials (2D + 3D; 3D springs are
+  axis-aligned only, no arbitrary orientation)
+- [x] ElasticBeamColumn — axial, bending, torsion, `Linear`/`PDelta`
+  transforms (2D + 3D)
+- [x] DispBeamColumn — fiber-discretized, displacement-based (2D uniaxial,
+  3D biaxial)
+- [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
+  (2D uniaxial, 3D biaxial)
+- [x] 2D co-rotational transform (large-displacement geometry)
+- [ ] 3D co-rotational transform
+- [ ] Nonlinear torsion (3D frame torsion is a decoupled elastic `G*J` term
+  today, not fiber-derived)
+
+**Materials**
+- [x] Elastic
+- [x] ElasticPP (elastic-perfectly-plastic, with permanent set)
+- [x] Gap (one-sided gap) / Ent (no-tension)
+- [x] Steel01 (bilinear kinematic + isotropic hardening)
+- [x] Steel02 (Menegotto-Pinto smooth transition curve)
+- [x] Concrete01 (Kent-Scott-Park envelope, no tension)
+- [x] Concrete02 (Concrete01 + linear tension softening)
+- [x] Hysteretic (multi-linear pinching + damage backbone)
+- [x] Pinching4 (four-point pinching + independent cyclic-damage rules)
+- [x] Parallel / Series / MinMax (material combinators — composite
+  stress/strain coupling and strain-bound failure wrapping over any of the
+  above)
+
+**Analysis**
+- [x] Static analysis: load control, displacement control; `Linear` and
+  `NewtonRaphson` algorithms
+- [x] Multi-phase/staged analysis with frozen (held-constant) load patterns
+- [x] Modal analysis (Lanczos eigensolver)
+- [x] Transient analysis (Newmark-β, Rayleigh damping, ground motion)
+- [x] Sparse direct solver
+- [ ] Additional algorithms: line search, Krylov acceleration, event-to-event
+  stepping (design in [`docs/algorithms.md`](docs/algorithms.md))
+
+**Constraints**
+- [x] `equal_dof` (2D + 3D)
+- [x] Rigid diaphragm — 2D (identity alias) and 3D (true affine constraint
+  with lever-arm coupling, not identity aliasing)
+- [ ] Chained/nested rigid diaphragms
+
+**wasm / browser boundary**
+- [x] `CarapaceInputV1` wire format: panic-free decode plus a stepped
+  `Session`/`advance` API, budget-driven for cooperative cancellation
+- [x] `wasm_bindgen` boundary exposing `decodeInput`/`advance` to JS (first
+  pass: structured-clone transfer via `serde-wasm-bindgen`)
+- [ ] Zero-copy transferable-typed-array wire format for `postMessage`
+
+See [`docs/results-storage-indexeddb.md`](docs/results-storage-indexeddb.md)
+for the current results-persistence design — IndexedDB-based, implemented on
+the `pysees` side, not SQLite/OPFS.
+
+Superseded planning docs (the original milestone-by-milestone implementation
+plan, the 3D-profile architecture rationale, the pysees handoff contract,
+and a rejected Turso-based storage alternative) live in
+[`docs/obsolete/`](docs/obsolete/) — useful for the reasoning behind past
+decisions, no longer maintained as living specs.
 
 ## Workspace layout
 
@@ -39,9 +89,10 @@ carapace/
 ├── wasm-bridge/     # carapace-wasm: thin wasm-bindgen layer exposing core's API
 │                    to JS. Should contain no numerical logic of its own.
 └── docs/
-    ├── implementation-plan.md   # comprehensive design doc + milestones — read this first
-    ├── pysees-handoff.md        # pysees model/sequence → worker contract for M10/M11
-    └── spatial-architecture.md  # 3D execution-profile architecture and milestones M15–M18
+    ├── algorithms.md               # design for not-yet-built algorithm extensions
+    ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
+    ├── xara-feasibility.md          # why this is a from-scratch reimplementation, not a port
+    └── obsolete/                    # superseded planning docs, kept for history
 ```
 
 ## Building
@@ -67,16 +118,23 @@ inside a wasm runtime directly.
 
 ## Read next
 
-**`docs/implementation-plan.md`** — architecture principles and rationale, full
-feature scope, milestone-by-milestone plan with acceptance criteria, and open
-decisions that need resolving early (linear algebra crate, ARPACK strategy).
-Any new coding session on this repo should start there.
+Start with the **Features** checklist above for what's implemented today.
 
-For the frontend/worker boundary, then read
-**[`docs/pysees-handoff.md`](docs/pysees-handoff.md)** — the required pysees
-model and analysis-sequence contract, run lifecycle, transport, and results
-database design for M10/M11.
+For the frontend/worker boundary and results persistence, read
+**[`docs/results-storage-indexeddb.md`](docs/results-storage-indexeddb.md)**
+— the current run lifecycle, transport, and IndexedDB results-storage design
+(implemented on the `pysees` side).
 
-For the 3D (spatial) profile — in progress, see Status above — read
-**[`docs/spatial-architecture.md`](docs/spatial-architecture.md)** before
-changing node DOFs, element transformations, fiber sections, or constraints.
+For planned-but-not-built algorithm work (line search, Krylov acceleration,
+event-to-event stepping), read
+**[`docs/algorithms.md`](docs/algorithms.md)**.
+
+For the reasoning behind building a from-scratch engine instead of porting
+Xara/OpenSees to WebAssembly, read
+**[`docs/xara-feasibility.md`](docs/xara-feasibility.md)**.
+
+For historical design rationale — the original milestone plan, the
+3D-profile architecture decisions, the pysees handoff contract, and a
+rejected Turso-based storage alternative — see
+**[`docs/obsolete/`](docs/obsolete/)**. These are no longer maintained as
+living specs; treat them as an explanation of *why*, not a current *what*.
