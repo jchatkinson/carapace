@@ -5,6 +5,124 @@ use super::super::{
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
+/// Couples one "shear" DOF to a *different* DOF's own material — the
+/// normal direction's current force — via a bilinear-kinematic-hardening
+/// Coulomb return map: sticks (stiffness `k0`) until `|V|` reaches
+/// `mu * yield-eligible normal force`, then slides with post-slip tangent
+/// `b*k0` (see the `b` field doc comment for why `b` is required, not
+/// optional).
+///
+/// This is deliberately *not* a `Material` variant: `Material::evaluate` is
+/// a pure function of one scalar strain (every call site — `Truss`,
+/// `ZeroLength`, `Fiber`, the `Parallel`/`Series`/`MinMax` composites —
+/// depends on that signature), and friction's yield force needs a second
+/// DOF's current force, which a single `Material` has no way to see. So the
+/// coupling lives here, in the element, not the material catalog.
+///
+/// Sign convention: this codebase is compression-negative (see
+/// `Material::Ent`/`Gap` — `strain <= 0.0` is the compression/engaged
+/// branch). Friction is mobilized only when the normal direction is in
+/// compression: yield force is `mu * (-normal_force).max(0.0)`.
+///
+/// The return map: `trial = k0*(shear_relative - slip)` is the elastic
+/// predictor (same shape as `ElasticPP`'s `trial_stress = e*(strain - ep)`,
+/// `elastic_like.rs`). Inside the yield surface, `force = trial`. Past it,
+/// this is standard 1D linear-kinematic-hardening plasticity with
+/// (fixed, for one call) yield force `yield_force` and hardening modulus
+/// chosen so the post-yield tangent is exactly `b*k0`:
+/// `force = b*trial + (1-b)*yield_force*sign(trial)`, which by construction
+/// satisfies `k0*(shear_relative - next_slip) == force` — so, exactly like
+/// `ElasticPP`'s `next_ep = strain - stress/e`, `next_slip =
+/// shear_relative - force/k0`.
+#[derive(Debug, Clone, Copy)]
+pub struct Friction {
+    pub normal_dof: usize,
+    pub shear_dof: usize,
+    pub mu: f64,
+    pub k0: f64,
+    /// Post-slip hardening ratio (fraction of `k0`) — required at
+    /// construction, not defaulted, so callers make an active choice. A
+    /// small nonzero value (recommended starting range `1e-3`-`1e-4`) keeps
+    /// the post-slip tangent away from exactly zero: while sliding, this
+    /// DOF is commonly the *only* stiffness path on its shear direction, so
+    /// an exactly-zero tangent risks a structurally singular row/column in
+    /// the global system (`AnalysisError::SingularSystem`) — the same
+    /// reasoning behind `Material::MinMax`'s nonzero failed-state tangent
+    /// floor, except here `b` is part of the actual force law (rounding the
+    /// stick/slip corner, reducing Newton bouncing at the transition), not
+    /// a tangent-only fudge. Set to `0.0` for an exact textbook Coulomb
+    /// comparison and accept the singularity risk that comes back with it.
+    pub b: f64,
+    slip: f64,
+}
+
+impl Friction {
+    pub fn new(normal_dof: usize, shear_dof: usize, mu: f64, k0: f64, b: f64) -> Self {
+        Friction { normal_dof, shear_dof, mu, k0, b, slip: 0.0 }
+    }
+
+    /// `(shear_force, d(force)/d(shear_relative), d(force)/d(normal_force),
+    /// next_slip)` — same `(value, tangent, next_committed_state)` shape as
+    /// `Material::trial_stress_tangent`/committed-state pair, plus the extra
+    /// coupling derivative friction needs so the caller can chain-rule it
+    /// through the normal material's own tangent. Pure — safe to call every
+    /// Newton iteration, same contract as `Material::trial_stress_tangent`.
+    fn evaluate(&self, normal_force: f64, shear_relative: f64) -> (f64, f64, f64, f64) {
+        let yield_force = self.mu * (-normal_force).max(0.0);
+        let trial = self.k0 * (shear_relative - self.slip);
+        if trial.abs() <= yield_force {
+            (trial, self.k0, 0.0, self.slip)
+        } else {
+            let force = (self.b * trial.abs() + (1.0 - self.b) * yield_force).copysign(trial);
+            // d(yield_force)/d(normal_force): -mu in the engaged
+            // (compression) branch, 0 past it — matches the `max(.., 0.0)`
+            // clamp above, including at the boundary (subgradient
+            // convention, same as `Gap`/`Ent`'s `<=`).
+            let d_yield_d_normal = if normal_force < 0.0 { -self.mu } else { 0.0 };
+            let d_force_d_normal = (1.0 - self.b) * trial.signum() * d_yield_d_normal;
+            let next_slip = shear_relative - force / self.k0;
+            (force, self.b * self.k0, d_force_d_normal, next_slip)
+        }
+    }
+}
+
+/// `Friction`'s spatial counterpart: one normal DOF, two shear DOFs, each
+/// run independently through `Friction`'s return map against the same
+/// normal force (a square, not circular, interaction surface between the
+/// two shear directions — the physically correct circular friction cone is
+/// a materially harder shared-slip-vector return-map problem, deferred
+/// until needed).
+#[derive(Debug, Clone, Copy)]
+pub struct Friction3 {
+    pub normal_dof: usize,
+    pub shear_dofs: [usize; 2],
+    pub mu: f64,
+    pub k0: f64,
+    /// See `Friction::b`'s doc comment.
+    pub b: f64,
+    slip: [f64; 2],
+}
+
+impl Friction3 {
+    pub fn new(normal_dof: usize, shear_dofs: [usize; 2], mu: f64, k0: f64, b: f64) -> Self {
+        Friction3 { normal_dof, shear_dofs, mu, k0, b, slip: [0.0, 0.0] }
+    }
+
+    /// Runs `Friction::evaluate`'s return map independently for shear axis
+    /// `i` (`0` or `1`) against the shared normal force.
+    fn evaluate(&self, axis: usize, normal_force: f64, shear_relative: f64) -> (f64, f64, f64, f64) {
+        let leg = Friction {
+            normal_dof: self.normal_dof,
+            shear_dof: self.shear_dofs[axis],
+            mu: self.mu,
+            k0: self.k0,
+            b: self.b,
+            slip: self.slip[axis],
+        };
+        leg.evaluate(normal_force, shear_relative)
+    }
+}
+
 /// A 2-node, zero-length connector: no geometry or integration, just direct
 /// per-DOF material evaluation (§3.1) — each direction with a material
 /// assigned independently relates that DOF's relative displacement between
@@ -13,11 +131,17 @@ use super::truss::{SpatialElementMatrix, SpatialElementVector};
 /// evaluate materials along arbitrary local axes) — directions are the
 /// global DOF axes (including rotation, since M3's DOF bump), which is all
 /// the current scope needs.
+///
+/// `friction` adds one cross-DOF coupling term on top of the independent
+/// `materials` (see `Friction`'s doc comment for why this lives here rather
+/// than as a `Material` variant): the shear DOF's own slot in `materials`
+/// must stay `None` — `friction` owns that direction's resistance entirely.
 #[derive(Debug, Clone)]
 pub struct ZeroLength {
     pub node_i: NodeId,
     pub node_j: NodeId,
     materials: [Option<Material>; NDF],
+    friction: Option<Friction>,
 }
 
 impl ZeroLength {
@@ -26,11 +150,29 @@ impl ZeroLength {
             node_i,
             node_j,
             materials: std::array::from_fn(|_| None),
+            friction: None,
         }
     }
 
     pub fn with_material(mut self, dof: usize, material: Material) -> Self {
         self.materials[dof] = Some(material);
+        self
+    }
+
+    /// `friction.normal_dof` must already have a material set via
+    /// `with_material` (debug-asserted, since evaluating friction reads the
+    /// normal direction's current force from it); `friction.shear_dof`
+    /// must *not*.
+    pub fn with_friction(mut self, friction: Friction) -> Self {
+        debug_assert!(
+            self.materials[friction.shear_dof].is_none(),
+            "friction owns its shear DOF's resistance; don't also assign it a material"
+        );
+        debug_assert!(
+            self.materials[friction.normal_dof].is_some(),
+            "friction reads its normal DOF's force from that DOF's own material"
+        );
+        self.friction = Some(friction);
         self
     }
 
@@ -59,6 +201,27 @@ impl ZeroLength {
             resistance += force * b;
         }
 
+        if let Some(fr) = &self.friction {
+            let normal_material = self.materials[fr.normal_dof].as_ref().expect("friction needs a normal-direction material");
+            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let (normal_force, normal_tangent) = normal_material.trial_stress_tangent(normal_rel);
+            let shear_rel = node_j.displacement[fr.shear_dof] - node_i.displacement[fr.shear_dof];
+            let (force, dv_dshear, dv_dnormal, _) = fr.evaluate(normal_force, shear_rel);
+
+            let mut b_v = SVector::<f64, ELEMENT_DOF>::zeros();
+            b_v[fr.shear_dof] = -1.0;
+            b_v[NDF + fr.shear_dof] = 1.0;
+            let mut b_n = SVector::<f64, ELEMENT_DOF>::zeros();
+            b_n[fr.normal_dof] = -1.0;
+            b_n[NDF + fr.normal_dof] = 1.0;
+
+            // Only a `b_v * b_nᵀ` block, not its transpose — `k` is not
+            // symmetric in general. Fine here: the solver uses a general
+            // sparse LU, not a symmetric-only factorization.
+            k += dv_dshear * (b_v * b_v.transpose()) + (dv_dnormal * normal_tangent) * (b_v * b_n.transpose());
+            resistance += force * b_v;
+        }
+
         (k, resistance)
     }
 
@@ -67,6 +230,20 @@ impl ZeroLength {
             let Some(material) = material else { continue };
             let relative = node_j.displacement[dof] - node_i.displacement[dof];
             *material = material.commit(relative);
+        }
+
+        if let Some(fr) = &mut self.friction {
+            // The normal DOF's own slot in `materials` already advanced its
+            // state in the loop above; read (not commit) it here via
+            // `trial_stress_tangent` — every leaf material in this catalog
+            // reproduces the same force whether read just before or just
+            // after its own `commit()`, so this ordering is safe, but
+            // committing it a second time from here would not be.
+            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_force = self.materials[fr.normal_dof].as_ref().unwrap().trial_stress_tangent(normal_rel).0;
+            let shear_rel = node_j.displacement[fr.shear_dof] - node_i.displacement[fr.shear_dof];
+            let (.., next_slip) = fr.evaluate(normal_force, shear_rel);
+            fr.slip = next_slip;
         }
     }
 
@@ -86,11 +263,15 @@ impl ZeroLength {
 /// arbitrary local axes via a user-supplied orientation). Arbitrarily
 /// oriented local springs are a later, explicit transform feature (see
 /// `docs/spatial-architecture.md`'s "Elements and transforms" section).
+/// `friction` — see `ZeroLength`'s doc comment — adds two independent
+/// (Phase 2, see `Friction3`) shear-DOF couplings on top of the
+/// independent `materials`.
 #[derive(Debug, Clone)]
 pub struct ZeroLength3 {
     pub node_i: Node3Id,
     pub node_j: Node3Id,
     materials: [Option<Material>; SPATIAL_NDF],
+    friction: Option<Friction3>,
 }
 
 impl ZeroLength3 {
@@ -99,11 +280,29 @@ impl ZeroLength3 {
             node_i,
             node_j,
             materials: std::array::from_fn(|_| None),
+            friction: None,
         }
     }
 
     pub fn with_material(mut self, dof: usize, material: Material) -> Self {
         self.materials[dof] = Some(material);
+        self
+    }
+
+    /// See `ZeroLength::with_friction`'s doc comment — same preconditions,
+    /// checked for both entries of `friction.shear_dofs`.
+    pub fn with_friction(mut self, friction: Friction3) -> Self {
+        for shear_dof in friction.shear_dofs {
+            debug_assert!(
+                self.materials[shear_dof].is_none(),
+                "friction owns its shear DOFs' resistance; don't also assign them a material"
+            );
+        }
+        debug_assert!(
+            self.materials[friction.normal_dof].is_some(),
+            "friction reads its normal DOF's force from that DOF's own material"
+        );
+        self.friction = Some(friction);
         self
     }
 
@@ -125,6 +324,28 @@ impl ZeroLength3 {
             resistance += force * b;
         }
 
+        if let Some(fr) = &self.friction {
+            let normal_material = self.materials[fr.normal_dof].as_ref().expect("friction needs a normal-direction material");
+            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let (normal_force, normal_tangent) = normal_material.trial_stress_tangent(normal_rel);
+
+            let mut b_n = SpatialElementVector::zeros();
+            b_n[fr.normal_dof] = -1.0;
+            b_n[SPATIAL_NDF + fr.normal_dof] = 1.0;
+
+            for (axis, &shear_dof) in fr.shear_dofs.iter().enumerate() {
+                let shear_rel = node_j.displacement[shear_dof] - node_i.displacement[shear_dof];
+                let (force, dv_dshear, dv_dnormal, _) = fr.evaluate(axis, normal_force, shear_rel);
+
+                let mut b_v = SpatialElementVector::zeros();
+                b_v[shear_dof] = -1.0;
+                b_v[SPATIAL_NDF + shear_dof] = 1.0;
+
+                k += dv_dshear * (b_v * b_v.transpose()) + (dv_dnormal * normal_tangent) * (b_v * b_n.transpose());
+                resistance += force * b_v;
+            }
+        }
+
         (k, resistance)
     }
 
@@ -133,6 +354,21 @@ impl ZeroLength3 {
             let Some(material) = material else { continue };
             let relative = node_j.displacement[dof] - node_i.displacement[dof];
             *material = material.commit(relative);
+        }
+
+        if let Some(fr) = &mut self.friction {
+            // See `ZeroLength::commit`'s doc comment for why reading (not
+            // committing) the normal material here is correct.
+            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_force = self.materials[fr.normal_dof].as_ref().unwrap().trial_stress_tangent(normal_rel).0;
+
+            let mut next_slip = fr.slip;
+            for (axis, &shear_dof) in fr.shear_dofs.iter().enumerate() {
+                let shear_rel = node_j.displacement[shear_dof] - node_i.displacement[shear_dof];
+                let (.., slip) = fr.evaluate(axis, normal_force, shear_rel);
+                next_slip[axis] = slip;
+            }
+            fr.slip = next_slip;
         }
     }
 
@@ -619,5 +855,185 @@ mod tests {
         assert!((k[(0, 0)] - e * area).abs() < 1e-6, "EA unaffected by torsion spring");
         assert!((k[(5, 5)] - e * iz).abs() < 1e-6, "EIz unaffected by torsion spring");
         assert!((k[(4, 4)] - e * iy).abs() < 1e-6, "EIy unaffected by torsion spring");
+    }
+
+    /// Common friction setup for the 2D tests below: dof 0 is the normal
+    /// direction (an `Elastic` spring, `e = 1000`), dof 1 is the friction
+    /// shear direction (`mu = 0.3`, `k0 = 500`, `b = 0.01`).
+    fn friction_fixture() -> (Node, ZeroLength) {
+        let node_i = Node::new([0.0, 0.0]);
+        let zl = ZeroLength::new(NodeId::default(), NodeId::default())
+            .with_material(0, Material::Elastic { e: 1000.0 })
+            .with_friction(Friction::new(0, 1, 0.3, 500.0, 0.01));
+        (node_i, zl)
+    }
+
+    /// Below the yield surface, friction is a plain elastic spring:
+    /// `V == k0 * shear_rel`, tangent `== k0`.
+    #[test]
+    fn friction_sticks_below_yield_surface() {
+        let (node_i, zl) = friction_fixture();
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[0] = -1.0; // compression -> normal_force = -1000, yield_force = 300
+        node_j.displacement[1] = 0.1; // trial = 500*0.1 = 50, well under 300
+
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+        assert!((r[NDF + 1] - 50.0).abs() < 1e-9, "V == k0*shear_rel while sticking");
+        assert!((k[(1, 1)] - 500.0).abs() < 1e-9, "tangent == k0 while sticking");
+    }
+
+    /// Past the yield surface, `V` follows the bilinear-kinematic-hardening
+    /// return map (`Friction::evaluate`'s doc comment): `V = b*trial +
+    /// (1-b)*yield_force*sign(trial)`, tangent `== b*k0`.
+    #[test]
+    fn friction_slides_past_yield_surface() {
+        let (node_i, zl) = friction_fixture();
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[0] = -1.0; // normal_force = -1000, yield_force = 300
+        node_j.displacement[1] = 5.0; // trial = 500*5 = 2500, well past 300
+
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+
+        let (mu, k0, b) = (0.3, 500.0, 0.01);
+        let yield_force = mu * 1000.0;
+        let trial = k0 * 5.0;
+        let expected_v = b * trial + (1.0 - b) * yield_force;
+
+        assert!((r[NDF + 1] - expected_v).abs() < 1e-9, "V matches the hardening-branch return map");
+        assert!((k[(1, 1)] - b * k0).abs() < 1e-9, "tangent == b*k0 while sliding");
+    }
+
+    /// The same shear displacement against two different normal-direction
+    /// states: shear resistance depends on axial load level, not just a
+    /// generic plasticity check — a lighter normal force slides at the same
+    /// shear displacement a heavier one still sticks at.
+    #[test]
+    fn friction_yield_surface_scales_with_normal_force() {
+        let (node_i, zl) = friction_fixture();
+        let shear_rel = 1.0; // trial = k0*1.0 = 500
+
+        let mut node_j_light = Node::new([0.0, 0.0]);
+        node_j_light.displacement[0] = -0.5; // normal_force = -500, yield_force = 150 < 500: slides
+        node_j_light.displacement[1] = shear_rel;
+
+        let mut node_j_heavy = Node::new([0.0, 0.0]);
+        node_j_heavy.displacement[0] = -2.0; // normal_force = -2000, yield_force = 600 > 500: sticks
+        node_j_heavy.displacement[1] = shear_rel;
+
+        let (_, r_light) = zl.form_tangent_and_resistance(&node_i, &node_j_light);
+        let (_, r_heavy) = zl.form_tangent_and_resistance(&node_i, &node_j_heavy);
+
+        let (mu, k0, b) = (0.3, 500.0, 0.01);
+        let expected_v_light = b * (k0 * shear_rel) + (1.0 - b) * (mu * 500.0);
+        assert!((r_light[NDF + 1] - expected_v_light).abs() < 1e-9, "lighter normal force: sliding");
+        assert!((r_heavy[NDF + 1] - k0 * shear_rel).abs() < 1e-9, "heavier normal force: still sticking, V == trial");
+    }
+
+    /// Mirrors `elastic_pp_remembers_permanent_set_after_commit`
+    /// (`elastic_like.rs`): slide past the yield surface, commit, partially
+    /// unload — the response must be elastic from the new committed `slip`,
+    /// not from zero.
+    #[test]
+    fn friction_remembers_permanent_slip_after_commit() {
+        let (node_i, mut zl) = friction_fixture();
+        let (mu, k0, b) = (0.3, 500.0, 0.01);
+
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[0] = -1.0; // normal_force = -1000, yield_force = 300
+        node_j.displacement[1] = 5.0; // well past yield -> slides, accrues slip
+        zl.commit(&node_i, &node_j);
+
+        let yield_force = mu * 1000.0;
+        let trial = k0 * 5.0;
+        let force = b * trial + (1.0 - b) * yield_force;
+        let committed_slip = 5.0 - force / k0;
+
+        // Small elastic excursion from the newly committed slip.
+        node_j.displacement[1] = committed_slip + 0.05;
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+
+        assert!((r[NDF + 1] - k0 * 0.05).abs() < 1e-9, "elastic unload from committed slip, not from zero");
+        assert!((k[(1, 1)] - k0).abs() < 1e-9, "tangent back to k0 (elastic) after unload");
+    }
+
+    /// Out of compression (tension, per this codebase's sign convention),
+    /// `yield_force` clamps to `0`: any nonzero shear displacement slides
+    /// immediately, with only the post-slip hardening term surviving.
+    #[test]
+    fn friction_drops_capacity_when_normal_dof_is_in_tension() {
+        let (node_i, zl) = friction_fixture();
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[0] = 1.0; // tension -> normal_force = +1000 -> yield_force = 0
+        node_j.displacement[1] = 0.001;
+
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+
+        let (k0, b) = (500.0, 0.01);
+        let expected_v = b * (k0 * 0.001); // yield_force == 0, so only the hardening term survives
+        assert!((r[NDF + 1] - expected_v).abs() < 1e-9, "near-zero force: no normal-direction capacity");
+        assert!((k[(1, 1)] - b * k0).abs() < 1e-9, "post-slip tangent even at zero capacity");
+    }
+
+    /// The most important test here, and the easiest place to get a sign or
+    /// chain-rule factor wrong: perturb the normal DOF's relative
+    /// displacement by a small `h` and confirm the analytical
+    /// `k[shear_dof, normal_dof]` block matches `dV/d(normal_rel)` by
+    /// finite difference while sliding — validates `Friction::evaluate`'s
+    /// `d_force_d_normal` (and the chain rule through the normal material's
+    /// own tangent in `form_tangent_and_resistance`) directly, rather than
+    /// trusting the derivation by inspection.
+    #[test]
+    fn friction_off_diagonal_tangent_matches_finite_difference() {
+        let (node_i, zl) = friction_fixture();
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[0] = -1.0; // normal_force = -1000
+        node_j.displacement[1] = 5.0; // well past yield -> sliding, d(force)/d(normal_force) != 0
+
+        let (k, r0) = zl.form_tangent_and_resistance(&node_i, &node_j);
+        let analytical = k[(1, 0)];
+
+        let h = 1e-6;
+        let mut node_j_plus = node_j.clone();
+        node_j_plus.displacement[0] += h;
+        let (_, r_plus) = zl.form_tangent_and_resistance(&node_i, &node_j_plus);
+
+        let finite_diff = (r_plus[NDF + 1] - r0[NDF + 1]) / h;
+
+        assert!(
+            (analytical - finite_diff).abs() < 1e-6,
+            "analytical dV/d(normal_rel) = {analytical}, finite difference = {finite_diff}"
+        );
+    }
+
+    /// Phase 2: `ZeroLength3` with one normal DOF and two independent shear
+    /// DOFs — each slides/sticks independently against the same normal
+    /// force with no cross-talk between the two shear axes (the absence of
+    /// coupling that distinguishes Phase 2 from the deferred, circular-
+    /// interaction-surface Phase 3).
+    #[test]
+    fn friction3_shear_axes_slide_independently_against_shared_normal_force() {
+        let node_i = Node3::new([0.0, 0.0, 0.0]);
+        let mut node_j = Node3::new([0.0, 0.0, 0.0]);
+        node_j.displacement[0] = -1.0; // normal DOF (Ux): normal_force = -1000
+        node_j.displacement[1] = 5.0; // shear axis 0 (Uy): well past yield -> slides
+        node_j.displacement[2] = 0.1; // shear axis 1 (Uz): well under yield -> sticks
+
+        let (mu, k0, b) = (0.3, 500.0, 0.01);
+        let zl = ZeroLength3::new(Node3Id::default(), Node3Id::default())
+            .with_material(0, Material::Elastic { e: 1000.0 })
+            .with_friction(Friction3::new(0, [1, 2], mu, k0, b));
+
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+
+        let yield_force = mu * 1000.0;
+        let expected_v_uy = b * (k0 * 5.0) + (1.0 - b) * yield_force;
+        let expected_v_uz = k0 * 0.1;
+
+        assert!((r[SPATIAL_NDF + 1] - expected_v_uy).abs() < 1e-9, "Uy slides independently");
+        assert!((r[SPATIAL_NDF + 2] - expected_v_uz).abs() < 1e-9, "Uz sticks independently");
+        assert!((k[(1, 1)] - b * k0).abs() < 1e-9, "Uy tangent == b*k0 (sliding)");
+        assert!((k[(2, 2)] - k0).abs() < 1e-9, "Uz tangent == k0 (sticking)");
+        assert_eq!(k[(1, 2)], 0.0, "no cross-talk between the two shear axes");
+        assert_eq!(k[(2, 1)], 0.0, "no cross-talk between the two shear axes");
     }
 }
