@@ -11,7 +11,18 @@ use carapace_wasm::input_v1::tables::{
     ElasticBeamColumnTable, ElementLoadTable, FiberBeamColumnTable, FiberTable, IntegrationSpec,
     LoadPatternTable, NodalLoadTable, NodeTable, TimeSeriesSpec, TrussTable, ZeroLengthTable,
 };
-use carapace_wasm::input_v1::{decode, CarapaceInputV1, Header};
+use carapace_wasm::input_v1::{decode, CarapaceInputV1, Header, StepOutcome};
+
+/// The last sample a given recorder produced in one `advance()` call's outcome, or `None` if
+/// that recorder didn't record this call (e.g. the call took no steps).
+fn last_sample(outcome: &StepOutcome, recorder_index: usize) -> Option<(f64, f64)> {
+    outcome
+        .recorder_batches
+        .iter()
+        .find(|batch| batch.recorder_index == recorder_index)
+        .and_then(|batch| batch.samples.last())
+        .copied()
+}
 
 fn empty_input(header_space: u8) -> CarapaceInputV1 {
     CarapaceInputV1 {
@@ -90,14 +101,20 @@ fn decodes_a_single_truss_and_matches_the_closed_form_displacement() {
     );
 
     let expected = load * length / (area * e);
-    let (_, got) = *session
-        .recorder_samples(0)
-        .last()
-        .expect("one recorded sample");
+    let (_, got) = last_sample(&outcome, 0).expect("one recorded sample");
     assert!(
         (got - expected).abs() < 1e-9,
         "expected {expected}, got {got}"
     );
+
+    let batch = outcome
+        .recorder_batches
+        .iter()
+        .find(|batch| batch.recorder_index == 0)
+        .expect("recorder 0 batch");
+    assert_eq!(batch.first_sample, 0);
+    assert_eq!(batch.stage_index, 0);
+    assert_eq!(batch.samples.len(), 1);
 }
 
 #[test]
@@ -250,11 +267,22 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
         outcome.stage_complete && outcome.error.is_none(),
         "gravity stage should complete cleanly: {outcome:?}"
     );
-    let axial_after_gravity = session.recorder_samples(0).last().unwrap().1;
+    let axial_after_gravity = last_sample(&outcome, 0).unwrap().1;
     assert!(
         axial_after_gravity.abs() > 1e-9,
         "gravity should produce nonzero axial displacement"
     );
+    // Gravity took both budgeted steps in this one advance() call, so recorder 0's batch should
+    // cover samples [0, 2) of stage 0 — the "exact sample/time/value ordering across multiple
+    // advance() calls and stage transitions" this bounded-batch slice needs to prove.
+    let gravity_batch = outcome
+        .recorder_batches
+        .iter()
+        .find(|batch| batch.recorder_index == 0)
+        .expect("recorder 0 batch");
+    assert_eq!(gravity_batch.first_sample, 0);
+    assert_eq!(gravity_batch.stage_index, 0);
+    assert_eq!(gravity_batch.samples.len(), 2);
 
     // First pushover step stays within the elastic range: must match the
     // closed-form cantilever deflection exactly, same as m8's elastic
@@ -268,8 +296,8 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
         outcome.error.is_none(),
         "elastic-range pushover step should converge: {outcome:?}"
     );
-    let (_, transverse_1) = *session.recorder_samples(1).last().unwrap();
-    let (_, axial_1) = *session.recorder_samples(0).last().unwrap();
+    let (_, transverse_1) = last_sample(&outcome, 1).unwrap();
+    let (_, axial_1) = last_sample(&outcome, 0).unwrap();
     let expected_elastic = -0.5 * p_yield * length.powi(3) / (3.0 * e * iz);
     assert!(
         (transverse_1 - expected_elastic).abs() < 1e-9,
@@ -279,6 +307,16 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
         (axial_1 - axial_after_gravity).abs() < 1e-9,
         "frozen gravity pattern's axial contribution must be unchanged while the section is still elastic: {axial_after_gravity} vs {axial_1}"
     );
+    // This call crossed into the pushover stage: its one sample continues the running count
+    // from gravity's two (first_sample == 2), tagged with the new stage index.
+    let pushover_batch = outcome
+        .recorder_batches
+        .iter()
+        .find(|batch| batch.recorder_index == 1)
+        .expect("recorder 1 batch");
+    assert_eq!(pushover_batch.first_sample, 2);
+    assert_eq!(pushover_batch.stage_index, 1);
+    assert_eq!(pushover_batch.samples.len(), 1);
 
     // Remaining two steps push well past yield (cumulative target 1.5x the
     // elastic-range increment, past the outer fibers' `eyp`). Checking the
@@ -303,7 +341,7 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
         "pushover stage should finish cleanly: {outcome:?}"
     );
 
-    let (_, transverse_final) = *session.recorder_samples(1).last().unwrap();
+    let (_, transverse_final) = last_sample(&outcome, 1).unwrap();
     let elastic_force_for_final_displacement =
         transverse_final.abs() * 3.0 * e * iz / length.powi(3);
     assert!(

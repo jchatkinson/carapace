@@ -34,20 +34,16 @@ pub fn decode_input(value: JsValue) -> Result<WasmSession, JsValue> {
 
 #[wasm_bindgen]
 impl WasmSession {
-    /// See `input_v1::Session::advance`. Returns a
-    /// `{ done, stageComplete, stepsTaken, loadFactor, error }` object.
+    /// See `input_v1::Session::advance`. Returns a `{ done, stageComplete, stepsTaken,
+    /// loadFactor, error, recorderBatches }` object — `recorderBatches` holds only the samples
+    /// this call produced (results-storage-indexeddb.md's `recorderBatch`, one entry per
+    /// recorder that recorded this call), not the whole run's history. There is no separate
+    /// "samples so far" accessor: a caller that needs the full history accumulates these
+    /// batches itself, same as the planned results-storage worker will.
     pub fn advance(&mut self, step_budget: u32) -> Result<JsValue, JsValue> {
         let outcome = self.0.advance(step_budget);
         serde_wasm_bindgen::to_value(&outcome)
             .map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
-    /// `[pseudoTime, value][]` samples recorded so far for one recorder,
-    /// in the order given to `SequenceSpec::recorders`.
-    #[wasm_bindgen(js_name = recorderSamples)]
-    pub fn recorder_samples(&self, recorder_index: usize) -> Result<JsValue, JsValue> {
-        let samples = self.0.recorder_samples(recorder_index);
-        serde_wasm_bindgen::to_value(samples).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// The `AnalysisSequence` stage id `advance` is currently in (or, once

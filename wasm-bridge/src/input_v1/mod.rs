@@ -22,7 +22,7 @@ mod session;
 pub use decode::decode;
 pub use error::DecodeError;
 pub use materials::MaterialSpec;
-pub use session::{AnalysisErrorDetail, Session, StepOutcome};
+pub use session::{AnalysisErrorDetail, RecorderBatch, Session, StepOutcome};
 
 use sequence::SequenceSpec;
 use serde::{Deserialize, Serialize};

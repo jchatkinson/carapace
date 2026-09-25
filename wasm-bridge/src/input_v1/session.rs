@@ -85,7 +85,7 @@ enum StageRunner {
 /// the raw signal those would be built from. `error`, once set, is sticky —
 /// later stages are not attempted, matching "a stage's `AnalysisError`
 /// stops the sequence".
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepOutcome {
     pub done: bool,
@@ -93,6 +93,29 @@ pub struct StepOutcome {
     pub steps_taken: u32,
     pub load_factor: f64,
     pub error: Option<AnalysisErrorDetail>,
+    /// Only the samples *this* `advance()` call produced, one entry per recorder that recorded
+    /// at least one sample this call (every recorder samples every step today, so in practice
+    /// this is either empty — no step taken — or has one entry per recorder). This is the
+    /// results-storage plan's (docs/results-storage-indexeddb.md) `recorderBatch`, restated in
+    /// field names that match pysees's frozen `ResultBlock` protocol type
+    /// (`src/app/types/resultsStorage.ts`); the caller assigns `blockIndex` and packs `data`,
+    /// since neither concept exists on this side of the wasm boundary.
+    pub recorder_batches: Vec<RecorderBatch>,
+}
+
+/// One recorder's new samples from a single `advance()` call. `first_sample` plus
+/// `samples.len()` gives the sample range this batch covers, so a caller can retry a failed
+/// persist without renumbering — the "each `advance()` batch deterministic and identifies its
+/// first sample/count" contract from results-storage-indexeddb.md's "Failure and cancellation
+/// contract". Scalar-only (`(pseudo_time, value)` pairs, one channel) until a vector recorder
+/// needs more.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecorderBatch {
+    pub recorder_index: usize,
+    pub stage_index: usize,
+    pub first_sample: u32,
+    pub samples: Vec<(f64, f64)>,
 }
 
 /// One opaque handle exposed to the caller, chosen once from `space` at
@@ -108,12 +131,6 @@ impl Session {
     pub fn advance(&mut self, step_budget: u32) -> StepOutcome {
         match self {
             Session::Planar(session) => session.advance(step_budget),
-        }
-    }
-
-    pub fn recorder_samples(&self, recorder_index: usize) -> &[(f64, f64)] {
-        match self {
-            Session::Planar(session) => session.recorder_samples(recorder_index),
         }
     }
 
@@ -136,7 +153,14 @@ pub struct PlanarSession {
     load_factor: f64,
     error: Option<AnalysisErrorDetail>,
     recorders: Vec<ResolvedRecorder>,
-    recorder_history: Vec<Vec<(f64, f64)>>,
+    // Per-advance only: cleared at the top of every `advance()` call, drained into that call's
+    // `StepOutcome::recorder_batches` at the end. Nothing here survives across calls except the
+    // running counts below — this is results-storage-indexeddb.md's "Bound memory" step:
+    // `recorder_history`'s old whole-run `Vec<Vec<(f64, f64)>>` is gone.
+    current_batch: Vec<Vec<(f64, f64)>>,
+    // Total samples emitted so far per recorder, so the next batch's `first_sample` is correct
+    // without retaining the samples themselves.
+    recorder_sample_counts: Vec<u32>,
 }
 
 impl std::fmt::Debug for PlanarSession {
@@ -158,7 +182,8 @@ impl PlanarSession {
         stages: Vec<CompiledStage>,
         recorders: Vec<ResolvedRecorder>,
     ) -> Self {
-        let recorder_history = vec![Vec::new(); recorders.len()];
+        let current_batch = vec![Vec::new(); recorders.len()];
+        let recorder_sample_counts = vec![0; recorders.len()];
         Self {
             domain: Some(domain),
             stages,
@@ -167,12 +192,9 @@ impl PlanarSession {
             load_factor: 0.0,
             error: None,
             recorders,
-            recorder_history,
+            current_batch,
+            recorder_sample_counts,
         }
-    }
-
-    pub fn recorder_samples(&self, recorder_index: usize) -> &[(f64, f64)] {
-        &self.recorder_history[recorder_index]
     }
 
     pub fn current_stage_id(&self) -> Option<&str> {
@@ -187,6 +209,10 @@ impl PlanarSession {
     /// cooperative-cancellation loop is built on (checking a pending cancel
     /// between calls), even though there is no such loop calling this yet.
     pub fn advance(&mut self, step_budget: u32) -> StepOutcome {
+        for batch in &mut self.current_batch {
+            batch.clear();
+        }
+
         if self.error.is_none() && self.runner.is_none() && self.current_stage < self.stages.len() {
             self.start_current_stage();
         }
@@ -197,8 +223,14 @@ impl PlanarSession {
                 steps_taken: 0,
                 load_factor: self.load_factor,
                 error: self.error,
+                recorder_batches: Vec::new(),
             };
         }
+
+        // Captured before stepping: `finish_current_stage` below advances `current_stage`, but
+        // every sample this call records (the stepping loop never starts a new stage mid-call)
+        // belongs to the stage active when the call began.
+        let stage_index_for_batch = self.current_stage;
 
         let mut steps_taken = 0;
         let mut stage_complete = false;
@@ -236,12 +268,33 @@ impl PlanarSession {
             self.finish_current_stage();
         }
 
+        let recorder_batches = self
+            .current_batch
+            .iter()
+            .zip(self.recorder_sample_counts.iter_mut())
+            .enumerate()
+            .filter_map(|(recorder_index, (samples, sample_count))| {
+                if samples.is_empty() {
+                    return None;
+                }
+                let first_sample = *sample_count;
+                *sample_count += samples.len() as u32;
+                Some(RecorderBatch {
+                    recorder_index,
+                    stage_index: stage_index_for_batch,
+                    first_sample,
+                    samples: samples.clone(),
+                })
+            })
+            .collect();
+
         StepOutcome {
             done: self.error.is_some() || self.current_stage >= self.stages.len(),
             stage_complete,
             steps_taken,
             load_factor: self.load_factor,
             error: self.error,
+            recorder_batches,
         }
     }
 
@@ -308,9 +361,9 @@ impl PlanarSession {
             return;
         };
         let load_factor = self.load_factor;
-        for (recorder, history) in self.recorders.iter().zip(self.recorder_history.iter_mut()) {
+        for (recorder, batch) in self.recorders.iter().zip(self.current_batch.iter_mut()) {
             let value = analysis.domain().node(recorder.node).displacement[recorder.dof as usize];
-            history.push((load_factor, value));
+            batch.push((load_factor, value));
         }
     }
 }
