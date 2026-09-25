@@ -11,7 +11,7 @@ pub use domain::{Domain, Domain3};
 pub use elements::{
     DispBeamColumn, DispBeamColumn3, Element, Element3, Element3Id, ElasticBeamColumn, ElasticBeamColumn3, ElementId,
     ElementOps, ForceBeamColumn, ForceBeamColumn3, SpatialElementMatrix, SpatialElementVector, Truss, Truss3,
-    ZeroLength, ZeroLength3,
+    ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3,
 };
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
 pub use integration::BeamIntegration;

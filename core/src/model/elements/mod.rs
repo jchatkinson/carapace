@@ -81,7 +81,7 @@ pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
-pub use zero_length::{ZeroLength, ZeroLength3};
+pub use zero_length::{ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3};
 
 new_key_type! {
     /// Generational index into `Domain`'s element store (§2.2).
@@ -99,6 +99,7 @@ new_key_type! {
 pub enum Element {
     Truss(Truss),
     ZeroLength(ZeroLength),
+    ZeroLengthSection(ZeroLengthSection),
     ElasticBeamColumn(ElasticBeamColumn),
     DispBeamColumn(DispBeamColumn),
     ForceBeamColumn(ForceBeamColumn),
@@ -109,6 +110,7 @@ impl Element {
         match self {
             Element::Truss(t) => [t.node_i, t.node_j],
             Element::ZeroLength(z) => [z.node_i, z.node_j],
+            Element::ZeroLengthSection(z) => [z.node_i, z.node_j],
             Element::ElasticBeamColumn(b) => [b.node_i, b.node_j],
             Element::DispBeamColumn(b) => [b.node_i, b.node_j],
             Element::ForceBeamColumn(b) => [b.node_i, b.node_j],
@@ -129,6 +131,7 @@ impl Element {
         match self {
             Element::Truss(t) => t.form_tangent_and_resistance(node_i, node_j),
             Element::ZeroLength(z) => z.form_tangent_and_resistance(node_i, node_j),
+            Element::ZeroLengthSection(z) => z.form_tangent_and_resistance(node_i, node_j),
             Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
@@ -158,6 +161,7 @@ impl Element {
         match self {
             Element::Truss(t) => t.form_mass(node_i, node_j),
             Element::ZeroLength(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
+            Element::ZeroLengthSection(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
             Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_mass(node_i, node_j),
@@ -173,6 +177,7 @@ impl Element {
         match self {
             Element::Truss(t) => t.commit(node_i, node_j),
             Element::ZeroLength(z) => z.commit(node_i, node_j),
+            Element::ZeroLengthSection(z) => z.commit(node_i, node_j),
             Element::ElasticBeamColumn(_) => {}
             Element::DispBeamColumn(b) => b.commit(node_i, node_j),
             Element::ForceBeamColumn(b) => b.commit(node_i, node_j),
@@ -187,6 +192,7 @@ impl Element {
         match self {
             Element::Truss(t) => t.local_force(node_i, node_j),
             Element::ZeroLength(z) => z.local_force(node_i, node_j),
+            Element::ZeroLengthSection(z) => z.local_force(node_i, node_j),
             Element::ElasticBeamColumn(b) => b.local_force(node_i, node_j),
             Element::DispBeamColumn(b) => b.local_force(node_i, node_j),
             Element::ForceBeamColumn(b) => b.local_force(),
@@ -229,6 +235,7 @@ impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
 pub enum Element3 {
     Truss3(Truss3),
     ZeroLength3(ZeroLength3),
+    ZeroLengthSection3(ZeroLengthSection3),
     ElasticBeamColumn3(ElasticBeamColumn3),
     DispBeamColumn3(DispBeamColumn3),
     ForceBeamColumn3(ForceBeamColumn3),
@@ -239,6 +246,7 @@ impl Element3 {
         match self {
             Element3::Truss3(t) => [t.node_i, t.node_j],
             Element3::ZeroLength3(z) => [z.node_i, z.node_j],
+            Element3::ZeroLengthSection3(z) => [z.node_i, z.node_j],
             Element3::ElasticBeamColumn3(b) => [b.node_i, b.node_j],
             Element3::DispBeamColumn3(b) => [b.node_i, b.node_j],
             Element3::ForceBeamColumn3(b) => [b.node_i, b.node_j],
@@ -253,6 +261,7 @@ impl Element3 {
         match self {
             Element3::Truss3(t) => t.form_tangent_and_resistance(node_i, node_j),
             Element3::ZeroLength3(z) => z.form_tangent_and_resistance(node_i, node_j),
+            Element3::ZeroLengthSection3(z) => z.form_tangent_and_resistance(node_i, node_j),
             Element3::ElasticBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element3::DispBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
@@ -279,6 +288,7 @@ impl Element3 {
         match self {
             Element3::Truss3(t) => t.form_mass(node_i, node_j),
             Element3::ZeroLength3(_) => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
+            Element3::ZeroLengthSection3(_) => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
             Element3::ElasticBeamColumn3(b) => b.form_mass(node_i, node_j),
             Element3::DispBeamColumn3(b) => b.form_mass(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.form_mass(node_i, node_j),
@@ -289,6 +299,7 @@ impl Element3 {
         match self {
             Element3::Truss3(t) => t.commit(node_i, node_j),
             Element3::ZeroLength3(z) => z.commit(node_i, node_j),
+            Element3::ZeroLengthSection3(z) => z.commit(node_i, node_j),
             Element3::ElasticBeamColumn3(_) => {}
             Element3::DispBeamColumn3(b) => b.commit(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.commit(node_i, node_j),
@@ -300,6 +311,7 @@ impl Element3 {
         match self {
             Element3::Truss3(t) => t.local_force(node_i, node_j),
             Element3::ZeroLength3(z) => z.local_force(node_i, node_j),
+            Element3::ZeroLengthSection3(z) => z.local_force(node_i, node_j),
             Element3::ElasticBeamColumn3(b) => b.local_force(node_i, node_j),
             Element3::DispBeamColumn3(b) => b.local_force(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.local_force(),
