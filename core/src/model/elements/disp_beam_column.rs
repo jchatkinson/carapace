@@ -198,6 +198,42 @@ impl DispBeamColumn {
         }
     }
 
+    /// Local nodal force — the same `r_local`/`basic_resistance` value
+    /// `form_tangent_and_resistance` already computes and discards,
+    /// recomputed fresh here (cheaper than that method, in fact: no
+    /// tangent accumulation needed). Always exactly consistent with the
+    /// current committed section state — no cache to keep in sync, since
+    /// this element has no Newton loop between a target and the committed
+    /// answer the way `ForceBeamColumn` does.
+    pub(super) fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
+        let corotational = (self.transform == GeomTransf::Corotational).then(|| Corotational2d::new(node_i, node_j));
+        let (length, d_local) = if let Some(state) = &corotational {
+            (state.initial_length(), Corotational2d::local_basic_modes() * state.basic_deformation())
+        } else {
+            let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+            (length, d_local)
+        };
+
+        let mut r_local = SVector::<f64, 6>::zeros();
+        for ((xi, w), section) in self.integration.points().iter().zip(&self.sections) {
+            let (b_eps0, b_kappa) = Self::strain_displacement(*xi, length);
+            let eps0 = b_eps0.dot(&d_local);
+            let kappa = b_kappa.dot(&d_local);
+            let (n, m, _k_section) = section.trial(eps0, kappa);
+            r_local += (w * length) * (b_eps0 * n + b_kappa * m);
+        }
+
+        // Non-corotational: `r_local` is already the local nodal force
+        // (`d_local` came from the fixed-orientation `t`, same as
+        // `form_tangent_and_resistance`'s pre-transform value) — no further
+        // rotation needed, unlike that method's `t.transpose() * r_local`
+        // step, which converts *to* global.
+        match &corotational {
+            Some(state) => state.local_resistance(&(Corotational2d::local_basic_modes().transpose() * r_local)),
+            None => r_local,
+        }
+    }
+
     pub(super) fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
         let (length, _cx, _cy) = self.geometry(node_i, node_j);
         // Prismatic assumption (see the type doc comment): every section
@@ -353,6 +389,23 @@ impl DispBeamColumn3 {
         }
 
         (t.transpose() * k_local * t, t.transpose() * r_local)
+    }
+
+    /// Local nodal force (including the decoupled torsion term) — the same
+    /// pre-transform `r_local` value above, recomputed fresh (cheap: no
+    /// tangent accumulation needed, and no Newton loop to avoid re-running).
+    pub(super) fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {
+        let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+        let mut r_local = self.torsion_stiffness(length) * d_local;
+        for ((xi, w), section) in self.integration.points().iter().zip(&self.sections) {
+            let (b_eps0, b_kappa_z, b_kappa_y) = Self::strain_displacement(*xi, length);
+            let eps0 = b_eps0.dot(&d_local);
+            let kappa_z = b_kappa_z.dot(&d_local);
+            let kappa_y = b_kappa_y.dot(&d_local);
+            let (n, mz, my, _k_section) = section.trial(eps0, kappa_z, kappa_y);
+            r_local += (w * length) * (b_eps0 * n + b_kappa_z * mz + b_kappa_y * my);
+        }
+        r_local
     }
 
     pub(super) fn commit(&mut self, node_i: &Node3, node_j: &Node3) {

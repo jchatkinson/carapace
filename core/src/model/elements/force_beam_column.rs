@@ -84,6 +84,14 @@ pub struct ForceBeamColumn {
     v_commit: SVector<f64, NBD>,
     max_iters: usize,
     tolerance: f64,
+    /// Last-committed local nodal force (`a.transpose() * q_commit`, or its
+    /// corotational-frame equivalent) — cached at `commit` time rather than
+    /// recomputed on demand like every other element's `local_force`,
+    /// because recomputing it here would mean re-running `state_
+    /// determination`'s Newton iteration, not a cheap closed-form
+    /// evaluation. `commit` already produces `q`/`a` as part of finding
+    /// `q_commit` itself, so this is free to capture there.
+    local_force: SVector<f64, 6>,
 }
 
 /// `2` — number of section force/deformation components (`N`, `M`; §3.1's
@@ -120,6 +128,7 @@ impl ForceBeamColumn {
             v_commit: SVector::<f64, NBD>::zeros(),
             max_iters: 50,
             tolerance: 1e-6,
+            local_force: SVector::<f64, 6>::zeros(),
         }
     }
 
@@ -405,9 +414,19 @@ impl ForceBeamColumn {
         for (i, (eps0, kappa)) in e.iter().enumerate() {
             self.sections[i].commit(*eps0, *kappa);
         }
+        self.local_force = match &corotational {
+            Some(state) => state.local_resistance(&q),
+            None => a.transpose() * q,
+        };
         self.q_commit = q;
         self.e_commit = e;
         self.v_commit = v;
+    }
+
+    /// Reads the local nodal force cached by `commit` — see this element's
+    /// `local_force` field doc comment for why it's cached, not recomputed.
+    pub(super) fn local_force(&self) -> SVector<f64, 6> {
+        self.local_force
     }
 
     pub(super) fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
@@ -476,6 +495,10 @@ pub struct ForceBeamColumn3 {
     v_commit: SVector<f64, NBD3>,
     max_iters: usize,
     tolerance: f64,
+    /// See `ForceBeamColumn::local_force`'s doc comment — same reasoning,
+    /// cached at `commit` time. Includes the decoupled torsion term, same
+    /// as `form_tangent_and_resistance`'s `r_local`.
+    local_force: SpatialElementVector,
 }
 
 impl ForceBeamColumn3 {
@@ -505,6 +528,7 @@ impl ForceBeamColumn3 {
             v_commit: SVector::<f64, NBD3>::zeros(),
             max_iters: 50,
             tolerance: 1e-6,
+            local_force: SpatialElementVector::zeros(),
         }
     }
 
@@ -703,9 +727,15 @@ impl ForceBeamColumn3 {
         for (i, (eps0, kappa_z, kappa_y)) in e.iter().enumerate() {
             self.sections[i].commit(*eps0, *kappa_z, *kappa_y);
         }
+        self.local_force = a.transpose() * q + self.torsion_stiffness(length) * d_local;
         self.q_commit = q;
         self.e_commit = e;
         self.v_commit = v;
+    }
+
+    /// See `ForceBeamColumn::local_force`'s doc comment.
+    pub(super) fn local_force(&self) -> SpatialElementVector {
+        self.local_force
     }
 
     pub(super) fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {

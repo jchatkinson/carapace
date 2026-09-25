@@ -125,6 +125,16 @@ impl Corotational2d {
         self.jacobian.transpose() * basic_force
     }
 
+    /// Same nodal force as `global_resistance`, expressed in the *current*
+    /// (deformed-chord) local frame instead of global coordinates — the
+    /// corotational counterpart of `Linear`/`PDelta`'s fixed-orientation
+    /// `t * r_global` recovery, used for element-force recording so a
+    /// corotational member reports axial/shear/moment against its own
+    /// current axis, not raw global components.
+    pub(crate) fn local_resistance(&self, basic_force: &SVector<f64, 3>) -> SVector<f64, 6> {
+        self.global_to_local * self.global_resistance(basic_force)
+    }
+
     /// Consistent tangent: `Bᵀ k_basic B` plus the geometric Hessian of the
     /// basic deformation map (axial-force and end-moment contributions).
     pub(crate) fn global_tangent(

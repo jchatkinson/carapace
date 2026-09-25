@@ -67,6 +67,14 @@ impl ZeroLength {
             *material = material.commit(relative);
         }
     }
+
+    /// No orientation vectors, no separate local frame — see `Truss::
+    /// local_force`'s doc comment for why this is just the resistance
+    /// vector, recomputed fresh from each direction's current committed
+    /// material state.
+    pub(super) fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+        self.form_tangent_and_resistance(node_i, node_j).1
+    }
 }
 
 /// `ZeroLength`'s spatial counterpart: independent per-DOF materials along
@@ -124,6 +132,11 @@ impl ZeroLength3 {
             let relative = node_j.displacement[dof] - node_i.displacement[dof];
             *material = material.commit(relative);
         }
+    }
+
+    /// See `ZeroLength::local_force`'s doc comment.
+    pub(super) fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {
+        self.form_tangent_and_resistance(node_i, node_j).1
     }
 }
 

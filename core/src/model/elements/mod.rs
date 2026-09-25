@@ -51,6 +51,24 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: us
     fn form_mass(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>) -> SVector<f64, ELEMENT_DOF>;
 
     fn commit(&mut self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>);
+
+    /// This element's local nodal force at its *current committed* state —
+    /// the pre-transform nodal force vector every concrete element already
+    /// computes as an intermediate step inside `form_tangent_and_resistance`
+    /// (`r_local`, before that method's final `t.transpose() * r_local`
+    /// step converts it to global), in the element's own axis frame (the
+    /// original fixed orientation for `Linear`/`PDelta`, the current
+    /// deformed chord for `Corotational`). For a straight two-node frame
+    /// element this is directly axial/shear/moment at each end; `Truss`/
+    /// `ZeroLength` have no separate local frame at all, so their value here
+    /// is just their resistance vector. This is what element-force
+    /// recording (results-storage) reads — see each concrete type's
+    /// `local_force` doc comment for why it's cached (`ForceBeamColumn`,
+    /// to avoid re-running its Newton state determination) or recomputed
+    /// fresh (every other element, all cheap closed-form/direct
+    /// evaluations) — never anything that mutates state, so safe to call
+    /// any time after a step, like `form_tangent_and_resistance`.
+    fn local_force(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>) -> SVector<f64, ELEMENT_DOF>;
 }
 
 mod disp_beam_column;
@@ -160,6 +178,20 @@ impl Element {
             Element::ForceBeamColumn(b) => b.commit(node_i, node_j),
         }
     }
+
+    /// See `ElementOps::local_force`'s doc comment. `ForceBeamColumn`'s
+    /// local force is cached at `commit` time (its own `local_force()`
+    /// takes no node arguments — reading the cache, not recomputing);
+    /// every other variant recomputes fresh from `node_i`/`node_j`.
+    pub fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+        match self {
+            Element::Truss(t) => t.local_force(node_i, node_j),
+            Element::ZeroLength(z) => z.local_force(node_i, node_j),
+            Element::ElasticBeamColumn(b) => b.local_force(node_i, node_j),
+            Element::DispBeamColumn(b) => b.local_force(node_i, node_j),
+            Element::ForceBeamColumn(b) => b.local_force(),
+        }
+    }
 }
 
 impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
@@ -184,6 +216,10 @@ impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
 
     fn commit(&mut self, node_i: &Node, node_j: &Node) {
         Element::commit(self, node_i, node_j)
+    }
+
+    fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+        Element::local_force(self, node_i, node_j)
     }
 }
 
@@ -258,6 +294,17 @@ impl Element3 {
             Element3::ForceBeamColumn3(b) => b.commit(node_i, node_j),
         }
     }
+
+    /// See `Element::local_force`'s doc comment.
+    pub fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+        match self {
+            Element3::Truss3(t) => t.local_force(node_i, node_j),
+            Element3::ZeroLength3(z) => z.local_force(node_i, node_j),
+            Element3::ElasticBeamColumn3(b) => b.local_force(node_i, node_j),
+            Element3::DispBeamColumn3(b) => b.local_force(node_i, node_j),
+            Element3::ForceBeamColumn3(b) => b.local_force(),
+        }
+    }
 }
 
 impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Element3 {
@@ -286,5 +333,9 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Ele
 
     fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
         Element3::commit(self, node_i, node_j)
+    }
+
+    fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+        Element3::local_force(self, node_i, node_j)
     }
 }

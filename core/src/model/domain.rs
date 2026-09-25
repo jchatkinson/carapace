@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use faer::sparse::Triplet;
-use nalgebra::DVector;
+use nalgebra::{DVector, SVector};
 use slotmap::{Key, SlotMap};
 
 use super::load_pattern::LoadPattern;
@@ -229,6 +229,16 @@ where
 
     pub fn node(&self, id: NId) -> &Node<NDIM, NDOF> {
         &self.nodes[id]
+    }
+
+    /// An element's local nodal force at its current committed state — see
+    /// `ElementOps::local_force`'s doc comment. Never called from the
+    /// assembly hot loop (only from results recording), so looking the
+    /// element and its nodes up here rather than caching anything is fine.
+    pub fn element_local_force(&self, id: E::Id) -> SVector<f64, ELEMENT_DOF> {
+        let element = &self.elements[id];
+        let [node_i, node_j] = element.nodes();
+        element.local_force(&self.nodes[node_i], &self.nodes[node_j])
     }
 
     /// `Domain::new()`'s always-present pattern — see its doc comment.

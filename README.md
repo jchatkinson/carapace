@@ -68,11 +68,36 @@ see each element/section entry below for which profile(s) it covers.
   `Session`/`advance` API, budget-driven for cooperative cancellation
 - [x] `wasm_bindgen` boundary exposing `decodeInput`/`advance` to JS (first
   pass: structured-clone transfer via `serde-wasm-bindgen`)
-- [ ] Zero-copy transferable-typed-array wire format for `postMessage`
+- [ ] Zero-copy transferable-typed-array wire format for `postMessage` (the
+  wasm→JS leg is still structured-clone; the analysis-worker→storage-worker
+  leg, entirely on the `pysees` side, is already a transferred `ArrayBuffer`)
 
-See [`docs/results-storage-indexeddb.md`](docs/results-storage-indexeddb.md)
-for the current results-persistence design — IndexedDB-based, implemented on
-the `pysees` side, not SQLite/OPFS.
+**Results / persistence** — see
+[`docs/results-storage-indexeddb.md`](docs/results-storage-indexeddb.md) for
+the full design (IndexedDB-based, implemented on the `pysees` side, not
+SQLite/OPFS)
+- [x] Bounded, per-`advance()`-call recorder batches — the solver never
+  retains a whole-run history in memory
+- [x] IndexedDB storage worker: dense run-wide row layout, idempotent
+  writes, interrupted-run reconciliation on reload
+- [x] Analysis-worker ↔ storage-worker `MessageChannel` wiring with
+  backpressure (bounded in-flight-byte budget)
+- [x] Node displacement recording
+- [ ] Node velocity/acceleration recording (the underlying data already
+  exists on `Node` in `core`; just not wired through the wire format or
+  storage schema)
+- [ ] Reaction-force recording (no reaction computation exists in `core` at
+  all yet — this needs new engine capability, not just plumbing)
+- [ ] Element/section response recording — basic forces, fiber stress/strain
+  (no public `core` API exposes an element's force/section state yet)
+- [ ] Modal results (mode shapes/frequencies) or transient time-histories
+  through this pipeline — `decode()` currently rejects `Modal`/`Transient`
+  stages outright, even though `core` fully implements both
+- [ ] Results UI beyond a minimal debug panel — paged queries work, but
+  nothing yet consumes them for real plots or deformed-shape scrubbing
+- [ ] Saved-run browsing, delete, and export UI (the backend calls exist —
+  `deleteRun`, `queryResults` — but no UI surface calls them for run
+  management)
 
 Superseded planning docs (the original milestone-by-milestone implementation
 plan, the 3D-profile architecture rationale, the pysees handoff contract,

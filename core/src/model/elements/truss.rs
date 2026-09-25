@@ -83,6 +83,16 @@ impl Truss {
         self.material = self.material.commit(strain);
     }
 
+    /// A truss has no distinct local-axis frame to rotate into (its
+    /// direction cosines are already baked into `form_tangent_and_resistance`'s
+    /// `b`, unlike a beam-column's fixed `t`/current-chord transform) — its
+    /// resistance vector already *is* the local nodal force, so this is
+    /// that same value, recomputed fresh from the current committed strain
+    /// (cheap: one material evaluation, no history to cache).
+    pub(super) fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+        self.form_tangent_and_resistance(node_i, node_j).1
+    }
+
     /// Lumped mass: half the element's total mass (`density * area * length`)
     /// at each node, split equally between that node's translational DOFs —
     /// a point mass has no directional preference. Zero rotational
@@ -177,6 +187,12 @@ impl Truss3 {
 
     pub fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
         self.material = self.material.commit(self.axial_strain(node_i, node_j));
+    }
+
+    /// See `Truss::local_force`'s doc comment — same reasoning, no separate
+    /// local frame to rotate into.
+    pub fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {
+        self.form_tangent_and_resistance(node_i, node_j).1
     }
 
     /// Diagonal lumped mass: half of the member mass at each node, applied to

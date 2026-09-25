@@ -1,6 +1,11 @@
 # Batched results storage with IndexedDB
 
-This plan keeps result persistence in the pysees analysis-worker layer and
+**Status: implemented**, on both sides, as of 2026-09-24 — this document
+now describes the built system, not a proposal. See "Implementation status"
+below for exactly what's built vs. still open, and README.md's "Results /
+persistence" checklist for the current one-line-per-item summary.
+
+This design keeps result persistence in the pysees analysis-worker layer and
 uses IndexedDB for local browser storage. Carapace emits bounded numeric
 batches from `carapace-wasm`; a separate storage worker writes those batches
 to IndexedDB and serves result queries. The solver does not own a database
@@ -9,8 +14,18 @@ and does not retain a complete recorder history in memory.
 This extends the ownership and worker protocol in
 [`pysees-handoff.md`](obsolete/pysees-handoff.md) (moved to `docs/obsolete/`
 as a superseded planning doc, but still the source for the run
-lifecycle/worker-protocol concepts this plan builds on). It does not require
-SQLite, OPFS, or changes to `carapace-core`.
+lifecycle/worker-protocol concepts this design builds on). It does not
+require SQLite, OPFS, or changes to `carapace-core`.
+
+**Scope carried over from that superseded doc's first slice, still true
+today:** only node-displacement recorders and static analysis stages flow
+through this pipeline. There is no `responseKind`/target-kind dimension
+anywhere in this schema — every recorder is implicitly "node displacement."
+Velocity/acceleration, reactions, element/section response, and modal/
+transient results are not recorded, not because this design excludes them,
+but because nothing upstream of it (the wire format, the decoder) produces
+them yet. See README.md's "Results / persistence" checklist for the exact
+list of what's missing and why each is a different size of gap.
 
 ## Goals and invariants
 
@@ -32,7 +47,7 @@ SQLite, OPFS, or changes to `carapace-core`.
 
 ```text
 pysees main thread
-  ├─ compiles model + sequence; allocates runId and provenance hashes
+  ├─ compiles model + sequence; allocates runId (provenance hashes: placeholder only, see below)
   ├─ starts analysis worker and results-storage worker
   └─ displays progress and requests paged result queries
 
@@ -47,7 +62,7 @@ carapace-wasm → carapace-core
 results-storage worker
   ├─ owns the IndexedDB connection and schema upgrades
   ├─ batches writes into short readwrite transactions
-  └─ answers query / export / delete requests
+  └─ answers query / delete requests (no export request type exists yet)
 ```
 
 Use a `MessageChannel` between the two workers. The main thread creates the
@@ -143,10 +158,15 @@ claim that data is immune to browser storage eviction or device failure.
 
 ### Batching and backpressure
 
-Carapace should return samples produced during each bounded `advance()` call
-as packed per-recorder buffers (one per wire recorder, node-major/DOF-minor
-order — see "IndexedDB layout" above). The analysis worker transposes those
-into the dense run-wide row layout and buffers them across multiple
+Carapace returns samples produced during each bounded `advance()` call as
+one entry per recorder that sampled this call (`StepOutcome.
+recorderBatches`) — today still `serde-wasm-bindgen`-serialized `(time,
+value)` pairs, not packed binary buffers (see "Batch wire shape" above; the
+packed, node-major/DOF-minor buffer described here is the target shape, not
+yet what crosses the wasm boundary). The analysis worker (`carapaceWorker.
+ts`'s `StorageStream`) does the actual packing: it transposes those
+per-recorder entries into the dense run-wide row layout and buffers them
+across multiple
 `advance()` calls into a chunk target (roughly 1–4 MiB, not one block per
 call — small per-call blocks defeat the point of batching `put()`s), but it
 must flush early on a stage-index change and at run completion/cancellation/
@@ -170,93 +190,135 @@ at the next yield point, asks Carapace to stop if needed, and marks the run
 complete. Cancellation and solver errors still flush already-produced data
 and persist their final status after outstanding writes settle.
 
-## Work by repository
+## Implementation status by repository
 
 ### pysees
 
-1. **Storage schema and service** — add a results-storage module for opening
-   and upgrading IndexedDB, `beginRun`, idempotent block writes, paged queries,
-   run finalization, and deletion. Keep transaction creation and upgrade logic
-   inside the storage worker. On open, reconcile any non-terminal run left
-   over from a prior page session to `interrupted` (see "Interrupted runs").
-2. **Storage worker and protocol** — add a dedicated worker plus typed request
-   and reply definitions. Transfer result buffers through the channel. Add
-   timeouts/structured errors for worker startup and transaction failures.
-3. **Run orchestration** — update `runCarapace` and
-   `carapaceWorkerClient.ts` to create/reuse the storage worker, establish the
-   channel, create the immutable run metadata, and pass the port to the
-   analysis worker. Keep model compilation and run-ID creation on the pysees
-   side.
-4. **UI state** — replace `CarapaceRunResult.recorderSamples` as a complete
-   in-memory history with run metadata, counts, and status. Keep only current
-   progress and the latest sample in transient UI state. Query data on demand
-   for plots and deformed-shape views, requesting only the visible sample range
-   or downsampled series.
-5. **Imported recorder files** — keep the existing external-file import path
-   available. It may share the Results view/query adapter later, but this
-   implementation should not require converting imported files into the
-   IndexedDB run format.
-6. **User controls** — expose saved runs, delete-run behavior, and an export
-   path for a run's metadata and numeric blocks. Show distinct complete,
-   cancelled, solver-failed, storage-failed, and interrupted states.
+1. **Storage schema and service — done.**
+   `src/app/lib/resultsStorage/db.ts` opens/upgrades IndexedDB, and
+   implements `beginRun`, idempotent block writes (`put()` on the
+   `(runId, blockIndex)` key plus a `Math.max`-based `sampleCount`
+   reconciliation, so a retried batch can't double-count or duplicate),
+   paged `query`, `finishRun`, and `deleteRun`. Reconciles any non-terminal
+   run to `interrupted` on database open (see "Interrupted runs").
+2. **Storage worker and protocol — done**, minus one piece.
+   `src/app/workers/resultsStorageWorker.ts` is a dedicated worker with the
+   typed request/reply shapes below, reachable both directly and via a
+   handed-off `MessagePort`. **Not done:** no timeouts or structured errors
+   for worker-startup failure — a storage worker that fails to start has no
+   distinct failure path from an ordinary request timing out.
+3. **Run orchestration — done.**
+   `src/app/lib/carapace/carapaceWorkerClient.ts`'s `runCarapaceOnWorker`
+   creates the storage worker, opens the `MessageChannel`, builds run/stage/
+   recorder metadata from the compiler's output, and hands the analysis
+   worker its port. Model compilation and run-ID creation stay on the
+   pysees side, as designed. One gap: `runMetadataFor`'s `modelHash`/
+   `sequenceHash` are the placeholder string `'unhashed'` — provenance
+   hashing was never implemented.
+4. **UI state — done.**
+   `CarapaceRunResult` (`src/app/types/carapaceRun.ts`) is metadata/counts/
+   status only (`sampleCount`, `recordedNodeTags`, `error`) — the old
+   complete-in-memory-history shape this item names is gone. `AnalysisPanel.
+   tsx` queries `resultsStorage` on demand for the values it shows.
+5. **Imported recorder files** — unaffected by this work either way; not
+   verified as part of this audit.
+6. **User controls — not done.** `deleteRun`/`queryResults` exist in
+   `resultsStorageClient.ts`, but nothing in the UI calls them for run
+   management: there is no saved-runs list, no delete-run control, and no
+   export path. `AnalysisPanel.tsx`'s results view is a single run's debug
+   panel (status, diagnostics, last sample per recorded node), not the
+   browsing/export surface this item describes.
 
-Relevant current files include `src/app/workers/carapaceWorker.ts`,
+Relevant files: `src/app/workers/carapaceWorker.ts`,
+`src/app/workers/resultsStorageWorker.ts`,
 `src/app/lib/carapace/carapaceWorkerClient.ts`,
-`src/app/store/useAppStore.ts`, and `src/app/types/carapaceRun.ts`.
+`src/app/lib/resultsStorage/db.ts`,
+`src/app/lib/resultsStorage/resultsStorageClient.ts`,
+`src/app/types/carapaceRun.ts`, `src/app/types/resultsStorage.ts`.
+
+**No automated tests exist for any of the above** — pysees has no test
+runner configured at all (`package.json` has no test script). This is the
+biggest rigor gap relative to Carapace's Rust side, which has native tests
+for the equivalent batching behavior (see below). Treat the "duplicate
+retry and transaction failure" and "worker integration" verification named
+in "Delivery stages and acceptance gates" below as unverified, not just
+undocumented.
 
 ### Carapace
 
-1. **Batch wire shape** — finalize the recorder-block contract with pysees.
-   Extend the current `StepOutcome`/`advance()` surface to return only the
-   samples generated in that call, grouped by recorder, with stable recorder
-   identity, stage index, sample range, component count, and packed numeric
-   data. Use transferable buffers at the JS worker boundary.
-2. **Bound memory** — replace `recorder_history: Vec<Vec<(f64, f64)>>` in
-   `PlanarSession` with a per-advance buffer (or recorder-local bounded
-   buffers drained on each `advance`). Keep only latest sample/count data
-   needed for progress. Remove or narrow `recorderSamples()` so it cannot
-   materialize the entire run.
-3. **No persistence dependency** — do not add IndexedDB, OPFS, SQLite, or
-   browser storage APIs to `carapace-core` or `carapace-wasm`. Carapace's
-   numerical results remain independent of storage backend and UI lifecycle.
-4. **Session metadata** — expose the compact recorder/stage metadata needed
-   to label batches and finalize partial runs. The run ID and model/sequence
-   hashes remain pysees-owned metadata and need not be folded into the solver
-   input unless a concrete diagnostic requires them.
-5. **Failure and cancellation contract** — make each `advance()` batch
-   deterministic and identify its first sample/count so the caller can safely
-   retry persistence. Preserve solver status separately from storage status;
-   storage failures are handled by the pysees worker orchestration.
+1. **Batch wire shape — done, partially.** `StepOutcome::recorder_batches`
+   (`wasm-bridge/src/input_v1/session.rs`) returns only the samples one
+   `advance()` call produced, grouped by recorder, with stable
+   `recorder_index`, `stage_index`, and a deterministic `first_sample`.
+   **Not done:** this still crosses the `wasm_bindgen` boundary as a
+   structured-clone JS object via `serde-wasm-bindgen`
+   (`wasm-bridge/src/boundary.rs`'s own doc comment calls this out), not a
+   transferable typed array — `carapaceWorker.ts`'s `StorageStream` does
+   the packing into a real `Float64Array`/`ArrayBuffer` itself, on the JS
+   side, only for the next hop (to the storage worker).
+2. **Bound memory — done.** `PlanarSession` no longer holds
+   `recorder_history: Vec<Vec<(f64, f64)>>`; `current_batch` is cleared at
+   the top of every `advance()` call and drained into that call's
+   `recorder_batches` at the end, with only a running
+   `recorder_sample_counts: Vec<u32>` persisting across calls.
+   `recorder_samples()` was removed entirely (not narrowed) — there is no
+   accessor that can materialize a whole run's history anymore.
+3. **No persistence dependency — upheld.** No IndexedDB/OPFS/SQLite/browser
+   storage API exists in `carapace-core` or `carapace-wasm`.
+4. **Session metadata — not needed, turned out.** No new `Session`/
+   `WasmSession` accessor for recorder/stage metadata was added, but none
+   was needed: pysees's compiler (`compileInputV1.ts`) already holds
+   `recordedNodeTags`/`dofsPerNode` from compiling the model, before decode
+   ever runs, so `carapaceWorkerClient.ts` builds `RunMetadata`/
+   `RecorderMetadata` from the compiler's output directly. Provenance
+   hashes remain unimplemented on the pysees side (see above), not blocked
+   on anything here.
+5. **Failure and cancellation contract — done.** Every `RecorderBatch`
+   carries a deterministic `first_sample`/`stage_index`, verified by
+   `wasm-bridge/tests/m10_carapace_input_v1.rs`'s multi-stage,
+   multi-`advance()`-call assertions.
 
-Relevant current files include `wasm-bridge/src/input_v1/session.rs`,
-`wasm-bridge/src/boundary.rs`, and `wasm-bridge/src/input_v1/` in Carapace.
+Relevant files: `wasm-bridge/src/input_v1/session.rs`,
+`wasm-bridge/src/boundary.rs`, `wasm-bridge/tests/m10_carapace_input_v1.rs`.
 
 ## Delivery stages and acceptance gates
 
-1. **Agree on the protocol.** Freeze block row layout, IDs, range semantics,
+1. **Agree on the protocol — done.** Block row layout, IDs, range semantics,
    stage-boundary behavior, error/status vocabulary, and retry/idempotency
-   rules across both repositories.
-2. **Carapace bounded-batch slice.** Add the per-advance packed output and
-   confirm native session tests show exact sample/time/value ordering across
-   multiple `advance()` calls and stage transitions.
-3. **pysees storage worker.** Implement IndexedDB schema and lifecycle
-   operations, then verify begin/write/reopen/query/finalize/delete behavior
-   with synthetic blocks, including duplicate retry and transaction failure.
-4. **Worker integration.** Connect the analysis and storage workers. Verify
-   transfers, ordering, bounded queue behavior, backpressure, cancellation,
-   partial-result retention, and that `complete` waits for all write acks.
-5. **Results UI.** Replace full-history state with paged queries and preserve
-   the existing visualizations using the query adapter.
-6. **Performance check.** In target browsers, compare end-to-end analysis
-   time with result persistence enabled and disabled for representative
-   recorder counts and run lengths. Record solver steps/second, write queue
-   high-water mark, bytes/second, transaction duration, and peak memory. Tune
-   block size and queue budget from these measurements. Acceptance is no
-   sustained queue growth and no material loss in solver throughput on the
-   representative workloads; set a numeric threshold before implementation
-   based on the expected run sizes.
+   rules match across both repositories (verified by reading both, not just
+   by the protocol type files agreeing).
+2. **Carapace bounded-batch slice — done and tested.** Native session tests
+   (`wasm-bridge/tests/m10_carapace_input_v1.rs`) confirm exact sample/time/
+   value ordering across multiple `advance()` calls and a stage transition.
+3. **pysees storage worker — implemented, not verified.** IndexedDB schema
+   and lifecycle operations exist (`db.ts`), but there is no test exercising
+   begin/write/reopen/query/finalize/delete with synthetic blocks, duplicate
+   retry, or transaction failure — pysees has no test runner at all (see
+   above). The idempotency logic reads correctly by inspection; it has not
+   been exercised by a test that actually retries a write.
+4. **Worker integration — implemented, not verified.** The analysis and
+   storage workers are connected (`carapaceWorkerClient.ts`), with transfer,
+   ordering, bounded-queue backpressure, and cancellation all present in the
+   code (`StorageStream` in `carapaceWorker.ts`). Same caveat as above: no
+   automated test drives this end to end.
+5. **Results UI — not done.** `AnalysisPanel.tsx` has a minimal debug panel
+   (status, diagnostics, last sample per node), not paged queries feeding
+   real plots or deformed-shape scrubbing. The query adapter
+   (`resultsStorageClient.ts`'s `queryResults`) works and is exercised by
+   that debug panel, but nothing consumes it for actual visualization yet.
+6. **Performance check — not done.** No measurement has been taken in any
+   browser. `FLUSH_BYTE_TARGET`/`IN_FLIGHT_BYTE_BUDGET` in `carapaceWorker.
+   ts` are still the doc's original starting guesses (1 MiB / 8 MiB), not
+   tuned from data, and their own code comment says so.
 
 ## Storage limits and recovery
+
+**Not implemented.** None of this section is built: there is no
+`navigator.storage.estimate()` call anywhere in pysees, no explicit
+quota-error handling (a quota error would surface only as a generic
+`storageError`/`storage-failed`, indistinguishable from any other IndexedDB
+failure), no persistent-storage request, and no run export. The design
+intent stands as written below.
 
 IndexedDB and OPFS are browser-managed origin storage, subject to quotas and
 possible eviction. Query `navigator.storage.estimate()` for a useful
@@ -267,6 +329,9 @@ the browser where appropriate, but must continue to handle refusal and
 storage loss.
 
 ### Interrupted runs
+
+**Done** — `db.ts`'s `reconcileInterruptedRuns`, run once per database open
+before any request is served, matches this section exactly.
 
 A page reload or tab close during a run leaves the in-memory analysis worker
 and its `carapace-wasm` session gone, but the run's `runs` row in IndexedDB
@@ -280,16 +345,28 @@ status (`complete`, `failed`, `cancelled`, `storage-failed`) and reconcile it
 to `interrupted`, preserving whatever stages/blocks/sample counts were
 already committed. `interrupted` is a distinct terminal status from
 `storage-failed`: the storage layer itself did not fail, the run simply never
-finished. Surface `interrupted` runs in the UI the same way as the other
-terminal-but-incomplete states (§User controls), with their partial data
-still queryable and exportable.
+finished. Its partial data is queryable today (the reconciliation itself is
+done); surfacing it in a run list alongside the other terminal-but-incomplete
+states, and exporting it, both wait on §User controls above (not done).
 
 ## Open decisions
 
+All four of these are still genuinely open — none have been decided or
+resolved by the implementation work above.
+
 - Confirm whether every run is persisted by default or whether small/temporary
-  runs may remain memory-only.
+  runs may remain memory-only. (Today, every run is unconditionally
+  persisted — `runCarapaceOnWorker` always calls `beginRun`.)
 - Set initial batch and in-flight byte targets after measuring expected result
-  sizes and current `stepBudget` behavior.
+  sizes and current `stepBudget` behavior. (Today's `FLUSH_BYTE_TARGET`/
+  `IN_FLIGHT_BYTE_BUDGET` are still this doc's original unmeasured guesses.)
 - Decide the export package format and whether export includes only selected
-  recorder channels or the complete run.
+  recorder channels or the complete run. (No export exists yet at all.)
 - Set a numeric throughput regression threshold for the performance gate.
+  (No performance measurement has been taken yet.)
+
+And one this audit surfaced, not in the original plan: **decide the
+response-kind/target-kind schema extension** — a `responseKind` dimension
+on `RecorderMetadata` and a non-node-indexed row layout for element
+response — before any of velocity/acceleration/reaction/element-response
+recording can be added. See README.md's "Results / persistence" checklist.

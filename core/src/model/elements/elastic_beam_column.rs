@@ -168,6 +168,39 @@ impl ElasticBeamColumn {
         (k, resistance)
     }
 
+    /// Local nodal force — `resistance_local`/`Corotational2d::
+    /// local_resistance`, the pre-transform value `form_tangent_and_
+    /// resistance` already computes and discards, recomputed fresh here
+    /// (stateless/elastic, so this is cheap and always exactly consistent
+    /// with the current committed displacement — no cache to keep in
+    /// sync).
+    pub(super) fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
+        if self.transform == GeomTransf::Corotational {
+            let transform = Corotational2d::new(node_i, node_j);
+            let l = transform.initial_length();
+            let ea_l = self.e * self.a / l;
+            let eiz_l = self.e * self.iz / l;
+            let k_basic = SMatrix::<f64, 3, 3>::new(
+                ea_l, 0.0, 0.0, 0.0, 4.0 * eiz_l, 2.0 * eiz_l, 0.0, 2.0 * eiz_l, 4.0 * eiz_l,
+            );
+            let q = k_basic * transform.basic_deformation();
+            return transform.local_resistance(&q);
+        }
+
+        let (length, cx, cy) = self.geometry(node_i, node_j);
+        let t = self.transformation(cx, cy);
+        let k_local = self.local_elastic_stiffness(length);
+        let d_global = SVector::<f64, 6>::from_row_slice(&[
+            node_i.displacement[0],
+            node_i.displacement[1],
+            node_i.displacement[2],
+            node_j.displacement[0],
+            node_j.displacement[1],
+            node_j.displacement[2],
+        ]);
+        k_local * (t * d_global)
+    }
+
     /// Equivalent nodal load (global coordinates) from a uniform transverse
     /// load `w` (force/length, local +y direction) applied to this element
     /// by whichever `LoadPattern` is currently being assembled (§3.4;
@@ -404,6 +437,17 @@ impl ElasticBeamColumn3 {
         let k = t.transpose() * k_total_local * t;
 
         (k, resistance)
+    }
+
+    /// Local nodal force, spatial counterpart of the planar `local_force`
+    /// above — same `resistance_local` value `form_tangent_and_resistance`
+    /// already computes and discards, recomputed fresh (cheap, stateless).
+    pub(super) fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {
+        let (length, r) = self.transform.local_axes(node_i, node_j);
+        let t = GeomTransf3::rotation_matrix(&r);
+        let k_local = self.local_elastic_stiffness(length);
+        let d_global = SpatialElementVector::from_iterator(node_i.displacement.iter().chain(node_j.displacement.iter()).copied());
+        k_local * (t * d_global)
     }
 
     /// Equivalent nodal load (global coordinates) from local transverse
