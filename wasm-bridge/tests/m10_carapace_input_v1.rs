@@ -8,8 +8,9 @@ use carapace_wasm::input_v1::sequence::{
     AlgorithmSpec, ConvergenceSpec, IntegratorSpec, RecorderSpec, SequenceSpec, StageSpec,
 };
 use carapace_wasm::input_v1::tables::{
-    ElasticBeamColumnTable, ElementLoadTable, FiberBeamColumnTable, FiberTable, IntegrationSpec,
-    LoadPatternTable, NodalLoadTable, NodeTable, TimeSeriesSpec, TrussTable, ZeroLengthTable,
+    ElasticBeamColumnTable, ElementKind, ElementLoadTable, FiberBeamColumnTable, FiberTable,
+    IntegrationSpec, LoadPatternTable, NodalLoadTable, NodeTable, TimeSeriesSpec, TransformSpec,
+    TrussTable, ZeroLengthTable,
 };
 use carapace_wasm::input_v1::{decode, CarapaceInputV1, Header, StepOutcome};
 
@@ -90,7 +91,7 @@ fn decodes_a_single_truss_and_matches_the_closed_form_displacement() {
             }),
             hold_patterns_after: vec![],
         }],
-        recorders: vec![RecorderSpec { node: 1, dof: 0 }],
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
     };
 
     let mut session = decode(input).expect("well-formed planar input should decode");
@@ -115,6 +116,89 @@ fn decodes_a_single_truss_and_matches_the_closed_form_displacement() {
     assert_eq!(batch.first_sample, 0);
     assert_eq!(batch.stage_index, 0);
     assert_eq!(batch.samples.len(), 1);
+}
+
+/// The second recorder kind (results-storage-indexeddb.md's "several more
+/// types of recorders" plan): an `ElementForce` recorder alongside a
+/// `NodeDisp` one, on a horizontal cantilever `ElasticBeamColumn` — a
+/// statically determinate case, so the expected local force at both
+/// recorded components is plain nodal-equilibrium statics (the same
+/// technique `core/tests/element_local_force.rs` uses), independent of the
+/// element's own stiffness formulation. Also proves node and element
+/// batches coexist correctly in one `advance()` call's `recorder_batches`,
+/// each keyed by its own `recorder_index`.
+#[test]
+fn decodes_an_element_force_recorder_alongside_a_node_disp_recorder() {
+    let (length, e, area, iz, fy) = (100.0, 30_000.0, 10.0, 1000.0, -10.0);
+    let mut input = empty_input(2);
+    input.nodes = NodeTable {
+        coords: vec![0.0, 0.0, length, 0.0],
+        fixed: vec![0b111, 0b000],
+        mass_node_index: vec![],
+        mass: vec![],
+    };
+    input.elastic_beam_columns = ElasticBeamColumnTable {
+        node_i: vec![0],
+        node_j: vec![1],
+        e: vec![e],
+        a: vec![area],
+        iz: vec![iz],
+        transform: vec![TransformSpec::Linear],
+        density: vec![0.0],
+    };
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
+        scale_factor: vec![1.0],
+    };
+    input.nodal_loads = NodalLoadTable {
+        pattern: vec![0],
+        node: vec![1],
+        dof: vec![1],
+        value: vec![fy],
+        stage: vec![0],
+    };
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Static {
+            id: "only".to_string(),
+            steps: 1,
+            integrator: IntegratorSpec::LoadControl { increment: 1.0 },
+            algorithm: AlgorithmSpec::Linear,
+            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            hold_patterns_after: vec![],
+        }],
+        recorders: vec![
+            RecorderSpec::NodeDisp { node: 1, dof: 1 },
+            RecorderSpec::ElementForce {
+                element_kind: ElementKind::ElasticBeamColumn,
+                element_index: 0,
+                // component 2 = rz_i (fixed-end reaction moment), component 4 = uy_j (tip shear).
+                component: 2,
+            },
+            RecorderSpec::ElementForce {
+                element_kind: ElementKind::ElasticBeamColumn,
+                element_index: 0,
+                component: 4,
+            },
+        ],
+    };
+
+    let mut session = decode(input).expect("well-formed planar input should decode");
+    let outcome = session.advance(10);
+    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+
+    let expected_tip_disp = fy * length.powi(3) / (3.0 * e * iz);
+    let (_, tip_disp) = last_sample(&outcome, 0).expect("recorder 0 (node disp) sample");
+    assert!((tip_disp - expected_tip_disp).abs() < 1e-6, "expected {expected_tip_disp}, got {tip_disp}");
+
+    let (_, reaction_moment) = last_sample(&outcome, 1).expect("recorder 1 (element force, component 2) sample");
+    let expected_reaction_moment = -length * fy;
+    assert!(
+        (reaction_moment - expected_reaction_moment).abs() < 1e-6,
+        "expected {expected_reaction_moment}, got {reaction_moment}"
+    );
+
+    let (_, tip_shear) = last_sample(&outcome, 2).expect("recorder 2 (element force, component 4) sample");
+    assert!((tip_shear - fy).abs() < 1e-6, "expected {fy}, got {tip_shear}");
 }
 
 #[test]
@@ -254,8 +338,8 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
             },
         ],
         recorders: vec![
-            RecorderSpec { node: 1, dof: 0 },
-            RecorderSpec { node: 1, dof: 1 },
+            RecorderSpec::NodeDisp { node: 1, dof: 0 },
+            RecorderSpec::NodeDisp { node: 1, dof: 1 },
         ],
     };
 

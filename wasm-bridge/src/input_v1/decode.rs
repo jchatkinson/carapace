@@ -18,7 +18,7 @@ use carapace_core::model::{
 
 use super::error::DecodeError;
 use super::materials::resolve_materials;
-use super::sequence::{AlgorithmSpec, ConvergenceSpec, IntegratorSpec, StageSpec};
+use super::sequence::{AlgorithmSpec, ConvergenceSpec, IntegratorSpec, RecorderSpec, StageSpec};
 use super::session::{CompiledStage, CompiledStageKind, PlanarSession, ResolvedRecorder, Session};
 use super::tables::{ElementKind, ElementLoadSpec, IntegrationSpec, TimeSeriesSpec, TransformSpec};
 use super::{CarapaceInputV1, Header};
@@ -108,7 +108,7 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
         force_beam_ids.push(domain.add_element(Element::ForceBeamColumn(element)));
     }
 
-    add_zero_lengths(&mut domain, &input.zero_lengths, &node_at, &material_at)?;
+    let zero_length_ids = add_zero_lengths(&mut domain, &input.zero_lengths, &node_at, &material_at)?;
 
     let pattern_ids = add_load_patterns(&mut domain, &input.load_patterns);
     let pattern_at = |row: u32| -> Result<LoadPatternId, DecodeError> {
@@ -188,14 +188,36 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
         nodal_loads_by_stage,
         element_loads_by_stage,
     )?;
+    let element_at = |kind: ElementKind, row: u32| -> Result<ElementId, DecodeError> {
+        let (ids, table) = match kind {
+            ElementKind::Truss => (&truss_ids, "trusses"),
+            ElementKind::ElasticBeamColumn => (&elastic_beam_ids, "elastic_beam_columns"),
+            ElementKind::DispBeamColumn => (&disp_beam_ids, "disp_beam_columns"),
+            ElementKind::ForceBeamColumn => (&force_beam_ids, "force_beam_columns"),
+            ElementKind::ZeroLength => (&zero_length_ids, "zero_lengths"),
+        };
+        ids.get(row as usize)
+            .copied()
+            .ok_or(DecodeError::UnknownElementIndex { table, row })
+    };
     let recorders = input
         .sequence
         .recorders
         .iter()
         .map(|recorder| {
-            Ok(ResolvedRecorder {
-                node: node_at(recorder.node, "recorders")?,
-                dof: recorder.dof,
+            Ok(match *recorder {
+                RecorderSpec::NodeDisp { node, dof } => ResolvedRecorder::NodeDisp {
+                    node: node_at(node, "recorders")?,
+                    dof,
+                },
+                RecorderSpec::ElementForce {
+                    element_kind,
+                    element_index,
+                    component,
+                } => ResolvedRecorder::ElementForce {
+                    element: element_at(element_kind, element_index)?,
+                    component,
+                },
             })
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;

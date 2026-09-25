@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::tables::ElementKind;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -95,18 +97,40 @@ impl StageSpec {
     }
 }
 
-/// M10's first recorder: a single node/dof's displacement history against
-/// its stage's load factor (pysees-handoff.md's "selected node
-/// displacement/load-factor history for the static pushover"). Deliberately
-/// narrower than the handoff's general `RecorderSpec` sketch (target
-/// kind/tags, response kind, component layout, sampling spec) — those
-/// belong to the worker/SQLite layer this Rust-side decoder doesn't own.
+/// One recorder: a single scalar channel's history against its stage's load
+/// factor. `NodeDisp` was M10's first (and, until now, only) variant
+/// (pysees-handoff.md's "selected node displacement/load-factor history for
+/// the static pushover"); `ElementForce` (results-storage-indexeddb.md's
+/// "several more types of recorders" plan) is the second, sharing the exact
+/// same batching/storage machinery — see `session::ResolvedRecorder` and
+/// `StepOutcome::recorder_batches`, neither of which needed to change shape
+/// to add it. `ElementForce`'s `element_kind`/`element_index` pair mirrors
+/// `ElementLoadTable`'s existing disambiguation between per-kind element
+/// tables (`ElasticBeamColumnTable`, `ForceBeamColumnTable`, ...) — there is
+/// no single flat element table to index into directly, unlike `NodeTable`.
+/// Adding a future response kind (velocity, acceleration, ...) is one more
+/// variant here plus one more match arm in `PlanarSession::record_sample`,
+/// not a new parallel type or a new `Session`/`StepOutcome` field.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecorderSpec {
-    /// Index into `NodeTable`.
-    pub node: u32,
-    pub dof: u8,
+#[serde(
+    tag = "response",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RecorderSpec {
+    /// `node`/`dof` index into `NodeTable`.
+    NodeDisp { node: u32, dof: u8 },
+    /// `element_index` indexes into whichever per-kind table `element_kind`
+    /// names (e.g. `ForceBeamColumnTable`), not a flat cross-kind element
+    /// list. `component` indexes the element's local nodal force vector
+    /// (`ElementOps::local_force` — axial/shear/moment at each end, in the
+    /// element's own axis frame), width `2 * dofsPerNode` (6 for this
+    /// planar decoder).
+    ElementForce {
+        element_kind: ElementKind,
+        element_index: u32,
+        component: u8,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

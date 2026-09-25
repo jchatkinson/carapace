@@ -46,10 +46,15 @@ impl From<AnalysisError> for AnalysisErrorDetail {
     }
 }
 
+/// A `RecorderSpec` resolved against a decoded `Domain` — real `NodeId`/
+/// `ElementId` handles instead of wire-format table indices. Growing this
+/// by one more response kind (see `RecorderSpec`'s doc comment) is one more
+/// variant plus one more `record_sample` match arm, not a new field
+/// anywhere on `PlanarSession`/`StepOutcome`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ResolvedRecorder {
-    pub node: NodeId,
-    pub dof: u8,
+pub enum ResolvedRecorder {
+    NodeDisp { node: NodeId, dof: u8 },
+    ElementForce { element: ElementId, component: u8 },
 }
 
 pub(super) struct CompiledStage {
@@ -362,7 +367,12 @@ impl PlanarSession {
         };
         let load_factor = self.load_factor;
         for (recorder, batch) in self.recorders.iter().zip(self.current_batch.iter_mut()) {
-            let value = analysis.domain().node(recorder.node).displacement[recorder.dof as usize];
+            let value = match *recorder {
+                ResolvedRecorder::NodeDisp { node, dof } => analysis.domain().node(node).displacement[dof as usize],
+                ResolvedRecorder::ElementForce { element, component } => {
+                    analysis.domain().element_local_force(element)[component as usize]
+                }
+            };
             batch.push((load_factor, value));
         }
     }
