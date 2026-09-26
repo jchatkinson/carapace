@@ -429,6 +429,23 @@ impl ForceBeamColumn {
         self.local_force
     }
 
+    /// Every integration point's per-fiber `(strain, stress)`, read
+    /// directly from `e_commit` — unlike `DispBeamColumn::fiber_responses`,
+    /// no recomputation from nodal displacement is needed: `e_commit`
+    /// already *is* each section's last-committed `(eps0, kappa)` (this
+    /// element's own state-determination target, refreshed by `commit` —
+    /// see `e_commit`'s field doc comment), the same reason `local_force`
+    /// above is a plain cached read rather than a recomputation. Outer
+    /// `Vec` is one entry per integration point, inner `Vec` one entry per
+    /// fiber (the order originally passed to `new`).
+    pub fn fiber_responses(&self) -> Vec<Vec<(f64, f64)>> {
+        self.e_commit
+            .iter()
+            .zip(&self.sections)
+            .map(|(&(eps0, kappa), section)| section.fiber_responses(eps0, kappa))
+            .collect()
+    }
+
     pub(super) fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
         let (length, _cx, _cy) = self.geometry(node_i, node_j);
         let total_area = self.sections[0].total_area();
@@ -736,6 +753,16 @@ impl ForceBeamColumn3 {
     /// See `ForceBeamColumn::local_force`'s doc comment.
     pub(super) fn local_force(&self) -> SpatialElementVector {
         self.local_force
+    }
+
+    /// See `ForceBeamColumn::fiber_responses`'s doc comment — same
+    /// contract, biaxial `e_commit`.
+    pub fn fiber_responses(&self) -> Vec<Vec<(f64, f64)>> {
+        self.e_commit
+            .iter()
+            .zip(&self.sections)
+            .map(|(&(eps0, kappa_z, kappa_y), section)| section.fiber_responses(eps0, kappa_z, kappa_y))
+            .collect()
     }
 
     pub(super) fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {

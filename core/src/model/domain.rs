@@ -241,6 +241,80 @@ where
         element.local_force(&self.nodes[node_i], &self.nodes[node_j])
     }
 
+    /// Every integration point's per-fiber `(strain, stress)` at `id`'s
+    /// current committed state — `None` for every element kind that isn't
+    /// fiber-discretized (`ElementOps::fiber_responses`'s doc comment).
+    /// Outer `Vec` (when `Some`) is one entry per integration point, inner
+    /// `Vec` one entry per fiber, in the order each was originally given to
+    /// the element's constructor — a fiber recorder resolves its `(section,
+    /// fiber)` indices against that same order.
+    pub fn element_fiber_responses(&self, id: E::Id) -> Option<Vec<Vec<(f64, f64)>>> {
+        let element = &self.elements[id];
+        let [node_i, node_j] = element.nodes();
+        element.fiber_responses(&self.nodes[node_i], &self.nodes[node_j])
+    }
+
+    /// Support/equilibrium reaction at `(node, dof)`: net internal element
+    /// resistance there minus the total applied reference load at
+    /// `pseudo_time` (Chopra's standard reaction definition) — most useful
+    /// at a *fixed* DOF (a free DOF's residual is, by construction, what
+    /// `Algorithm::NewtonRaphson` already drives to ~0 at convergence, so
+    /// reading its "reaction" is redundant but harmless). Needs no
+    /// equation number — unlike every other accessor here, this bypasses
+    /// `dof_terms`/the free-DOF system entirely by summing every element's
+    /// and pattern's own contribution to this one `(node, dof)` directly
+    /// (the same per-element/per-pattern loops `assemble_stiffness_
+    /// triplets`/`assemble_load_with` run, just for one DOF instead of
+    /// every free one), so it's well-defined even at a DOF `number_dofs`
+    /// never assigned an equation number to.
+    ///
+    /// Ground-motion excitation (`TransientAnalysis`) never needs a
+    /// separate term here: it's an equivalent inertial pseudo-force at free
+    /// DOFs only (`GroundMotion`'s own doc comment), never a real applied
+    /// load at any DOF — and this crate's dynamics are relative-
+    /// displacement (`docs/spatial-architecture.md`), so a fixed DOF's
+    /// velocity/acceleration are always exactly zero and contribute nothing
+    /// to its reaction regardless of profile or excitation.
+    pub fn reaction(&self, node: NId, dof: usize, pseudo_time: f64) -> f64 {
+        let local_index_at = |id_i: NId, id_j: NId| -> Option<usize> {
+            if id_i == node {
+                Some(dof)
+            } else if id_j == node {
+                Some(NDOF + dof)
+            } else {
+                None
+            }
+        };
+
+        let mut resistance = 0.0;
+        for (_, element) in self.elements.iter() {
+            let [id_i, id_j] = element.nodes();
+            let Some(a) = local_index_at(id_i, id_j) else { continue };
+            let (_k_local, r_local) = element.form_tangent_and_resistance(&self.nodes[id_i], &self.nodes[id_j]);
+            resistance += r_local[a];
+        }
+
+        let mut applied = 0.0;
+        for (_, pattern) in self.load_patterns.iter() {
+            let factor = pattern.factor(pseudo_time);
+            if factor == 0.0 {
+                continue;
+            }
+            if let Some(nodal_load) = pattern.nodal_load(node) {
+                applied += factor * nodal_load[dof];
+            }
+            for (element_id, element) in self.elements.iter() {
+                let Some(element_load) = pattern.element_load(element_id) else { continue };
+                let [id_i, id_j] = element.nodes();
+                let Some(a) = local_index_at(id_i, id_j) else { continue };
+                let load_local = element.form_load_vector(&self.nodes[id_i], &self.nodes[id_j], Some(element_load));
+                applied += factor * load_local[a];
+            }
+        }
+
+        resistance - applied
+    }
+
     /// `Domain::new()`'s always-present pattern — see its doc comment.
     pub fn default_pattern(&self) -> LoadPatternId {
         self.default_pattern
@@ -308,10 +382,15 @@ where
         });
     }
 
-    /// Equation number of a node's DOF, or `None` if it's fixed. Used by
-    /// `Integrator::DisplacementControl` to locate its controlled DOF in
-    /// the free-DOF system.
-    pub(crate) fn equation_of(&self, node: NId, dof: usize) -> Option<usize> {
+    /// Equation number of a node's DOF, or `None` if it's fixed. Used
+    /// internally by `Integrator::DisplacementControl` to locate its
+    /// controlled DOF in the free-DOF system, and `pub` (not just
+    /// `pub(crate)`) so a caller holding a free-DOF-indexed vector — e.g.
+    /// `modal_analysis`'s `Mode::shape` — can map one of its entries back
+    /// to a specific node/DOF without `core` needing to expose any of
+    /// `gather_displacement`/`scatter_state`'s broader internal-state
+    /// surface just for that one lookup.
+    pub fn equation_of(&self, node: NId, dof: usize) -> Option<usize> {
         self.nodes[node].equation[dof]
     }
 
@@ -404,8 +483,10 @@ where
     /// Whether any `equal_dof`/`rigid_diaphragm` constraint has been added —
     /// used by `AnalysisBuilder<Ready>::build` to reject `ConstraintHandler
     /// ::Plain` (which can't resolve them) early, at model-construction
-    /// time rather than as a silently-wrong solve.
-    pub(crate) fn has_mp_constraints(&self) -> bool {
+    /// time rather than as a silently-wrong solve. Also used by callers
+    /// (e.g. `carapace-wasm`'s decoder) to pick `ConstraintHandler::
+    /// Transformation` automatically whenever a domain actually has any.
+    pub fn has_mp_constraints(&self) -> bool {
         !self.mp_constraints.is_empty() || !self.affine_constraints.is_empty()
     }
 

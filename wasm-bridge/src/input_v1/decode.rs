@@ -9,11 +9,11 @@
 
 use std::collections::HashMap;
 
-use carapace_core::analysis::{Algorithm, ConvergenceTest, Integrator};
+use carapace_core::analysis::{Algorithm, ConvergenceTest, GroundMotion, Integrator, RayleighDamping};
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
-    Fiber, ForceBeamColumn, GeomTransf, LoadPatternId, LoadSeries, Material, Node, NodeId, Truss,
-    ZeroLength,
+    Fiber, FiberSection, ForceBeamColumn, Friction, GeomTransf, LoadPatternId, LoadSeries,
+    Material, Node, NodeId, Truss, ZeroLength, ZeroLengthSection,
 };
 
 use super::error::DecodeError;
@@ -21,14 +21,25 @@ use super::materials::resolve_materials;
 use super::sequence::{AlgorithmSpec, ConvergenceSpec, IntegratorSpec, RecorderSpec, StageSpec};
 use super::session::{CompiledStage, CompiledStageKind, PlanarSession, ResolvedRecorder, Session};
 use super::tables::{ElementKind, ElementLoadSpec, IntegrationSpec, TimeSeriesSpec, TransformSpec};
-use super::{CarapaceInputV1, Header};
+use super::CarapaceInputV1;
 
 const PLANAR_SPACE: u8 = 2;
+const SPATIAL_SPACE: u8 = 3;
 
+/// Dispatches on `header.space`, chosen once here and never branched on
+/// again downstream (`Session`'s own doc comment) — `decode_planar` and
+/// `decode3::decode_spatial` are otherwise two independent per-table
+/// decoders (only `compile_stages`/`check_dof_within` are shared, since
+/// stage/integrator compilation doesn't touch element physics).
 pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
-    check_supported_space(&input.header)?;
-    check_supported_stages(&input.sequence.stages)?;
+    match input.header.space {
+        PLANAR_SPACE => decode_planar(input).map(Session::Planar),
+        SPATIAL_SPACE => super::decode3::decode_spatial(input).map(Session::Spatial),
+        got => Err(DecodeError::UnsupportedSpace { got }),
+    }
+}
 
+fn decode_planar(input: CarapaceInputV1) -> Result<PlanarSession, DecodeError> {
     let materials = resolve_materials(&input.materials)?;
     let material_at = |row: u32, table: &'static str| -> Result<Material, DecodeError> {
         materials
@@ -45,6 +56,8 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
             .copied()
             .ok_or(DecodeError::UnknownNodeIndex { table, row })
     };
+    add_equal_dofs(&mut domain, &input.equal_dofs, &node_at)?;
+    add_rigid_diaphragms(&mut domain, &input.rigid_diaphragms, &node_at)?;
     let fiber_section_at = |section: u32| -> Result<Vec<Fiber>, DecodeError> {
         build_fiber_section(&input.fibers, section, &material_at)
     };
@@ -109,6 +122,13 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
     }
 
     let zero_length_ids = add_zero_lengths(&mut domain, &input.zero_lengths, &node_at, &material_at)?;
+    let zero_length_section_ids = add_zero_length_sections(
+        &mut domain,
+        &input.zero_length_sections,
+        &node_at,
+        &material_at,
+        &fiber_section_at,
+    )?;
 
     let pattern_ids = add_load_patterns(&mut domain, &input.load_patterns);
     let pattern_at = |row: u32| -> Result<LoadPatternId, DecodeError> {
@@ -185,6 +205,8 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
         &input.sequence.stages,
         &node_at,
         &pattern_at,
+        3,
+        2,
         nodal_loads_by_stage,
         element_loads_by_stage,
     )?;
@@ -195,6 +217,7 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
             ElementKind::DispBeamColumn => (&disp_beam_ids, "disp_beam_columns"),
             ElementKind::ForceBeamColumn => (&force_beam_ids, "force_beam_columns"),
             ElementKind::ZeroLength => (&zero_length_ids, "zero_lengths"),
+            ElementKind::ZeroLengthSection => (&zero_length_section_ids, "zero_length_sections"),
         };
         ids.get(row as usize)
             .copied()
@@ -210,6 +233,14 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
                     node: node_at(node, "recorders")?,
                     dof,
                 },
+                RecorderSpec::NodeVel { node, dof } => ResolvedRecorder::NodeVel {
+                    node: node_at(node, "recorders")?,
+                    dof,
+                },
+                RecorderSpec::NodeAccel { node, dof } => ResolvedRecorder::NodeAccel {
+                    node: node_at(node, "recorders")?,
+                    dof,
+                },
                 RecorderSpec::ElementForce {
                     element_kind,
                     element_index,
@@ -218,46 +249,42 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
                     element: element_at(element_kind, element_index)?,
                     component,
                 },
+                RecorderSpec::ModeShape { mode, node, dof } => ResolvedRecorder::ModeShape {
+                    mode,
+                    node: node_at(node, "recorders")?,
+                    dof,
+                },
+                RecorderSpec::Reaction { node, dof } => ResolvedRecorder::Reaction {
+                    node: node_at(node, "recorders")?,
+                    dof,
+                },
+                RecorderSpec::Fiber {
+                    element_kind,
+                    element_index,
+                    point,
+                    fiber,
+                    quantity,
+                } => ResolvedRecorder::Fiber {
+                    element: element_at(element_kind, element_index)?,
+                    point,
+                    fiber,
+                    response: quantity,
+                },
             })
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;
 
-    Ok(Session::Planar(PlanarSession::new(
-        domain, stages, recorders,
-    )))
-}
-
-fn check_supported_space(header: &Header) -> Result<(), DecodeError> {
-    if header.space == PLANAR_SPACE {
-        Ok(())
-    } else {
-        Err(DecodeError::UnsupportedSpace { got: header.space })
-    }
-}
-
-fn check_supported_stages(stages: &[StageSpec]) -> Result<(), DecodeError> {
-    for stage in stages {
-        match stage {
-            StageSpec::Modal { id, .. } => {
-                return Err(DecodeError::UnsupportedStage {
-                    stage_id: id.clone(),
-                    stage_kind: "modal",
-                })
-            }
-            StageSpec::Transient { id } => {
-                return Err(DecodeError::UnsupportedStage {
-                    stage_id: id.clone(),
-                    stage_kind: "transient",
-                })
-            }
-            StageSpec::Static { .. } => {}
-        }
-    }
-    Ok(())
+    Ok(PlanarSession::new(domain, stages, recorders))
 }
 
 fn check_dof(table: &'static str, row: u32, dof: u8) -> Result<(), DecodeError> {
-    if (dof as usize) < 3 {
+    check_dof_within(table, row, dof, 3)
+}
+
+/// `check_dof`, generalized to the caller's DOF-per-node count (`3` planar,
+/// `6` spatial — see `decode3.rs`'s own `check_dof3`).
+pub(super) fn check_dof_within(table: &'static str, row: u32, dof: u8, ndof: u8) -> Result<(), DecodeError> {
+    if dof < ndof {
         Ok(())
     } else {
         Err(DecodeError::InvalidDof { table, row, dof })
@@ -294,6 +321,67 @@ fn add_nodes(domain: &mut Domain, table: &super::tables::NodeTable) -> Vec<NodeI
     node_ids
 }
 
+/// Decodes [`super::tables::EqualDofTable`] against an already-populated
+/// `domain` (nodes only — constraints don't reference elements or
+/// patterns), calling `core::Domain::equal_dof` once per row. Shared shape
+/// and error handling with `decode3.rs`'s own `add_equal_dofs` — both take
+/// a generic `node_at` closure, so this could be lifted to a shared
+/// generic helper the way `compile_stages` is; kept separate for now since
+/// each caller's `Domain`/`Domain3` type still differs.
+fn add_equal_dofs(
+    domain: &mut Domain,
+    table: &super::tables::EqualDofTable,
+    node_at: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+) -> Result<(), DecodeError> {
+    let mut dofs_by_row: Vec<Vec<usize>> = vec![Vec::new(); table.retained.len()];
+    for &(row, dof) in &table.dofs {
+        check_dof("equal_dofs", row, dof)?;
+        dofs_by_row
+            .get_mut(row as usize)
+            .ok_or(DecodeError::UnknownConstraintRow {
+                table: "equal_dofs",
+                row,
+            })?
+            .push(dof as usize);
+    }
+    #[allow(clippy::needless_range_loop)] // parallel-indexes retained/constrained/dofs_by_row
+    for i in 0..table.retained.len() {
+        let retained = node_at(table.retained[i], "equal_dofs")?;
+        let constrained = node_at(table.constrained[i], "equal_dofs")?;
+        domain.equal_dof(retained, constrained, &dofs_by_row[i]);
+    }
+    Ok(())
+}
+
+/// Decodes [`super::tables::RigidDiaphragmTable`] against an
+/// already-populated `domain` — see `add_equal_dofs`'s doc comment.
+fn add_rigid_diaphragms(
+    domain: &mut Domain,
+    table: &super::tables::RigidDiaphragmTable,
+    node_at: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+) -> Result<(), DecodeError> {
+    let mut constrained_by_row: Vec<Vec<u32>> = vec![Vec::new(); table.retained.len()];
+    for &(row, node) in &table.constrained {
+        constrained_by_row
+            .get_mut(row as usize)
+            .ok_or(DecodeError::UnknownConstraintRow {
+                table: "rigid_diaphragms",
+                row,
+            })?
+            .push(node);
+    }
+    #[allow(clippy::needless_range_loop)] // parallel-indexes retained/constrained_by_row
+    for i in 0..table.retained.len() {
+        let retained = node_at(table.retained[i], "rigid_diaphragms")?;
+        let constrained = constrained_by_row[i]
+            .iter()
+            .map(|&row| node_at(row, "rigid_diaphragms"))
+            .collect::<Result<Vec<_>, _>>()?;
+        domain.rigid_diaphragm(retained, &constrained);
+    }
+    Ok(())
+}
+
 fn build_fiber_section(
     table: &super::tables::FiberTable,
     section: u32,
@@ -316,6 +404,9 @@ fn build_fiber_section(
         .collect()
 }
 
+/// `(normal_dof, shear_dof, mu, k0, b)` — see `ZeroLengthTable::friction`.
+type FrictionRow = (u8, u8, f64, f64, f64);
+
 fn add_zero_lengths(
     domain: &mut Domain,
     table: &super::tables::ZeroLengthTable,
@@ -333,8 +424,18 @@ fn add_zero_lengths(
             .push((dof, material_index));
     }
 
+    let mut friction_by_row: Vec<Option<FrictionRow>> = vec![None; table.node_i.len()];
+    for &(row, normal_dof, shear_dof, mu, k0, b) in &table.friction {
+        *friction_by_row
+            .get_mut(row as usize)
+            .ok_or(DecodeError::UnknownElementIndex {
+                table: "zero_lengths",
+                row,
+            })? = Some((normal_dof, shear_dof, mu, k0, b));
+    }
+
     let mut ids = Vec::with_capacity(table.node_i.len());
-    #[allow(clippy::needless_range_loop)] // parallel-indexes node_i/node_j/materials_by_row
+    #[allow(clippy::needless_range_loop)] // parallel-indexes node_i/node_j/materials_by_row/friction_by_row
     for i in 0..table.node_i.len() {
         let mut element = ZeroLength::new(
             node_at(table.node_i[i], "zero_lengths")?,
@@ -344,7 +445,52 @@ fn add_zero_lengths(
             element =
                 element.with_material(dof as usize, material_at(material_index, "zero_lengths")?);
         }
+        if let Some((normal_dof, shear_dof, mu, k0, b)) = friction_by_row[i] {
+            element = element.with_friction(Friction::new(
+                normal_dof as usize,
+                shear_dof as usize,
+                mu,
+                k0,
+                b,
+            ));
+        }
         ids.push(domain.add_element(Element::ZeroLength(element)));
+    }
+    Ok(ids)
+}
+
+fn add_zero_length_sections(
+    domain: &mut Domain,
+    table: &super::tables::ZeroLengthSectionTable,
+    node_at: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+    material_at: &impl Fn(u32, &'static str) -> Result<Material, DecodeError>,
+    fiber_section_at: &impl Fn(u32) -> Result<Vec<Fiber>, DecodeError>,
+) -> Result<Vec<ElementId>, DecodeError> {
+    let mut materials_by_row: Vec<Vec<(u8, u32)>> = vec![Vec::new(); table.node_i.len()];
+    for &(row, dof, material_index) in &table.materials {
+        materials_by_row
+            .get_mut(row as usize)
+            .ok_or(DecodeError::UnknownElementIndex {
+                table: "zero_length_sections",
+                row,
+            })?
+            .push((dof, material_index));
+    }
+
+    let mut ids = Vec::with_capacity(table.node_i.len());
+    #[allow(clippy::needless_range_loop)] // parallel-indexes node_i/node_j/fiber_section/materials_by_row
+    for i in 0..table.node_i.len() {
+        let section = FiberSection::new(fiber_section_at(table.fiber_section[i])?);
+        let mut element = ZeroLengthSection::new(
+            node_at(table.node_i[i], "zero_length_sections")?,
+            node_at(table.node_j[i], "zero_length_sections")?,
+            section,
+        );
+        for &(dof, material_index) in &materials_by_row[i] {
+            element = element
+                .with_material(dof as usize, material_at(material_index, "zero_length_sections")?);
+        }
+        ids.push(domain.add_element(Element::ZeroLengthSection(element)));
     }
     Ok(ids)
 }
@@ -354,18 +500,23 @@ fn add_load_patterns(
     table: &super::tables::LoadPatternTable,
 ) -> Vec<LoadPatternId> {
     (0..table.series.len())
-        .map(|i| {
-            let series = match &table.series[i] {
-                TimeSeriesSpec::Constant => LoadSeries::Constant,
-                TimeSeriesSpec::Linear { slope } => LoadSeries::Linear { slope: *slope },
-                TimeSeriesSpec::Path { times, factors } => LoadSeries::Path {
-                    times: times.clone(),
-                    factors: factors.clone(),
-                },
-            };
-            domain.add_load_pattern_scaled(series, table.scale_factor[i])
-        })
+        .map(|i| domain.add_load_pattern_scaled(load_series_of(&table.series[i]), table.scale_factor[i]))
         .collect()
+}
+
+/// Shared by both profiles' decoders and by ground-motion decoding
+/// (`compile_stages`): an accelerogram is exactly a `TimeSeriesSpec::Path`,
+/// the same wire type a static `LoadPatternTable` entry uses (`core::
+/// GroundMotion`'s own doc comment), so this one conversion serves both.
+pub(super) fn load_series_of(spec: &TimeSeriesSpec) -> LoadSeries {
+    match spec {
+        TimeSeriesSpec::Constant => LoadSeries::Constant,
+        TimeSeriesSpec::Linear { slope } => LoadSeries::Linear { slope: *slope },
+        TimeSeriesSpec::Path { times, factors } => LoadSeries::Path {
+            times: times.clone(),
+            factors: factors.clone(),
+        },
+    }
 }
 
 fn transform_of(spec: TransformSpec) -> GeomTransf {
@@ -394,54 +545,85 @@ fn element_kind_name(kind: ElementKind) -> &'static str {
         ElementKind::DispBeamColumn => "disp_beam_column",
         ElementKind::ForceBeamColumn => "force_beam_column",
         ElementKind::ZeroLength => "zero_length",
+        ElementKind::ZeroLengthSection => "zero_length_section",
     }
 }
 
-fn compile_stages(
+/// Shared by both profiles' decoders (`decode3.rs` calls this too): the
+/// stage-compilation logic (integrator/algorithm/convergence conversion,
+/// held-pattern resolution) never touches element physics, only
+/// `LoadPatternId`s and a caller-supplied `node_at`/`ndof`, so it's generic
+/// over the node/element ID types and element-load type rather than
+/// duplicated per profile.
+/// Shared by both profiles' decoders (`decode3.rs` calls this too): stage
+/// compilation for all three `StageSpec` kinds. `ndof` bounds a `Static`
+/// stage's `DisplacementControl` dof (3 planar, 6 spatial); `ndim` bounds a
+/// `Transient` stage's ground-motion `direction` (2 planar, 3 spatial —
+/// translational axes only, never a rotation).
+pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
     stages: &[StageSpec],
-    node_at: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+    node_at: &impl Fn(u32, &'static str) -> Result<NId, DecodeError>,
     pattern_at: &impl Fn(u32) -> Result<LoadPatternId, DecodeError>,
-    nodal_loads_by_stage: Vec<Vec<(LoadPatternId, NodeId, usize, f64)>>,
-    element_loads_by_stage: Vec<Vec<(LoadPatternId, ElementId, ElementLoad)>>,
-) -> Result<Vec<CompiledStage>, DecodeError> {
+    ndof: u8,
+    ndim: u8,
+    nodal_loads_by_stage: Vec<Vec<(LoadPatternId, NId, usize, f64)>>,
+    element_loads_by_stage: Vec<Vec<(LoadPatternId, EId, Load)>>,
+) -> Result<Vec<CompiledStage<NId, EId, Load>>, DecodeError> {
     stages
         .iter()
         .zip(nodal_loads_by_stage)
         .zip(element_loads_by_stage)
         .map(|((stage, pending_nodal_loads), pending_element_loads)| {
-            let StageSpec::Static { id, steps, integrator, algorithm, convergence, hold_patterns_after } = stage
-            else {
-                unreachable!("modal/transient stages are rejected by check_supported_stages before this runs")
-            };
-
-            let integrator = match *integrator {
-                IntegratorSpec::LoadControl { increment } => Integrator::LoadControl { increment },
-                IntegratorSpec::DisplacementControl { node, dof, increment } => {
-                    check_dof("sequence.integrator", node, dof)?;
-                    Integrator::DisplacementControl { node: node_at(node, "sequence.integrator")?, dof: dof as usize, increment }
+            let (steps, kind) = match stage {
+                StageSpec::Static { steps, integrator, algorithm, convergence, hold_patterns_after, .. } => {
+                    let integrator = match *integrator {
+                        IntegratorSpec::LoadControl { increment } => Integrator::LoadControl { increment },
+                        IntegratorSpec::DisplacementControl { node, dof, increment } => {
+                            check_dof_within("sequence.integrator", node, dof, ndof)?;
+                            Integrator::DisplacementControl { node: node_at(node, "sequence.integrator")?, dof: dof as usize, increment }
+                        }
+                    };
+                    let algorithm = match algorithm {
+                        AlgorithmSpec::Linear => Algorithm::Linear,
+                        AlgorithmSpec::NewtonRaphson => Algorithm::NewtonRaphson,
+                    };
+                    let convergence = match convergence.unwrap_or(ConvergenceSpec::DEFAULT) {
+                        ConvergenceSpec::NormUnbalance { tol, max_iter } => {
+                            ConvergenceTest::NormUnbalance { tol, max_iter: max_iter as usize }
+                        }
+                        ConvergenceSpec::NormDispIncr { tol, max_iter } => {
+                            ConvergenceTest::NormDispIncr { tol, max_iter: max_iter as usize }
+                        }
+                        ConvergenceSpec::EnergyIncr { tol, max_iter } => {
+                            ConvergenceTest::EnergyIncr { tol, max_iter: max_iter as usize }
+                        }
+                    };
+                    let hold_patterns_after = hold_patterns_after.iter().map(|&row| pattern_at(row)).collect::<Result<Vec<_>, _>>()?;
+                    (*steps, CompiledStageKind::Static { integrator, algorithm, convergence, hold_patterns_after })
+                }
+                // A single eigensolve, not an iterative step loop — always
+                // exactly one `advance()` step (`StageSpec::Modal`'s doc
+                // comment).
+                StageSpec::Modal { modes, .. } => (1, CompiledStageKind::Modal { num_modes: *modes as usize }),
+                StageSpec::Transient { steps, dt, damping, ground_motions, .. } => {
+                    let damping = RayleighDamping::new(damping.alpha_m, damping.beta_k);
+                    let ground_motions = ground_motions
+                        .iter()
+                        .enumerate()
+                        .map(|(row, gm)| {
+                            check_dof_within("sequence.groundMotion", row as u32, gm.direction, ndim)?;
+                            Ok(GroundMotion::new(gm.direction as usize, load_series_of(&gm.series))
+                                .with_scale_factor(gm.scale_factor))
+                        })
+                        .collect::<Result<Vec<_>, DecodeError>>()?;
+                    (*steps, CompiledStageKind::Transient { damping, dt: *dt, ground_motions })
                 }
             };
-            let algorithm = match algorithm {
-                AlgorithmSpec::Linear => Algorithm::Linear,
-                AlgorithmSpec::NewtonRaphson => Algorithm::NewtonRaphson,
-            };
-            let convergence = match convergence.unwrap_or(ConvergenceSpec::DEFAULT) {
-                ConvergenceSpec::NormUnbalance { tol, max_iter } => {
-                    ConvergenceTest::NormUnbalance { tol, max_iter: max_iter as usize }
-                }
-                ConvergenceSpec::NormDispIncr { tol, max_iter } => {
-                    ConvergenceTest::NormDispIncr { tol, max_iter: max_iter as usize }
-                }
-                ConvergenceSpec::EnergyIncr { tol, max_iter } => {
-                    ConvergenceTest::EnergyIncr { tol, max_iter: max_iter as usize }
-                }
-            };
-            let hold_patterns_after = hold_patterns_after.iter().map(|&row| pattern_at(row)).collect::<Result<Vec<_>, _>>()?;
 
             Ok(CompiledStage {
-                id: id.clone(),
-                steps: *steps,
-                kind: CompiledStageKind::Static { integrator, algorithm, convergence, hold_patterns_after },
+                id: stage.id().to_string(),
+                steps,
+                kind,
                 pending_nodal_loads,
                 pending_element_loads,
             })

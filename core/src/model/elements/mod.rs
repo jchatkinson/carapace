@@ -69,6 +69,13 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: us
     /// evaluations) — never anything that mutates state, so safe to call
     /// any time after a step, like `form_tangent_and_resistance`.
     fn local_force(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>) -> SVector<f64, ELEMENT_DOF>;
+
+    /// Every integration point's per-fiber `(strain, stress)` — `None` for
+    /// every element kind that isn't fiber-discretized (`Truss`/
+    /// `ZeroLength`/`ZeroLengthSection`/`ElasticBeamColumn`; only
+    /// `DispBeamColumn`/`ForceBeamColumn` and their spatial counterparts
+    /// have one). See `Domain::element_fiber_responses`'s doc comment.
+    fn fiber_responses(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>) -> Option<Vec<Vec<(f64, f64)>>>;
 }
 
 mod disp_beam_column;
@@ -198,6 +205,15 @@ impl Element {
             Element::ForceBeamColumn(b) => b.local_force(),
         }
     }
+
+    /// See `ElementOps::fiber_responses`'s doc comment.
+    pub fn fiber_responses(&self, node_i: &Node, node_j: &Node) -> Option<Vec<Vec<(f64, f64)>>> {
+        match self {
+            Element::DispBeamColumn(b) => Some(b.fiber_responses(node_i, node_j)),
+            Element::ForceBeamColumn(b) => Some(b.fiber_responses()),
+            Element::Truss(_) | Element::ZeroLength(_) | Element::ZeroLengthSection(_) | Element::ElasticBeamColumn(_) => None,
+        }
+    }
 }
 
 impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
@@ -226,6 +242,10 @@ impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
 
     fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         Element::local_force(self, node_i, node_j)
+    }
+
+    fn fiber_responses(&self, node_i: &Node, node_j: &Node) -> Option<Vec<Vec<(f64, f64)>>> {
+        Element::fiber_responses(self, node_i, node_j)
     }
 }
 
@@ -317,6 +337,15 @@ impl Element3 {
             Element3::ForceBeamColumn3(b) => b.local_force(),
         }
     }
+
+    /// See `ElementOps::fiber_responses`'s doc comment.
+    pub fn fiber_responses(&self, node_i: &Node3, node_j: &Node3) -> Option<Vec<Vec<(f64, f64)>>> {
+        match self {
+            Element3::DispBeamColumn3(b) => Some(b.fiber_responses(node_i, node_j)),
+            Element3::ForceBeamColumn3(b) => Some(b.fiber_responses()),
+            Element3::Truss3(_) | Element3::ZeroLength3(_) | Element3::ZeroLengthSection3(_) | Element3::ElasticBeamColumn3(_) => None,
+        }
+    }
 }
 
 impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Element3 {
@@ -349,5 +378,9 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Ele
 
     fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         Element3::local_force(self, node_i, node_j)
+    }
+
+    fn fiber_responses(&self, node_i: &Node3, node_j: &Node3) -> Option<Vec<Vec<(f64, f64)>>> {
+        Element3::fiber_responses(self, node_i, node_j)
     }
 }

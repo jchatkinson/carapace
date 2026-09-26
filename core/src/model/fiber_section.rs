@@ -74,6 +74,25 @@ impl FiberSection {
     pub fn total_area(&self) -> f64 {
         self.fibers.iter().map(|f| f.area).sum()
     }
+
+    /// Every fiber's `(strain, stress)` at `(eps0, kappa)`, in the same
+    /// order fibers were originally passed to `new` — the same evaluation
+    /// `trial` sums into `(N, M)`, broken out per fiber instead of
+    /// aggregated. Read-only, safe every Newton iteration (`trial`'s own
+    /// doc comment); calling it at a section's current *committed*
+    /// `(eps0, kappa)` reproduces that fiber's committed stress exactly,
+    /// the same "recompute, don't cache" pattern `ZeroLength::local_force`
+    /// relies on.
+    pub fn fiber_responses(&self, eps0: f64, kappa: f64) -> Vec<(f64, f64)> {
+        self.fibers
+            .iter()
+            .map(|fiber| {
+                let strain = eps0 - fiber.y * kappa;
+                let (stress, _tangent) = fiber.material.trial_stress_tangent(strain);
+                (strain, stress)
+            })
+            .collect()
+    }
 }
 
 /// `FiberSection`'s spatial (biaxial) counterpart: each fiber carries both
@@ -167,6 +186,19 @@ impl FiberSection3 {
 
     pub fn total_area(&self) -> f64 {
         self.fibers.iter().map(|f| f.area).sum()
+    }
+
+    /// See `FiberSection::fiber_responses`'s doc comment — same contract,
+    /// biaxial strain field.
+    pub fn fiber_responses(&self, eps0: f64, kappa_z: f64, kappa_y: f64) -> Vec<(f64, f64)> {
+        self.fibers
+            .iter()
+            .map(|fiber| {
+                let strain = eps0 - fiber.y * kappa_z + fiber.z * kappa_y;
+                let (stress, _tangent) = fiber.material.trial_stress_tangent(strain);
+                (strain, stress)
+            })
+            .collect()
     }
 }
 

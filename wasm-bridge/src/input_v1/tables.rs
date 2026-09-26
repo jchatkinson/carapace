@@ -107,6 +107,28 @@ pub struct ZeroLengthTable {
     /// Sparse `(zero_length row index, dof, material arena index)` — most
     /// DOFs on a given `ZeroLength` carry no material at all.
     pub materials: Vec<(u32, u8, u32)>,
+    /// Sparse `(zero_length row index, normal_dof, shear_dof, mu, k0, b)` —
+    /// at most one entry per row (`core::ZeroLength` allows only one
+    /// `Friction`); see `Friction`'s doc comment for the field meanings.
+    /// `normal_dof` must already have a `materials` entry on the same row,
+    /// and `shear_dof` must not (checked by `core` via `debug_assert`).
+    pub friction: Vec<(u32, u8, u8, f64, f64, f64)>,
+}
+
+/// A `ZeroLength` driven by a coupled `FiberSection` (axial + moment
+/// response, `[ux, rz]`) instead of `ZeroLength`'s independent per-DOF
+/// materials — see `core::ZeroLengthSection`'s doc comment.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZeroLengthSectionTable {
+    pub node_i: Vec<u32>,
+    pub node_j: Vec<u32>,
+    /// Index into `FiberTable::section_offsets`.
+    pub fiber_section: Vec<u32>,
+    /// Sparse `(zero_length_section row index, dof, material arena index)` —
+    /// an independent spring for the one DOF (`uy`) the section has no
+    /// resultant for.
+    pub materials: Vec<(u32, u8, u32)>,
 }
 
 /// Fibers for every `DispBeamColumn`/`ForceBeamColumn` section, flattened
@@ -176,6 +198,7 @@ pub enum ElementKind {
     DispBeamColumn,
     ForceBeamColumn,
     ZeroLength,
+    ZeroLengthSection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -194,6 +217,31 @@ pub enum ElementLoadSpec {
     /// representation (`tag = "kind"`, needed for a JS-friendly
     /// discriminated union) can't tag a bare-scalar tuple variant.
     UniformTransverse { w: f64 },
+}
+
+/// Identity multi-point constraints (`core::Domain::equal_dof`'s doc
+/// comment): row `i` ties `constrained[i]`'s dofs listed in `dofs` exactly
+/// to the same dofs of `retained[i]`. `dofs` is sparse per row — `(row,
+/// dof)` pairs, mirroring `ZeroLengthTable::materials`'s own sparse
+/// convention — since most ties only ever list one or two dofs, not every
+/// dof a node has.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EqualDofTable {
+    pub retained: Vec<u32>,
+    pub constrained: Vec<u32>,
+    pub dofs: Vec<(u32, u8)>,
+}
+
+/// Planar rigid diaphragm (`core::Domain::rigid_diaphragm`'s doc comment):
+/// row `i` ties every node listed against it in `constrained`'s own `ux`
+/// dof to `retained[i]`'s `ux`. `constrained` is sparse per row — `(row,
+/// node index)` pairs — since a diaphragm's node count varies per instance.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RigidDiaphragmTable {
+    pub retained: Vec<u32>,
+    pub constrained: Vec<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

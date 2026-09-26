@@ -21,12 +21,6 @@ pub enum DecodeError {
     UnsupportedSpace {
         got: u8,
     },
-    /// A well-formed stage kind this decoder doesn't implement yet
-    /// (`modal`/`transient` today).
-    UnsupportedStage {
-        stage_id: String,
-        stage_kind: &'static str,
-    },
     UnknownNodeIndex {
         table: &'static str,
         row: u32,
@@ -63,5 +57,12 @@ pub enum DecodeError {
         table: &'static str,
         row: u32,
         dof: u8,
+    },
+    /// A sparse per-row entry (`EqualDofTable::dofs`/`RigidDiaphragmTable::
+    /// constrained` and their spatial counterparts) named a row past the
+    /// end of that table's own dense `retained` list.
+    UnknownConstraintRow {
+        table: &'static str,
+        row: u32,
     },
 }

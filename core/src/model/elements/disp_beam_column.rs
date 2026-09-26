@@ -243,6 +243,35 @@ impl DispBeamColumn {
         let half = self.density * total_area * length / 2.0;
         SVector::<f64, 6>::from_column_slice(&[half, half, 0.0, half, half, 0.0])
     }
+
+    /// Every integration point's per-fiber `(strain, stress)`, freshly
+    /// recomputed from `node_i`/`node_j`'s current committed displacement —
+    /// same "recompute, don't cache" reasoning as `local_force` (this
+    /// element has no Newton loop between a target and the committed
+    /// answer, unlike `ForceBeamColumn`). Outer `Vec` is one entry per
+    /// integration point (`BeamIntegration::points()` order), inner `Vec`
+    /// one entry per fiber (the order originally passed to `new`).
+    pub fn fiber_responses(&self, node_i: &Node, node_j: &Node) -> Vec<Vec<(f64, f64)>> {
+        let corotational = (self.transform == GeomTransf::Corotational).then(|| Corotational2d::new(node_i, node_j));
+        let (length, d_local) = if let Some(state) = &corotational {
+            (state.initial_length(), Corotational2d::local_basic_modes() * state.basic_deformation())
+        } else {
+            let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+            (length, d_local)
+        };
+
+        self.integration
+            .points()
+            .iter()
+            .zip(&self.sections)
+            .map(|((xi, _w), section)| {
+                let (b_eps0, b_kappa) = Self::strain_displacement(*xi, length);
+                let eps0 = b_eps0.dot(&d_local);
+                let kappa = b_kappa.dot(&d_local);
+                section.fiber_responses(eps0, kappa)
+            })
+            .collect()
+    }
 }
 
 /// `DispBeamColumn`'s spatial (biaxial) counterpart: a 2-node,
@@ -430,5 +459,23 @@ impl DispBeamColumn3 {
             mass[dof] = half;
         }
         mass
+    }
+
+    /// See `DispBeamColumn::fiber_responses`'s doc comment — same
+    /// contract, biaxial strain field.
+    pub fn fiber_responses(&self, node_i: &Node3, node_j: &Node3) -> Vec<Vec<(f64, f64)>> {
+        let (length, _t, d_local) = self.local_displacement(node_i, node_j);
+        self.integration
+            .points()
+            .iter()
+            .zip(&self.sections)
+            .map(|((xi, _w), section)| {
+                let (b_eps0, b_kappa_z, b_kappa_y) = Self::strain_displacement(*xi, length);
+                let eps0 = b_eps0.dot(&d_local);
+                let kappa_z = b_kappa_z.dot(&d_local);
+                let kappa_y = b_kappa_y.dot(&d_local);
+                section.fiber_responses(eps0, kappa_z, kappa_y)
+            })
+            .collect()
     }
 }
