@@ -5,7 +5,10 @@ use crate::model::{
     SPATIAL_NDIM, NDF,
 };
 
-use super::{Algorithm, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator, SparseSolver};
+use super::{
+    iterate_to_equilibrium, Algorithm, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator,
+    SparseFactorization, SparseSolver,
+};
 
 /// A fully-wired analysis (only buildable via `AnalysisBuilder<Ready>::build`).
 ///
@@ -38,12 +41,26 @@ pub struct Analysis<
     pub(crate) solver: SparseSolver,
     pub(crate) step_count: usize,
     pub(crate) load_factor: f64,
+    /// Cached across `step()` calls (not reset each time) so
+    /// `TangentStrategy::Initial` (`docs/algorithms.md` §3) can actually
+    /// skip re-factoring for the whole analysis's lifetime, not just
+    /// within one step — `iterate_to_equilibrium` is the only thing that
+    /// reads/writes this.
+    pub(crate) cached_factorization: Option<SparseFactorization>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct StepResult {
     pub step: usize,
     pub load_factor: f64,
+    /// `1` for `Algorithm::Linear` (never iterates). `docs/algorithms.md`
+    /// §8's verification hook for `TangentStrategy`/line search.
+    pub iterations: usize,
+    /// How many times the tangent was actually factored this step — `1`
+    /// for `Algorithm::Linear`; proves `TangentStrategy::ReuseAtStepStart`/
+    /// `Initial` actually save factorizations, not just "also converges"
+    /// (`docs/algorithms.md` §8).
+    pub factorizations: usize,
 }
 
 impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
@@ -124,47 +141,59 @@ where
         self.step_count += 1;
         self.load_factor = self.integrator.predict(&self.domain, &self.solver, self.load_factor)?;
 
-        match self.algorithm {
+        let (iterations, factorizations) = match self.algorithm {
             // A single tangent formation + solve, unconditionally accepted
             // — definitionally converged for `Linear` (see algorithm.rs).
+            // Kept as its own trivial arm rather than routed through
+            // `iterate_to_equilibrium` — there's no iteration to share the
+            // driver's machinery with (`docs/algorithms.md` §5's driver
+            // doc comment).
             Algorithm::Linear => {
                 let (k, residual) = self.domain.form_tangent_and_residual(self.load_factor);
                 let du = self.solver.solve(&k, &residual)?;
                 self.domain.apply_displacement_increment(&du);
+                (1, 1)
             }
-            Algorithm::NewtonRaphson => {
-                let mut converged = false;
-                for iteration in 0..self.test.max_iter() {
-                    let (k, residual) = self.domain.form_tangent_and_residual(self.load_factor);
-                    let du_bar = self.solver.solve(&k, &residual)?;
-                    // The first iteration uses the same tangent `predict`
-                    // used, so `du_bar` already delivers `predict`'s target
-                    // displacement at the controlled DOF exactly (see
-                    // `Integrator::correct`'s doc comment) — only from the
-                    // second iteration on does the controlled DOF need to
-                    // be actively held there while other DOFs still get
-                    // corrected.
-                    let (delta_lambda, du) = if iteration == 0 {
-                        (0.0, du_bar)
-                    } else {
-                        self.integrator.correct(&self.domain, &self.solver, &k, du_bar, self.load_factor)?
-                    };
-                    self.load_factor += delta_lambda;
-                    self.domain.apply_displacement_increment(&du);
-                    if self.test.check(&residual, &du) {
-                        converged = true;
-                        break;
-                    }
-                }
-                if !converged {
-                    return Err(AnalysisError::FailedToConverge { step: self.step_count });
-                }
+            Algorithm::Newton { .. } | Algorithm::KrylovNewton { .. } => {
+                let integrator = self.integrator;
+                let solver = &self.solver;
+                let (outcome, load_factor) = iterate_to_equilibrium(
+                    self.step_count,
+                    &self.algorithm,
+                    &self.test,
+                    solver,
+                    &mut self.cached_factorization,
+                    &mut self.domain,
+                    self.load_factor,
+                    |domain, load_factor| domain.form_tangent_and_residual(load_factor),
+                    |domain, k, du_bar, load_factor, iteration| {
+                        // The first iteration uses the same tangent
+                        // `predict` used, so `du_bar` already delivers
+                        // `predict`'s target displacement at the
+                        // controlled DOF exactly (see `Integrator::
+                        // correct`'s doc comment) — only from the second
+                        // iteration on does the controlled DOF need to be
+                        // actively held there while other DOFs still get
+                        // corrected.
+                        if iteration == 0 {
+                            Ok((du_bar, 0.0))
+                        } else {
+                            let (delta_lambda, du) = integrator.correct(domain, solver, k, du_bar, load_factor)?;
+                            Ok((du, delta_lambda))
+                        }
+                    },
+                    |_domain| {},
+                )?;
+                self.load_factor = load_factor;
+                (outcome.iterations, outcome.factorizations)
             }
-        }
+        };
 
         Ok(StepResult {
             step: self.step_count,
             load_factor: self.load_factor,
+            iterations,
+            factorizations,
         })
     }
 }

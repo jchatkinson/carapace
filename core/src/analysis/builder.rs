@@ -133,6 +133,7 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
             solver: SparseSolver::new(),
             step_count: 0,
             load_factor: 0.0,
+            cached_factorization: None,
         }
     }
 }

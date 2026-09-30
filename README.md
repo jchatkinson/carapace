@@ -29,7 +29,14 @@ see each element/section entry below for which profile(s) it covers.
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)
 - [x] 2D co-rotational transform (large-displacement geometry)
-- [ ] 3D co-rotational transform
+- [ ] 3D co-rotational transform — scoped, deliberately shelved: unlike planar
+  rotations (a single commuting scalar angle), 3D rotations don't commute, so
+  an objective large-rotation formulation needs persistent per-element
+  quaternion-tracked nodal state (updated at `commit`, not just a `Corotational2d`
+  -style pure function of current position) plus a dense, easy-to-mis-sign
+  analytic geometric-stiffness Hessian (Xara/OpenSees's `CorotCrdTransf3d` — its
+  `T` matrix and five `ksigma1`–`ksigma5` blocks). More complexity than currently
+  justified; revisit only if a real model needs large 3D frame rotations.
 - [ ] Nonlinear torsion (3D frame torsion is a decoupled elastic `G*J` term
   today, not fiber-derived)
 
@@ -49,13 +56,24 @@ see each element/section entry below for which profile(s) it covers.
 
 **Analysis**
 - [x] Static analysis: load control, displacement control; `Linear` and
-  `NewtonRaphson` algorithms
+  `Newton` (full/modified/initial-tangent, optional line search) algorithms
 - [x] Multi-phase/staged analysis with frozen (held-constant) load patterns
 - [x] Modal analysis (Lanczos eigensolver)
-- [x] Transient analysis (Newmark-β, Rayleigh damping, ground motion)
-- [x] Sparse direct solver
-- [ ] Additional algorithms: line search, Krylov acceleration, event-to-event
-  stepping (design in [`docs/algorithms.md`](docs/algorithms.md))
+- [x] Transient analysis (Newmark-β, Rayleigh damping, ground motion),
+  including a Newton corrector (`TransientAnalysis::with_algorithm`) for
+  nonlinear response driven dynamically — `Algorithm::Linear` (one
+  effective-system solve per step, exact only for linear-material
+  response) remains the default
+- [x] `TangentStrategy` (current/reuse-at-step-start/initial-tangent),
+  optional `LineSearch` (bisection/regula falsi), and `KrylovNewton`
+  (stale-tangent + Krylov-subspace acceleration) — one shared iteration
+  driver reused by both static and transient analysis (design in
+  [`docs/algorithms.md`](docs/algorithms.md) §0–§6.1)
+- [x] Sparse direct solver, with tangent-factorization caching
+  (`SparseSolver::factor`/`SparseFactorization`) reused across iterations
+  by `TangentStrategy::ReuseAtStepStart`/`Initial`
+- [ ] Event-to-event stepping (design in
+  [`docs/algorithms.md`](docs/algorithms.md) §9–§17, not yet implemented)
 
 **Constraints**
 - [x] `equal_dof` (2D + 3D)
@@ -71,6 +89,18 @@ see each element/section entry below for which profile(s) it covers.
 - [ ] Zero-copy transferable-typed-array wire format for `postMessage` (the
   wasm→JS leg is still structured-clone; the analysis-worker→storage-worker
   leg, entirely on the `pysees` side, is already a transferred `ArrayBuffer`)
+- [ ] `TangentStrategy`/`LineSearch`/`KrylovNewton` exposed through
+  `CarapaceInputV1` — a `Static` stage's wire-format `algorithm` field still
+  only selects `Linear`/`Newton{Current, no line search}` (today's
+  `AlgorithmSpec::Linear`/`NewtonRaphson`, unchanged), and `Transient`
+  stages have no `algorithm` field at all yet (always `Algorithm::Linear`).
+  The richer core API is real and tested natively; only the wasm wire
+  format hasn't caught up. Exposing it needs a wire-compatible design, not
+  just new enum variants — `AlgorithmSpec`'s existing representation is a
+  bare string (`"linear"`/`"newtonRaphson"`), which can't hold `Newton`'s
+  `line_search: Option<LineSearch>` field without changing shape; an
+  `#[serde(untagged)]` old-string-or-new-object wrapper is the leading
+  option, not yet decided.
 
 **Results / persistence** — see
 [`docs/results-storage-indexeddb.md`](docs/results-storage-indexeddb.md) for

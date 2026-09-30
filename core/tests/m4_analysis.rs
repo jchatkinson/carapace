@@ -1,4 +1,4 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
 use carapace_core::model::{Domain, Element, Material, Node, Truss, ZeroLength};
 
 /// Builds a `Truss` (elastic, k_t = E*A/L = 50) and a `ZeroLength`+`ElasticPP`
@@ -8,7 +8,7 @@ use carapace_core::model::{Domain, Element, Material, Node, Truss, ZeroLength};
 /// nonlinear system within a single step (the EPP spring changes regime
 /// partway through the applied load): `Algorithm::Linear`'s one-shot solve
 /// (exact only within a single regime, per M1-M3) cannot resolve it, but
-/// `Algorithm::NewtonRaphson` — new at M4 — can, by re-forming the tangent
+/// `Algorithm::Newton` — new at M4 — can, by re-forming the tangent
 /// each iteration as displacement crosses the yield point.
 ///
 /// Closed form for total applied force F > fy: once yielded, the EPP
@@ -45,7 +45,7 @@ fn newton_raphson_resolves_elastic_perfectly_plastic_regime_crossing() {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,
@@ -74,7 +74,7 @@ fn norm_disp_incr_and_energy_incr_also_converge_to_the_same_result() {
         let mut analysis = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
-            .algorithm(Algorithm::NewtonRaphson)
+            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
             .test(test)
             .build(domain);
 

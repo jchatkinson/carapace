@@ -3,12 +3,22 @@ use slotmap::Key;
 
 use crate::model::{Domain, Element, Element3, ElementOps, Node3Id, NodeId, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM, NDF};
 
-use super::{AnalysisError, GroundMotion, RayleighDamping, SparseSolver};
+use super::{
+    iterate_to_equilibrium, Algorithm, AnalysisError, ConvergenceTest, GroundMotion, RayleighDamping,
+    SparseFactorization, SparseSolver,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TransientStepResult {
     pub step: usize,
     pub time: f64,
+    /// `1` for `Algorithm::Linear` (never iterates — today's original,
+    /// only behavior before `docs/algorithms.md` §6.1's corrector existed).
+    pub iterations: usize,
+    /// How many times the effective operator was actually factored this
+    /// step — see `StepResult::factorizations`' doc comment for what this
+    /// proves about `TangentStrategy`.
+    pub factorizations: usize,
 }
 
 /// Time-history (transient) analysis via Newmark-beta integration — a
@@ -64,6 +74,15 @@ pub struct TransientAnalysis<
     /// (here, and again whenever `with_ground_motion` adds one), not every
     /// step, mirroring how `mass` itself is precomputed once.
     ground_motions: Vec<(GroundMotion, DVector<f64>)>,
+    /// `Algorithm::Linear` (today's original, only behavior) unless
+    /// `with_algorithm` opts into a real Newton corrector — see
+    /// `docs/algorithms.md` §6.1 and `with_algorithm`'s doc comment.
+    algorithm: Algorithm,
+    test: ConvergenceTest,
+    /// Only ever populated/read when `algorithm` is `Newton`/`KrylovNewton`
+    /// — see `Analysis::cached_factorization`'s doc comment for what this
+    /// caches and why it persists across `step()` calls.
+    cached_factorization: Option<SparseFactorization>,
 }
 
 /// `TransientAnalysis`'s spatial instantiation — see `Domain3`'s doc
@@ -111,9 +130,28 @@ where
             time: 0.0,
             step_count: 0,
             ground_motions: Vec::new(),
+            algorithm: Algorithm::Linear,
+            // Never read while `algorithm` is `Linear` — a placeholder
+            // that would be an obviously-wrong choice if `with_algorithm`
+            // were accidentally skipped, rather than a plausible-looking
+            // default silently doing the wrong thing.
+            test: ConvergenceTest::NormUnbalance { tol: f64::NAN, max_iter: 0 },
+            cached_factorization: None,
         };
         analysis.recompute_initial_acceleration();
         Ok(analysis)
+    }
+
+    /// Opts into a real Newton corrector (`docs/algorithms.md` §6.1)
+    /// instead of the default `Algorithm::Linear` (today's original
+    /// behavior: one effective-system solve per step, no iteration, exact
+    /// only for linear-material response). Mirrors `with_ground_motion`'s
+    /// consuming-builder style; unlike it, doesn't need to re-derive
+    /// anything (the initial acceleration doesn't depend on `algorithm`).
+    pub fn with_algorithm(mut self, algorithm: Algorithm, test: ConvergenceTest) -> Self {
+        self.algorithm = algorithm;
+        self.test = test;
+        self
     }
 
     /// Adds a `GroundMotion` and re-derives the initial acceleration to
@@ -220,35 +258,111 @@ where
         let v_n = self.domain.gather_velocity();
         let a_n = self.domain.gather_acceleration();
 
-        // Newmark predictor terms — see the module doc comment's citation
-        // of the standard (e.g. Chopra, "Dynamics of Structures") formula
-        // this whole step derives from.
-        let mass_vec = &u_n * a1 + &v_n * a2 + &a_n * a3;
-        let damp_vec = &u_n * a4 + &v_n * a5 + &a_n * a6;
-
         let mass_coeff = a1 + a4 * self.damping.alpha_m;
         let stiffness_coeff = 1.0 + a4 * self.damping.beta_k;
-        let (k_eff, k_damp_vec) = self
-            .domain
-            .assemble_newmark_system(&self.mass, mass_coeff, stiffness_coeff, &damp_vec);
+        let external = self.domain.assemble_reference_load(self.time) + self.ground_force(self.time);
 
-        let n = self.domain.num_free_dofs();
-        let mut f_eff = self.domain.assemble_reference_load(self.time) + self.ground_force(self.time);
-        for i in 0..n {
-            f_eff[i] += self.mass[i] * (mass_vec[i] + self.damping.alpha_m * damp_vec[i])
-                + self.damping.beta_k * k_damp_vec[i];
-        }
+        let (iterations, factorizations) = match self.algorithm {
+            // One effective-system solve at `u_n`, unconditionally
+            // accepted — today's original behavior, kept byte-for-byte
+            // (see `docs/algorithms.md` §6.1's load-bearing correctness
+            // check: the `Newton`/`KrylovNewton` arm below reduces to
+            // exactly this for a linear-material model converged in one
+            // iteration — verified in `m21_transient_corrector.rs` — so
+            // this arm isn't strictly *necessary*, but keeping it removes
+            // any risk of this well-tested closed-form path regressing).
+            Algorithm::Linear => {
+                // Newmark predictor terms — see the module doc comment's
+                // citation of the standard (e.g. Chopra, "Dynamics of
+                // Structures") formula this whole arm derives from.
+                let mass_vec = &u_n * a1 + &v_n * a2 + &a_n * a3;
+                let damp_vec = &u_n * a4 + &v_n * a5 + &a_n * a6;
 
-        let u_new = self.solver.solve(&k_eff, &f_eff)?;
+                let (k_eff, _resistance) = self.domain.assemble_newmark_system(&self.mass, mass_coeff, stiffness_coeff);
+                let k_damp_vec = self.domain.multiply_stiffness(&damp_vec);
 
-        let delta_u = &u_new - &u_n;
-        let a_new = &delta_u * a1 - &v_n * a2 - &a_n * a3;
-        let v_new = &delta_u * a4 - &v_n * a5 - &a_n * a6;
-        self.domain.scatter_state(&u_new, &v_new, &a_new);
+                let n = self.domain.num_free_dofs();
+                let mut f_eff = external;
+                for i in 0..n {
+                    f_eff[i] += self.mass[i] * (mass_vec[i] + self.damping.alpha_m * damp_vec[i])
+                        + self.damping.beta_k * k_damp_vec[i];
+                }
+
+                let u_new = self.solver.solve(&k_eff, &f_eff)?;
+
+                let delta_u = &u_new - &u_n;
+                let a_new = &delta_u * a1 - &v_n * a2 - &a_n * a3;
+                let v_new = &delta_u * a4 - &v_n * a5 - &a_n * a6;
+                self.domain.scatter_state(&u_new, &v_new, &a_new);
+                (1, 1)
+            }
+            // Newton corrector (`docs/algorithms.md` §6.1): iterate the
+            // *effective* operator `Op = stiffness_coeff*K(u_trial) +
+            // mass_coeff*M` against the residual `external - F_int(u_trial)
+            // - C*v_trial - M*a_trial`, `v_trial`/`a_trial` recomputed each
+            // iteration from the *cumulative* displacement change since
+            // step start (`u_trial - u_n`), via the same Newmark relations
+            // the `Linear` arm above uses only once, at the end.
+            Algorithm::Newton { .. } | Algorithm::KrylovNewton { .. } => {
+                let algorithm = self.algorithm;
+                let solver = &self.solver;
+                let mass = &self.mass;
+                let (alpha_m, beta_k) = (self.damping.alpha_m, self.damping.beta_k);
+
+                // `v_trial`/`a_trial` at the domain's current cumulative
+                // displacement change since step start — shared by
+                // `form_system` (needs them for the residual) and
+                // `after_increment` (needs them to update the domain's
+                // velocity/acceleration state), so it's a closure of its
+                // own rather than duplicated inline in both places.
+                let newmark_state = |u_trial: &DVector<f64>| {
+                    let delta_u = u_trial - &u_n;
+                    let v_trial = &delta_u * a4 - &v_n * a5 - &a_n * a6;
+                    let a_trial = &delta_u * a1 - &v_n * a2 - &a_n * a3;
+                    (v_trial, a_trial)
+                };
+
+                let (outcome, _) = iterate_to_equilibrium(
+                    self.step_count,
+                    &algorithm,
+                    &self.test,
+                    solver,
+                    &mut self.cached_factorization,
+                    &mut self.domain,
+                    0.0,
+                    |domain, _scalar| {
+                        let u_trial = domain.gather_displacement();
+                        let (v_trial, a_trial) = newmark_state(&u_trial);
+                        let (k_eff, resistance) = domain.assemble_newmark_system(mass, mass_coeff, stiffness_coeff);
+                        let k_v = domain.multiply_stiffness(&v_trial);
+
+                        let n = resistance.len();
+                        let mut residual = external.clone();
+                        for i in 0..n {
+                            residual[i] -= resistance[i] + alpha_m * mass[i] * v_trial[i] + beta_k * k_v[i] + mass[i] * a_trial[i];
+                        }
+                        (k_eff, residual)
+                    },
+                    // No `Integrator::DisplacementControl`-style corrector
+                    // here — `TransientAnalysis` has no solved-for pseudo-
+                    // time/load-factor scalar at all (`time` is fixed for
+                    // the whole step by `dt`), so this hook is unused.
+                    |_domain, _k, du, _scalar, _iteration| Ok((du, 0.0)),
+                    |domain| {
+                        let u_trial = domain.gather_displacement();
+                        let (v_trial, a_trial) = newmark_state(&u_trial);
+                        domain.scatter_state(&u_trial, &v_trial, &a_trial);
+                    },
+                )?;
+                (outcome.iterations, outcome.factorizations)
+            }
+        };
 
         Ok(TransientStepResult {
             step: self.step_count,
             time: self.time,
+            iterations,
+            factorizations,
         })
     }
 }

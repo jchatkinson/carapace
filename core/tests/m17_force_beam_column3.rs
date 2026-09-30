@@ -1,4 +1,4 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
 use carapace_core::model::{
     BeamIntegration, Domain3, ElasticBeamColumn3, Element3, Fiber3, ForceBeamColumn3, GeomTransf3, Material, Node3, SpatialDof,
 };
@@ -177,7 +177,7 @@ fn elastic_pp_section_softens_past_yield_in_both_planes_and_shows_permanent_set_
         let mut analysis1 = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
-            .algorithm(Algorithm::NewtonRaphson)
+            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
             .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
             .build(domain1);
         analysis1.step().expect("elastic-range step should converge");
@@ -194,7 +194,7 @@ fn elastic_pp_section_softens_past_yield_in_both_planes_and_shows_permanent_set_
         let mut analysis2 = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
-            .algorithm(Algorithm::NewtonRaphson)
+            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
             .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
             .build(domain2);
         analysis2.step().expect("past-yield step should converge");
@@ -209,7 +209,7 @@ fn elastic_pp_section_softens_past_yield_in_both_planes_and_shows_permanent_set_
         let mut analysis3 = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 0.0 })
-            .algorithm(Algorithm::NewtonRaphson)
+            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
             .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
             .build(analysis2.domain().clone());
         analysis3.step().expect("unload-to-zero step should converge");

@@ -1,4 +1,4 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, Element, Fiber, ForceBeamColumn, Material, Node,
 };
@@ -86,7 +86,7 @@ fn force_beam_column_fiber_responses_are_internally_consistent_with_committed_se
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
         .build(domain);
     analysis.step().expect("elastic-range force-beam-column cantilever should converge");

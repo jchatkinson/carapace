@@ -1,6 +1,6 @@
 use nalgebra::DVector;
 
-/// Convergence criterion for `Algorithm::NewtonRaphson`. Closed enum
+/// Convergence criterion for `Algorithm::Newton`/`KrylovNewton`. Closed enum
 /// (§2.1). Unused by `Algorithm::Linear` (which never iterates).
 #[derive(Debug, Clone, Copy)]
 pub enum ConvergenceTest {

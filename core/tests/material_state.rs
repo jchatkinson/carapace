@@ -1,4 +1,4 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{Algorithm, AnalysisBuilder, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
 use carapace_core::model::{Domain, Element, Material, Node, Truss, ZeroLength};
 
 /// Pre-M7 foundational work: `Material`'s trial/commit split (see its doc
@@ -9,7 +9,7 @@ use carapace_core::model::{Domain, Element, Material, Node, Truss, ZeroLength};
 /// Same `Truss` (k_t=50, elastic) + `ZeroLength`+`ElasticPP` (k_epp=100,
 /// fy=1.0) parallel system as `m4_analysis.rs`, but driven through *two*
 /// separate `Analysis::step()` calls — loading past yield, then partially
-/// unloading — rather than one. `Algorithm::NewtonRaphson`'s Newton loop
+/// unloading — rather than one. `Algorithm::Newton`'s Newton loop
 /// only ever evaluates materials via `Material::trial_stress_tangent`
 /// (never mutates), and `Domain::commit` runs once after each step
 /// converges: step 1 leaves the EPP spring's plastic strain committed at
@@ -44,7 +44,7 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 5.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,
@@ -69,7 +69,7 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
     let mut analysis2 = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 3.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,
@@ -104,7 +104,7 @@ fn failed_step_leaves_domain_unchanged() {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 0 })
         .build(domain);
 

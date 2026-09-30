@@ -258,7 +258,7 @@ where
     /// resistance there minus the total applied reference load at
     /// `pseudo_time` (Chopra's standard reaction definition) — most useful
     /// at a *fixed* DOF (a free DOF's residual is, by construction, what
-    /// `Algorithm::NewtonRaphson` already drives to ~0 at convergence, so
+    /// `Algorithm::Newton` already drives to ~0 at convergence, so
     /// reading its "reaction" is redundant but harmless). Needs no
     /// equation number — unlike every other accessor here, this bypasses
     /// `dof_terms`/the free-DOF system entirely by summing every element's
@@ -814,28 +814,26 @@ where
         result
     }
 
-    /// Newmark's effective dynamic system for one `TransientAnalysis` step:
-    /// `K_eff = stiffness_coeff*K + mass_coeff*diag(mass)`, plus `K*damp_vector`
-    /// (the stiffness-proportional-damping contribution to the effective
-    /// load, `beta_k*K*(a4*u_n + a5*v_n + a6*a_n)` — see `TransientAnalysis::
-    /// step` for where `stiffness_coeff`/`mass_coeff`/`damp_vector` come
-    /// from). One traversal shared between both outputs, rather than the
-    /// two separate `assemble_tangent_and_resistance` / `multiply_stiffness`
-    /// calls that would otherwise be needed every step.
+    /// Newmark's effective dynamic operator and internal resistance, at the
+    /// domain's *current* state (whatever trial displacement is on it when
+    /// called): `K_eff = stiffness_coeff*K(u) + mass_coeff*diag(mass)`,
+    /// `resistance = F_int(u)` — the `Op`/`F_int` half of `docs/
+    /// algorithms.md` §6.1's Newton corrector residual (`TransientAnalysis::
+    /// try_step` composes the rest — the damping/inertial terms, which need
+    /// `v_trial`/`a_trial`, not just `u` — around this). `stiffness_coeff`/
+    /// `mass_coeff` are `docs/algorithms.md` §6.1's `c1`/`c3` (Newmark's
+    /// `a1 + a4*alpha_m`/`1 + a4*beta_k`).
     pub(crate) fn assemble_newmark_system(
         &self,
         mass: &DVector<f64>,
         mass_coeff: f64,
         stiffness_coeff: f64,
-        damp_vector: &DVector<f64>,
     ) -> (SparseMatrix, DVector<f64>) {
         let n = self.num_free_dofs;
-        let (triplets, _resistance) = self.assemble_stiffness_triplets();
+        let (triplets, resistance) = self.assemble_stiffness_triplets();
 
-        let mut k_damp = DVector::<f64>::zeros(n);
         let mut eff_triplets = Vec::with_capacity(triplets.len() + n);
         for t in &triplets {
-            k_damp[t.row] += t.val * damp_vector[t.col];
             eff_triplets.push(Triplet::new(t.row, t.col, stiffness_coeff * t.val));
         }
         for i in 0..n {
@@ -844,7 +842,7 @@ where
 
         let k_eff = SparseMatrix::try_new_from_triplets(n, n, &eff_triplets)
             .expect("equation numbers are always in [0, num_free_dofs)");
-        (k_eff, k_damp)
+        (k_eff, resistance)
     }
 }
 

@@ -12,7 +12,7 @@ use std::env;
 use std::fs;
 use std::io::Write;
 
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest};
+use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, TangentStrategy};
 use carapace_core::model::{Domain, Element, Material, Node, Pinching4DmgCyc, ZeroLength};
 use carapace_core::testkit::run_cyclic_protocol;
 
@@ -122,7 +122,7 @@ fn main() {
             dof: 0,
             increment: 0.0, // placeholder — run_cyclic_protocol calls set_integrator before every step
         })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
         .build(domain);
 

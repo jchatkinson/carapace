@@ -12,7 +12,7 @@ pub use boundary::{decode_input, WasmSession};
 
 use carapace_core::analysis::{
     modal_analysis, Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
-    RayleighDamping, TransientAnalysis,
+    RayleighDamping, TangentStrategy, TransientAnalysis,
 };
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementLoad, Fiber,
@@ -130,9 +130,9 @@ pub fn simply_supported_beam_end_rotation(e: f64, iz: f64, area: f64, length: f6
 
 /// M4 wiring check: a `Truss` (elastic) in parallel with a `ZeroLength`+
 /// `ElasticPP` (elastic-perfectly-plastic) spring, loaded past the EPP
-/// spring's yield point within a single step — needs `Algorithm::
-/// NewtonRaphson`'s iteration to resolve correctly (`Algorithm::Linear`'s
-/// one-shot solve can't cross a material regime boundary within a step).
+/// spring's yield point within a single step — needs `Algorithm::Newton`'s
+/// iteration to resolve correctly (`Algorithm::Linear`'s one-shot solve
+/// can't cross a material regime boundary within a step).
 /// See `core/tests/m4_analysis.rs` for the native equivalent and the
 /// closed-form derivation.
 #[wasm_bindgen]
@@ -159,7 +159,7 @@ pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,

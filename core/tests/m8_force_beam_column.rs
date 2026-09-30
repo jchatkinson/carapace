@@ -1,5 +1,5 @@
 use carapace_core::analysis::{
-    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
 };
 use carapace_core::model::{
     BeamIntegration, Domain, ElasticBeamColumn, Element, Fiber, ForceBeamColumn, GeomTransf,
@@ -256,7 +256,7 @@ fn elastic_pp_section_softens_past_yield_and_shows_permanent_set_on_unload() {
     let mut analysis1 = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-10,
             max_iter: 30,
@@ -300,7 +300,7 @@ fn elastic_pp_section_softens_past_yield_and_shows_permanent_set_on_unload() {
     let mut analysis2 = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-10,
             max_iter: 30,
@@ -323,7 +323,7 @@ fn elastic_pp_section_softens_past_yield_and_shows_permanent_set_on_unload() {
     let mut analysis3 = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 0.0 })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-10,
             max_iter: 30,

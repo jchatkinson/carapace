@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use carapace_core::analysis::{Algorithm, ConvergenceTest, GroundMotion, Integrator, RayleighDamping};
+use carapace_core::analysis::{Algorithm, ConvergenceTest, GroundMotion, Integrator, RayleighDamping, TangentStrategy};
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
     Fiber, FiberSection, ForceBeamColumn, Friction, GeomTransf, LoadPatternId, LoadSeries,
@@ -585,7 +585,9 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                     };
                     let algorithm = match algorithm {
                         AlgorithmSpec::Linear => Algorithm::Linear,
-                        AlgorithmSpec::NewtonRaphson => Algorithm::NewtonRaphson,
+                        AlgorithmSpec::NewtonRaphson => {
+                            Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None }
+                        }
                     };
                     let convergence = match convergence.unwrap_or(ConvergenceSpec::DEFAULT) {
                         ConvergenceSpec::NormUnbalance { tol, max_iter } => {

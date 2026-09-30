@@ -358,8 +358,22 @@ exercising `eiyz`/`f12`/`f13`/`f23`.
 
 ### M18 — Spatial corotational geometry, if needed
 
-Revisit only after M15–M17. Planar and spatial corotational transforms need
-different rotation parameterizations and independent objectivity tests.
+**Revisited 2026-09-29, shelved.** Scoped an `ElasticBeamColumn3`-only
+`GeomTransf3::Corotational3`, matching Xara/OpenSees's `CorotCrdTransf3d`.
+Unlike planar `Corotational2d` (a stateless function of current position —
+planar rotation is a single commuting scalar angle), an objective 3D
+formulation needs: (1) persistent per-element quaternion-tracked nodal
+rotation state updated at `commit()` (a total additive nodal rotation vector
+can't just be exponentiated directly, since 3D rotations don't commute), and
+(2) a dense, easy-to-mis-sign analytic geometric-stiffness Hessian
+(`CorotCrdTransf3d`'s `T` matrix plus five `ksigma1`–`ksigma5` blocks) —
+substantially more complexity, and harder to verify by inspection, than any
+other transform/element in this codebase. Deliberately not built: not
+commonly needed for this project's current models. See README's Elements
+checklist for the current one-line status. Revisit only if a real model
+needs large 3D frame rotations — this note plus `CorotCrdTransf3d.{h,cpp}`
+in the sibling `/home/jchat/websites/OpenSees` checkout is the starting
+point, not a from-scratch investigation.
 
 ### M19 — Spatial dynamics (modal/transient, 3D)
 

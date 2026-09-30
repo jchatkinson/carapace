@@ -1,5 +1,19 @@
 # Algorithm richness: line search, tangent strategy, Krylov acceleration, event-to-event stepping
 
+**Status (2026-09-29): Part I (§0–§8) and §6.1 are implemented and
+tested** — `TangentStrategy`, `LineSearch`, `Algorithm::KrylovNewton`,
+the factor/solve split (`SparseSolver::factor`/`SparseFactorization`),
+the shared iteration driver (`core/src/analysis/newton_loop.rs`), and
+`TransientAnalysis`'s Newton corrector (`TransientAnalysis::with_algorithm`)
+all exist natively, verified in `core/tests/m_algorithm_richness.rs` and
+`core/tests/m21_transient_corrector.rs`. Only the wasm wire-format exposure
+(`AlgorithmSpec` still wire-compatible-only, `Transient` stages have no
+`algorithm` field yet) remains — see README's wasm/browser-boundary
+checklist. **Part II (§9–§17, event-to-event stepping) is still
+design-only, not implemented.** The rest of this document is kept as
+originally written (design rationale, Xara reference map, staged order) —
+read it as *why*, not as an open question for Part I/§6.1.
+
 Plan for M12 (implementation-plan §6). `Algorithm` today is `Linear` /
 `NewtonRaphson` only (`core/src/analysis/algorithm.rs`) — full Newton,
 current tangent re-formed and re-factored every single iteration, no
@@ -14,11 +28,74 @@ followed (see its module doc comment for why that matters: a hand
 re-derivation of "the same algorithm" silently introduced a real
 convergence bug that only surfaced under nonlinear load).
 
-Scope: **static `Analysis` only.** `TransientAnalysis` has no Newton
-corrector at all yet (a separately-flagged gap, implementation-plan §6's M6
-note) — once it grows one, it can reuse whatever `TangentStrategy`/
-`LineSearch` types come out of this milestone, but that's follow-on work,
-not part of this one.
+Scope: **every iterative analysis capability — static `Analysis` and
+`TransientAnalysis` both.** `Modal` analysis is a pure eigenvalue solve
+(Lanczos, `core/src/analysis/modal.rs`) with no residual to iterate on, so
+none of this applies to it; reliability analysis is a separate, unrelated
+problem domain (§7). Everything else here — tangent strategy, line search,
+Krylov acceleration, event-to-event stepping — is designed once, as a
+property of *iterating toward equilibrium against some effective operator*,
+and both `Analysis` and `TransientAnalysis` are instances of that same
+problem, not two unrelated ones. §0 below states the shared idea that makes
+this a genuine generalization rather than two independent copies of the
+same design.
+
+`TransientAnalysis` today has no Newton corrector at all
+(`core/src/analysis/transient.rs`'s module doc comment is explicit about
+this: "one linear solve per step, no Newton iteration... A Newton-iterated
+corrector... is a natural extension, not built until something needs it").
+Concretely, `TransientAnalysis::try_step` already forms an effective system
+once, from the step-*start* state (`assemble_newmark_system`, called before
+any trial displacement is scattered) and solves it once — exactly
+`Algorithm::Linear`'s static analogue, not a degenerate case of
+`TangentStrategy`/iteration that happens to run zero extra iterations. §6.1
+below designs the missing corrector as a real generalization of Part I's
+three axes, not a parallel, second implementation of them.
+
+---
+
+## 0. The shared idea: an "effective operator," not a static-only concept
+
+Strip away what's different between `Analysis::try_step` and
+`TransientAnalysis::try_step` and the remainder is identical:
+
+- **Static**: solve `K(u) * du = r(u)`, `r(u) = load_factor * P_ref -
+  F_int(u)`. `K` is the tangent stiffness alone.
+- **Transient (Newmark)**: solve `K_eff(u) * du = r_eff(u)`, `K_eff(u) =
+  c1*K(u) + c2*C + c3*M` and `r_eff(u) = f_eff - (F_int(u) + C*v(u) +
+  M*a(u))`, where `v(u)`/`a(u)` are Newmark's own linear functions of `u`
+  for a fixed step-start state and `dt` (`try_step`'s `a1..a6` constants;
+  `c1,c2,c3` are the same idea under OpenSees's `Newmark.cpp::formTangent`
+  naming — `theEle->addKtToTang(c1); addCtoTang(c2); addMtoTang(c3);`, the
+  reference this section's `K_eff` is ported from, not re-derived).
+
+Both are "solve `Op(u) * du = r(u)`, update `u`, check convergence, repeat"
+against an **effective operator** `Op` that's built from the *current
+tangent stiffness* plus zero or more state-independent-per-step terms (mass
+and damping, for the transient case). `TangentStrategy` (§3), `LineSearch`
+(§4), and `KrylovAccelerator` (§5) only ever look at `Op`/`r` and the raw
+correction `du` — none of their logic reads "stiffness" or "load factor"
+specifically. That's what makes them genuinely shared, not two families
+that happen to look similar: `TangentStrategy::Current` means "re-form
+`Op` every iteration" whether `Op` is bare `K` or `c1*K + c2*C + c3*M`;
+`LineSearch` rescales `du` the same way regardless of what produced it;
+`KrylovAccelerator` extrapolates from a history of `(du_i, Op*du_i)` pairs
+with no idea what `Op` physically is.
+
+Concretely, this becomes a small shared driver (a private helper or a
+`fn iterate_to_equilibrium(...)`-shaped function in `core/src/analysis/`,
+generic over a closure that forms `(Op, r)` from the current trial state)
+that `Analysis::try_step` and `TransientAnalysis::try_step` both call into,
+each supplying its own `(Op, r)` formation and its own post-convergence
+state update (`Analysis` commits `u` alone; `TransientAnalysis` also
+updates `v`/`a` via Newmark's relations, `try_step`'s existing `delta_u *
+a1 - ...` lines). This is *not* a proposal to merge `Analysis` and
+`TransientAnalysis` into one type — `TransientAnalysis`'s own module doc
+comment already explains why that would blur two genuinely different
+physical processes, and that reasoning is still correct. Only the
+inner iteration loop is shared; everything each type does before and after
+it (predictor formation, state propagation, `GroundMotion` forcing) stays
+exactly where it is today.
 
 ---
 
@@ -302,6 +379,60 @@ branches inside it. `Algorithm::KrylovNewton` needs its own loop body
 
 ---
 
+## 6.1 `TransientAnalysis`'s Newton corrector
+
+The missing piece §0 already named: `TransientAnalysis` needs its own
+`algorithm: Algorithm` field (same `Algorithm` enum §6 defines — no second
+type) and an iteration loop reusing the shared driver, replacing
+`try_step`'s current single `assemble_newmark_system` + one `solver.solve`
+with:
+
+1. Form `(Op, r)` at the trial state: `Op = c1*K(u_trial) + c2*C + c3*M`
+   (`assemble_newmark_system`'s existing `mass_coeff`/`stiffness_coeff`
+   *are* `c3`/`c1` already — this reuses that method, called every
+   iteration instead of once, for `TangentStrategy::Current`); `r =
+   f_eff(time) - (F_int(u_trial) + C*v_trial + M*a_trial)`, `v_trial`/
+   `a_trial` from Newmark's own linear relations at the current `u_trial`
+   (`try_step`'s existing `a1..a6`-based formulas, evaluated at the trial
+   displacement instead of only at the end).
+2. Solve `Op * du = r`, apply `TangentStrategy`/`LineSearch`/
+   `KrylovAccelerator` exactly as §3–§5 describe — this is the whole point
+   of §0's shared operator framing: nothing in this step is
+   transient-specific.
+3. Update `u_trial += du`, then `v_trial`/`a_trial` from the same Newmark
+   relations (not independently integrated — they're *defined* by `u_trial`
+   once `beta`/`gamma`/`dt` are fixed, same as today's post-solve lines).
+4. Check `ConvergenceTest` against `(r, du)` — identical machinery to the
+   static case, `ConvergenceTest::check`'s signature already generic enough.
+
+`TangentStrategy::ReuseAtStepStart` applied to this loop with **zero**
+extra iterations is exactly today's existing behavior (form `Op` once from
+`u_n`, one solve, no residual check) — so today's `TransientAnalysis` is
+not being replaced, it's the `Algorithm::Linear`-equivalent special case of
+what this section generalizes it into. A model with linear materials driven
+dynamically sees no behavior change; a model with nonlinear materials
+(`Steel01`+`Truss`, say) driven dynamically gains a real corrector for the
+first time.
+
+`c2*C` (damping) never gets re-evaluated by `TangentStrategy` the way `c1*K`
+does — `C` (Rayleigh, `alpha_m*M + beta_k*K_initial`, per `RayleighDamping`)
+is fixed for the whole analysis by construction, so there's nothing for
+`Current` vs `Initial` to distinguish there; only the `c1*K(u_trial)` term
+is where the tangent-formation choice actually bites, same as `beta_k*K`'s
+own existing "initial or current tangent" ambiguity already implicit in
+`RayleighDamping`'s doc comment (unaffected by this milestone — not
+re-opened here).
+
+Verification: same style as §8's — a nonlinear dynamic case (`Truss` +
+`Steel01`(or `ElasticPP`) under a `GroundMotion` large enough to push past
+yield) where the corrector visibly changes the response versus today's
+single-linear-solve-per-step behavior, cross-checked for energy/momentum
+sanity (no spurious energy injection from an under-iterated step) the same
+way `m19_spatial_dynamics.rs`'s existing free-vibration cases check against
+closed-form decay.
+
+---
+
 ## 7. Non-goals for this milestone
 
 Same spirit as implementation-plan §1/§9 — named so a future session
@@ -319,9 +450,10 @@ doesn't rediscover and second-guess these:
   (`Bisection`/`RegulaFalsi`) cover the robustness case; these two trade
   robustness for a small speed gain, not needed until a specific model
   demands it.
-- **No `TransientAnalysis` integration.** It has no Newton corrector at
-  all yet (implementation-plan §6 M6 note) — out of scope here, follow-on
-  work once it exists.
+- **No `Modal` integration.** A pure eigenvalue solve has no residual to
+  iterate on — none of tangent strategy/line search/Krylov acceleration
+  applies (§0's "every iterative analysis" framing explicitly excludes it,
+  not an oversight).
 - **No reliability-analysis algorithms** (`FindDesignPointAlgorithm` and
   friends) — unrelated problem domain (§1 non-goals: no reliability
   analysis at all).
@@ -373,6 +505,23 @@ additive fields, not a breaking change to `StepResult` itself.
   point: recover most of full Newton's convergence rate while paying
   `Initial`'s factorization cost).
 
+- **A5 — extract the shared iteration driver (§0)** from `Analysis::
+  try_step`'s now-complete A1–A4 loop, generic over `(Op, r)` formation
+  and post-solve state update. Static-only behavior must be provably
+  unchanged (same test suite, same results) — this stage is a refactor,
+  not new numerics, and should land as one that touches `Analysis` only
+  (no `TransientAnalysis` changes yet) so a regression is unambiguous
+  about its cause.
+
+- **A6 — `TransientAnalysis`'s Newton corrector (§6.1)**, built on A5's
+  driver: `algorithm: Algorithm` field, per-iteration `(Op, r)` formation
+  from `c1*K(u_trial) + c2*C + c3*M`, Newmark `v_trial`/`a_trial` update
+  each iteration. Verify (a) a linear-material dynamic case is bit-for-bit
+  unchanged from today's single-solve behavior under
+  `TangentStrategy::ReuseAtStepStart` with the corrector converging in one
+  iteration, and (b) a nonlinear dynamic case (§6.1's `Truss`+`Steel01`
+  under `GroundMotion`) that only converges correctly *with* the corrector.
+
 ---
 
 # Part II: Event-to-event (EtE) stepping
@@ -387,6 +536,15 @@ technique in their other products, cited explicitly below — the same
 "verify against a known-correct source, don't guess" discipline
 implementation-plan §7 asks for, just aimed at literature instead of a
 source tree.
+
+Like Part I, this is designed once for both `Analysis` and
+`TransientAnalysis` (§0's "effective operator" framing applies here too —
+§13 works entirely in terms of a fixed operator's unit response, and
+§6.1's `Op = c1*K + c2*C + c3*M` is just as fixed-per-formation as static
+`K`). §16.1 below is where the transient-specific wrinkle actually is: not
+the event-distance math itself, but what "advance by the event distance"
+means when the step axis is *time* (governed by `dt`) rather than a free
+load factor.
 
 ## 9. What EtE is, and why it's worth having alongside Newton
 
@@ -767,13 +925,58 @@ EtE's own correctness property giving a *stronger* oracle than usual:
   address this; Carapace's own `Integrator`s are single-reference-load-
   pattern only today (implementation-plan §3.3), so this is naturally
   deferred until that's no longer true.
-- **`TransientAnalysis` integration.** Out of scope here for the same
-  reason as Part I's non-goals (no Newton corrector there at all yet) —
-  worth flagging, though, that EtE is *arguably more* valuable for
-  transient response than static (avoids any iteration inside a time
-  step entirely for a piecewise-linear model), a strong motivation for
-  revisiting once `TransientAnalysis` grows nonlinear support, not a
-  reason to build it now.
+- **`Modal` integration.** Same reason as Part I's (§7): a pure eigenvalue
+  solve has no load/time axis to step along at all — not applicable, not
+  deferred.
+
+## 16.1 EtE for `TransientAnalysis`: the step axis is time, not load factor
+
+§13's math carries over directly once `du_hat` is read as "the unit
+response of the *effective* system §6.1 solves against" rather than
+specifically the static unit load response: `Domain::distance_to_next_event`
+(§13.3) just needs the caller to pass `(Op, du_hat)` instead of `(K,
+du_hat)`, and every layer under it (§13.1's `FiberSection`, §13.2's
+elements) is already expressed in terms of a deformation *rate*, not a
+load-factor rate specifically — no change needed there.
+
+The real new wrinkle: static EtE advances a **free** load factor by
+`lambda`, but a Newmark step's predictor terms (`try_step`'s `a1..a6`,
+`assemble_newmark_system`'s `mass_coeff`/`stiffness_coeff`) are all
+functions of the *fixed* `dt` chosen for that step — Newmark doesn't have
+a free scalar the way static's load factor is free. Committing an event at
+some fractional point *within* a time step means one of:
+
+1. **Sub-step `dt` itself.** Solve the linear system for the step's full
+   `dt` first to get the *trial* displacement increment direction, use that
+   as `du_hat` for the event query, then — if an event falls before the
+   full step — re-run Newmark's own predictor formulas with a *shorter*
+   `dt' < dt` that lands exactly on the event's time, commit, and continue
+   with a fresh sub-step for the remainder. Correct and matches what
+   "event-to-event in time" should mean physically, but means `dt` is no
+   longer uniform across a run purely from event triggering (on top of any
+   existing time-step-size policy) — bookkeeping `TransientStepResult`
+   needs to expose (an actual sub-step `dt'` used, alongside `time`), not
+   silently absorbed.
+2. **Fixed `dt`, fractional commit within it.** Keep `dt` uniform; find the
+   fraction of the step's displacement increment at which an event occurs
+   (§13's `lambda`, here scaled to `[0, 1]` of the step's own `du_hat`
+   rather than an open-ended load factor), commit the triggered
+   component(s) at that intermediate *displacement* state, but still land
+   `v`/`a` at the full `dt`'s Newmark relations — an approximation (the
+   velocity/acceleration implied by "part-way through a Newmark step" isn't
+   itself exactly defined by Newmark's own formulas, which are stated for
+   a whole step), cheaper and simpler than (1), and arguably fine given
+   `dt` is normally chosen fine enough that within-step curvature is
+   already small.
+
+Not resolved here — flagged as the transient analogue of §13.4's open
+decision, same "don't silently pick one" discipline. Recommendation, tentative:
+start with (1) for `LoadControl`-equivalent correctness parity with static
+EtE (§15's exact-match test needs a real answer to compare against, and (2)
+doesn't have one), revisit (2) only if (1)'s variable-substep bookkeeping
+proves awkward in practice.
+
+---
 
 ## 17. Staged implementation order
 
@@ -800,3 +1003,14 @@ EtE's own correctness property giving a *stronger* oracle than usual:
 - **E5 — `ForceBeamColumn` event queries** (§13.2's harder case) +
   §13.4's smooth-material decision, whichever option §13.4 lands on, once
   it's actually been decided rather than deferred.
+
+- **E6 — `TransientAnalysis` EtE (§16.1)**, built on Part I's A6 (needs a
+  real Newton corrector — and hence a real `Op`/effective-operator
+  formation — to already exist; EtE without a corrector has nothing to
+  fall back to when an event query comes back `None`). Whichever of
+  §16.1's two options is chosen, verified the same way as §15's static
+  exact-match test: an all-piecewise-linear dynamic case (`Truss` +
+  `ElasticPP` under a `GroundMotion` that drives it past yield) where
+  `Algorithm::EventToEvent` matches a tightly-converged Newton-corrected
+  `TransientAnalysis` run to near machine precision, not just
+  `ConvergenceTest`-tolerance agreement.

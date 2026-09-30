@@ -1,4 +1,4 @@
-use carapace_core::analysis::{Algorithm, Analysis, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{Algorithm, Analysis, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
 use carapace_core::model::{Domain, Element, Material, Node, NodeId, Truss, ZeroLength};
 
 /// Same `Truss` (k_t=50, elastic) + `ZeroLength`+`ElasticPP` (k_epp=100,
@@ -79,7 +79,7 @@ fn set_integrator_drives_a_cyclic_protocol_with_permanent_set_at_zero_displaceme
             dof: 0,
             increment: 0.0, // placeholder — `ramp_to` calls `set_integrator` before every step
         })
-        .algorithm(Algorithm::NewtonRaphson)
+        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
         .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 20 })
         .build(domain);
 
