@@ -361,7 +361,7 @@ where
                     // here — `TransientAnalysis` has no solved-for pseudo-
                     // time/load-factor scalar at all (`time` is fixed for
                     // the whole step by `dt`), so this hook is unused.
-                    |_domain, _k, du, _scalar, _iteration| Ok((du, 0.0)),
+                    |_domain, _k, _current_factorization, du, _scalar, _iteration| Ok((du, 0.0)),
                     |domain| {
                         let u_trial = domain.gather_displacement();
                         let (v_trial, a_trial) = newmark_state(&u_trial);

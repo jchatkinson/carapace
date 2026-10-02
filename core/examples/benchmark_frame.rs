@@ -11,6 +11,7 @@
 //!   --bays <usize>      Number of bays (default: 3)
 //!   --steps <usize>     Number of load steps (default: 50)
 //!   --model <str>       Model type: 'elastic' or 'fiber' (default: 'elastic')
+//!   --displacement-increment <f64>  Control roof x displacement per step (mm)
 //!   --json              Output machine-readable JSON
 
 use std::collections::HashMap;
@@ -27,6 +28,7 @@ struct BenchmarkConfig {
     bays: usize,
     steps: usize,
     model: String,
+    displacement_increment: Option<f64>,
     json: bool,
 }
 
@@ -37,6 +39,7 @@ fn parse_args() -> BenchmarkConfig {
         bays: 3,
         steps: 50,
         model: "elastic".to_string(),
+        displacement_increment: None,
         json: false,
     };
 
@@ -66,6 +69,13 @@ fn parse_args() -> BenchmarkConfig {
                     config.model = args[i + 1].clone();
                     i += 1;
                 }
+            }
+            "--displacement-increment" => {
+                i += 1;
+                config.displacement_increment = Some(
+                    args.get(i).expect("missing displacement increment")
+                        .parse().expect("displacement increment must be a number"),
+                );
             }
             "--json" => {
                 config.json = true;
@@ -188,9 +198,14 @@ fn main() {
     }
 
     let increment = 1.0 / config.steps as f64;
+    let roof_node = nodes[&(config.stories, 0)];
+    let integrator = match config.displacement_increment {
+        Some(increment) => Integrator::DisplacementControl { node: roof_node, dof: 0, increment },
+        None => Integrator::LoadControl { increment },
+    };
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
-        .integrator(Integrator::LoadControl { increment })
+        .integrator(integrator)
         .algorithm(Algorithm::Newton {
             tangent: TangentStrategy::Current,
             line_search: None,
@@ -204,12 +219,15 @@ fn main() {
     let setup_elapsed = setup_start.elapsed();
 
     // 5. Solve loop
-    let roof_node = nodes[&(config.stories, 0)];
     let mut roof_history = Vec::with_capacity(config.steps);
+    let mut load_factor_history = Vec::with_capacity(config.steps);
+    let mut iterations = 0;
 
     let solve_start = Instant::now();
     for _ in 0..config.steps {
-        analysis.step().expect("step should converge successfully");
+        let result = analysis.step().expect("step should converge successfully");
+        load_factor_history.push(result.load_factor);
+        iterations += result.iterations;
         let disp = analysis.domain().node(roof_node).displacement[0];
         roof_history.push(disp);
     }
@@ -226,8 +244,9 @@ fn main() {
 
     if config.json {
         let history_str: Vec<String> = roof_history.iter().map(|d| format!("{:.10}", d)).collect();
+        let load_history_str: Vec<String> = load_factor_history.iter().map(|value| format!("{:.10}", value)).collect();
         println!(
-            "{{\n  \"engine\": \"carapace\",\n  \"model\": \"{}\",\n  \"stories\": {},\n  \"bays\": {},\n  \"nodes\": {},\n  \"elements\": {},\n  \"free_dofs\": {},\n  \"steps\": {},\n  \"setup_ms\": {:.4},\n  \"solve_ms\": {:.4},\n  \"total_ms\": {:.4},\n  \"final_roof_disp\": {:.10},\n  \"roof_disp_history\": [{}]\n}}",
+            "{{\n  \"engine\": \"carapace\",\n  \"model\": \"{}\",\n  \"stories\": {},\n  \"bays\": {},\n  \"nodes\": {},\n  \"elements\": {},\n  \"free_dofs\": {},\n  \"steps\": {},\n  \"setup_ms\": {:.4},\n  \"solve_ms\": {:.4},\n  \"total_ms\": {:.4},\n  \"final_roof_disp\": {:.10},\n  \"roof_disp_history\": [{}],\n  \"load_factor_history\": [{}],\n  \"iterations\": {}\n}}",
             config.model,
             config.stories,
             config.bays,
@@ -239,7 +258,9 @@ fn main() {
             solve_ms,
             total_ms,
             final_roof_disp,
-            history_str.join(", ")
+            history_str.join(", "),
+            load_history_str.join(", "),
+            iterations,
         );
     } else {
         println!("============================================================");

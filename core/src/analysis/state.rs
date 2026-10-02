@@ -169,7 +169,7 @@ where
                     &mut self.domain,
                     self.load_factor,
                     |domain, load_factor| domain.form_tangent_and_residual(load_factor),
-                    |domain, k, du_bar, load_factor, iteration| {
+                    |domain, k, current_factorization, du_bar, load_factor, iteration| {
                         // The first iteration uses the same tangent
                         // `predict` used, so `du_bar` already delivers
                         // `predict`'s target displacement at the
@@ -181,8 +181,9 @@ where
                         if iteration == 0 {
                             Ok((du_bar, 0.0))
                         } else {
-                            let (delta_lambda, du) =
-                                integrator.correct(domain, solver, k, du_bar, load_factor)?;
+                            let (delta_lambda, du) = integrator.correct(
+                                domain, solver, k, current_factorization, du_bar, load_factor,
+                            )?;
                             Ok((du, delta_lambda))
                         }
                     },

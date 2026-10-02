@@ -54,6 +54,9 @@ pub(crate) struct IterationOutcome {
 /// `TransientAnalysis`, persisting across `step()` calls) so
 /// `TangentStrategy::Initial` can actually skip re-factoring across every
 /// step of an analysis's lifetime, not just within one step.
+/// `correct_du` receives a factorization only when it was formed from
+/// this iteration's operator, allowing additional right-hand sides to
+/// reuse it without accidentally using an older tangent.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn iterate_to_equilibrium<
     const NDIM: usize,
@@ -76,6 +79,7 @@ pub(crate) fn iterate_to_equilibrium<
     mut correct_du: impl FnMut(
         &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
         &SparseMatrix,
+        Option<&SparseFactorization>,
         DVector<f64>,
         f64,
         usize,
@@ -137,7 +141,14 @@ where
             Some(accelerator) => accelerator.accelerate(du_raw, &residual),
             None => du_raw,
         };
-        let (du, delta_scalar) = correct_du(domain, &k, du_pre_correct, scalar, iteration)?;
+        let (du, delta_scalar) = correct_du(
+            domain,
+            &k,
+            force_refactor.then_some(factorization),
+            du_pre_correct,
+            scalar,
+            iteration,
+        )?;
         scalar += delta_scalar;
 
         domain.apply_displacement_increment(&du);

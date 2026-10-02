@@ -3,7 +3,7 @@ use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, NodeId, SparseMatrix};
 
-use super::{AnalysisError, SparseSolver};
+use super::{AnalysisError, SparseFactorization, SparseSolver};
 
 /// Static/pseudo-static integration strategy. Closed enum (§2.1). Both
 /// variants only ever change how this *step's* load factor is chosen (the
@@ -100,11 +100,15 @@ impl<NId: Copy> Integrator<NId> {
     /// exactly where it already was after iteration 1, no matter how far
     /// the tangent has drifted since, while every other DOF still gets
     /// `du_bar`'s residual-driven correction.
+    /// `current_factorization`, when supplied, must factor `k`. An older
+    /// Newton tangent must not be passed here: the load-sensitivity probe
+    /// continues to use the current tangent even under tangent reuse.
     pub(crate) fn correct<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
         &self,
         domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
         solver: &SparseSolver,
         k: &SparseMatrix,
+        current_factorization: Option<&SparseFactorization>,
         du_bar: DVector<f64>,
         pseudo_time: f64,
     ) -> Result<(f64, DVector<f64>), AnalysisError>
@@ -119,7 +123,10 @@ impl<NId: Copy> Integrator<NId> {
                     .equation_of(*node, *dof)
                     .ok_or(AnalysisError::InvalidConstraint)?;
                 let sensitivity = domain.assemble_reference_load_sensitivity(pseudo_time);
-                let unit_response = solver.solve(k, &sensitivity)?;
+                let unit_response = match current_factorization {
+                    Some(factorization) => factorization.solve(&sensitivity),
+                    None => solver.solve(k, &sensitivity)?,
+                };
                 let delta_lambda = -du_bar[eq] / unit_response[eq];
                 let du = du_bar + unit_response * delta_lambda;
                 Ok((delta_lambda, du))
