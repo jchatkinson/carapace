@@ -196,6 +196,9 @@ their structured `{ kind, ... }` shape (also exported as `DecodeError`).
 The current payload uses ordinary JS objects and arrays; these declarations
 do not describe the planned transferable typed-array format.
 
+The full model/input format (tables, materials, stages, recorders, results,
+and errors) is documented in [docs/input-format.md](docs/input-format.md).
+
 When extending the engine, update the Rust input types and decoder as needed,
 then rebuild to regenerate the JS types. A new binding is only needed for a
 new operation exposed to JavaScript; adding a material or solver behind the
