@@ -29,11 +29,82 @@ pub enum IntegratorSpec {
     },
 }
 
+/// Accepts the original bare strings and configurable algorithm objects.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(untagged)]
+pub enum AlgorithmSpec {
+    Legacy(LegacyAlgorithmSpec),
+    Config(AlgorithmConfigSpec),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
-pub enum AlgorithmSpec {
+pub enum LegacyAlgorithmSpec {
     Linear,
     NewtonRaphson,
+}
+
+impl Default for AlgorithmSpec {
+    fn default() -> Self {
+        Self::Linear
+    }
+}
+
+// Keep the existing Rust constructors as well as the existing JS strings.
+#[allow(non_upper_case_globals)]
+impl AlgorithmSpec {
+    pub const Linear: Self = Self::Legacy(LegacyAlgorithmSpec::Linear);
+    pub const NewtonRaphson: Self = Self::Legacy(LegacyAlgorithmSpec::NewtonRaphson);
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum TangentStrategySpec {
+    #[default]
+    Current,
+    ReuseAtStepStart,
+    Initial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum LineSearchSpec {
+    Bisection {
+        tol: f64,
+        max_iter: u32,
+        max_eta: f64,
+    },
+    RegulaFalsi {
+        tol: f64,
+        max_iter: u32,
+        max_eta: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AlgorithmConfigSpec {
+    Linear,
+    Newton {
+        #[serde(default)]
+        tangent: TangentStrategySpec,
+        #[tsify(optional)]
+        line_search: Option<LineSearchSpec>,
+    },
+    KrylovNewton {
+        tangent: TangentStrategySpec,
+        max_dimension: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
@@ -95,6 +166,7 @@ pub enum StageSpec {
         steps: u32,
         integrator: IntegratorSpec,
         algorithm: AlgorithmSpec,
+        #[tsify(optional)]
         convergence: Option<ConvergenceSpec>,
         /// Indices into `LoadPatternTable` to freeze (via
         /// `Domain::hold_pattern_constant`) at this stage's final load
@@ -121,6 +193,11 @@ pub enum StageSpec {
         dt: f64,
         damping: DampingSpec,
         ground_motions: Vec<GroundMotionSpec>,
+        /// Omitted algorithms preserve the original linear Newmark solve.
+        #[serde(default)]
+        algorithm: AlgorithmSpec,
+        #[tsify(optional)]
+        convergence: Option<ConvergenceSpec>,
     },
 }
 

@@ -1,5 +1,9 @@
 # Embedded results storage via Turso
 
+> Archived planning document; preserved for historical rationale. It is not a
+> current specification or implementation instruction. See [README](../../README.md)
+> and the current [results-storage documentation](../results-storage-indexeddb.md).
+
 This document evaluates replacing pysees-handoff.md's "worker owns a
 separately-instantiated sqlite-wasm, fed by `postMessage`d recorder
 batches" results-storage design with a single embedded engine: compile

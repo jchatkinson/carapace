@@ -69,6 +69,127 @@ fn empty_input(header_space: u8) -> CarapaceInputV1 {
     }
 }
 
+/// Nonlinear equilibrium must be the same across each configurable solver.
+#[test]
+fn configurable_algorithms_solve_static_and_transient_yielding() {
+    use carapace_wasm::input_v1::sequence::{
+        AlgorithmConfigSpec, DampingSpec, LineSearchSpec, TangentStrategySpec,
+    };
+    let mut algorithms = vec![AlgorithmSpec::NewtonRaphson];
+    for tangent in [
+        TangentStrategySpec::Current,
+        TangentStrategySpec::ReuseAtStepStart,
+        TangentStrategySpec::Initial,
+    ] {
+        for line_search in [
+            None,
+            Some(LineSearchSpec::Bisection {
+                tol: 1e-10,
+                max_iter: 30,
+                max_eta: 16.0,
+            }),
+            Some(LineSearchSpec::RegulaFalsi {
+                tol: 1e-10,
+                max_iter: 30,
+                max_eta: 16.0,
+            }),
+        ] {
+            algorithms.push(AlgorithmSpec::Config(AlgorithmConfigSpec::Newton {
+                tangent,
+                line_search,
+            }));
+        }
+        algorithms.push(AlgorithmSpec::Config(AlgorithmConfigSpec::KrylovNewton {
+            tangent,
+            max_dimension: 3,
+        }));
+    }
+    for algorithm in algorithms {
+        for transient in [false, true] {
+            let mut input = empty_input(2);
+            input.nodes = NodeTable {
+                coords: vec![0.0, 0.0, 0.0, 0.0],
+                fixed: vec![0b111, 0b110],
+                mass_node_index: vec![1],
+                mass: vec![1.0, 0.0, 0.0],
+            };
+            input.materials = vec![
+                MaterialSpec::Elastic { e: 50.0 },
+                MaterialSpec::ElasticPp {
+                    e: 100.0,
+                    eyp: 0.01,
+                },
+            ];
+            input.zero_lengths = ZeroLengthTable {
+                node_i: vec![0, 0],
+                node_j: vec![1, 1],
+                materials: vec![(0, 0, 0), (1, 0, 1)],
+                friction: vec![],
+            };
+            input.load_patterns = LoadPatternTable {
+                series: vec![if transient {
+                    TimeSeriesSpec::Linear { slope: 10.0 }
+                } else {
+                    TimeSeriesSpec::Constant
+                }],
+                scale_factor: vec![1.0],
+            };
+            input.nodal_loads = NodalLoadTable {
+                pattern: vec![0],
+                node: vec![1],
+                dof: vec![0],
+                value: vec![if transient { 1000.0 } else { 5.0 }],
+                stage: vec![0],
+            };
+            let convergence = Some(ConvergenceSpec::NormUnbalance {
+                tol: if transient { 1e-6 } else { 1e-9 },
+                max_iter: 120,
+            });
+            input.sequence = SequenceSpec {
+                stages: vec![if transient {
+                    StageSpec::Transient {
+                        id: "yield".into(),
+                        steps: 1,
+                        dt: 0.1,
+                        damping: DampingSpec {
+                            alpha_m: 0.0,
+                            beta_k: 0.0,
+                        },
+                        ground_motions: vec![],
+                        algorithm,
+                        convergence,
+                    }
+                } else {
+                    StageSpec::Static {
+                        id: "yield".into(),
+                        steps: 1,
+                        integrator: IntegratorSpec::LoadControl { increment: 1.0 },
+                        algorithm,
+                        convergence,
+                        hold_patterns_after: vec![],
+                    }
+                }],
+                recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
+            };
+            let outcome = decode(input).unwrap().advance(1);
+            assert!(
+                outcome.done && outcome.error.is_none(),
+                "{algorithm:?}, transient={transient}: {outcome:?}"
+            );
+            // A ramp starts at zero force; first Newmark effective inertia = 4*m/dt² = 400.
+            let expected = if transient {
+                (1000.0 - 1.0) / (400.0 + 50.0)
+            } else {
+                (5.0 - 1.0) / 50.0
+            };
+            assert!(
+                (last_sample(&outcome, 0).unwrap().1 - expected).abs() < 1e-8,
+                "{algorithm:?}, transient={transient}: {outcome:?}, expected={expected}"
+            );
+        }
+    }
+}
+
 /// Smoke test for the whole node/material/element/pattern/sequence
 /// pipeline: the M1 truss case (`core/tests/m1_truss.rs`'s closed form),
 /// built entirely from wire-format tables instead of direct `core` calls.
@@ -669,6 +790,8 @@ fn decodes_a_transient_stage_and_matches_damped_free_vibration_closed_form() {
                 beta_k: 0.0,
             },
             ground_motions: vec![],
+            algorithm: AlgorithmSpec::Linear,
+            convergence: None,
         }],
         recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
     };

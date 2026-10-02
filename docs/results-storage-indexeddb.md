@@ -1,6 +1,6 @@
 # Batched results storage with IndexedDB
 
-**Status: implemented**, on both sides, as of 2026-09-24 — this document
+**Status: implemented; capability audit updated 2026-10-01** — this document
 now describes the built system, not a proposal. See "Implementation status"
 below for exactly what's built vs. still open, and README.md's "Results /
 persistence" checklist for the current one-line-per-item summary.
@@ -17,15 +17,21 @@ as a superseded planning doc, but still the source for the run
 lifecycle/worker-protocol concepts this design builds on). It does not
 require SQLite, OPFS, or changes to `carapace-core`.
 
-**Scope carried over from that superseded doc's first slice, still true
-today:** only node-displacement recorders and static analysis stages flow
-through this pipeline. There is no `responseKind`/target-kind dimension
-anywhere in this schema — every recorder is implicitly "node displacement."
-Velocity/acceleration, reactions, element/section response, and modal/
-transient results are not recorded, not because this design excludes them,
-but because nothing upstream of it (the wire format, the decoder) produces
-them yet. See README.md's "Results / persistence" checklist for the exact
-list of what's missing and why each is a different size of gap.
+**Current frontend scope:** pysees's compiler and storage pipeline handle
+planar static analysis with node-displacement recorders. The storage schema
+has no response-kind/target-kind dimension; each recorded node carries its
+full displacement vector.
+
+**Current engine scope is broader:** Carapace accepts planar and spatial
+static, modal, and transient stages. Its recorders produce displacement,
+velocity, acceleration, reactions, local element forces, fiber stress/strain,
+and modal shape components paired with frequencies. Static and transient
+stages can select Newton tangent strategies, line search, or Krylov Newton;
+see [solver configuration](algorithms.md). These capabilities already cross
+the wasm boundary, but pysees's compiler does not yet emit the corresponding
+inputs. Extending frontend compilation, metadata, packing, and UI remains
+separate work; richer engine support does not automatically expand the
+node-displacement-only storage schema.
 
 ## Goals and invariants
 
@@ -251,7 +257,7 @@ undocumented.
    `advance()` call produced, grouped by recorder, with stable
    `recorder_index`, `stage_index`, and a deterministic `first_sample`.
    **Not done:** this still crosses the `wasm_bindgen` boundary as a
-   structured-clone JS object via `serde-wasm-bindgen`
+   plain JS object via `serde-wasm-bindgen`
    (`wasm-bridge/src/boundary.rs`'s own doc comment calls this out), not a
    transferable typed array — `carapaceWorker.ts`'s `StorageStream` does
    the packing into a real `Float64Array`/`ArrayBuffer` itself, on the JS
@@ -279,7 +285,9 @@ undocumented.
    multi-`advance()`-call assertions.
 
 Relevant files: `wasm-bridge/src/input_v1/session.rs`,
-`wasm-bridge/src/boundary.rs`, `wasm-bridge/tests/m10_carapace_input_v1.rs`.
+`wasm-bridge/src/boundary.rs`, `wasm-bridge/tests/m10_carapace_input_v1.rs`,
+`wasm-bridge/tests/m10_spatial_input_v1.rs`, and
+`wasm-bridge/tests/boundary-smoke.ts` (generated JS interface and solver settings).
 
 ## Delivery stages and acceptance gates
 
@@ -369,4 +377,6 @@ And one this audit surfaced, not in the original plan: **decide the
 response-kind/target-kind schema extension** — a `responseKind` dimension
 on `RecorderMetadata` and a non-node-indexed row layout for element
 response — before any of velocity/acceleration/reaction/element-response
-recording can be added. See README.md's "Results / persistence" checklist.
+recording can be persisted by pysees. These recorders already exist in
+Carapace; the missing work is frontend compilation and storage integration.
+See README.md's "Results / persistence" checklist.

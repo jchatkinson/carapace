@@ -1,5 +1,9 @@
 # Carapace Implementation Plan
 
+> Archived planning document; preserved for historical rationale. It is not a
+> current specification or implementation instruction. See [README](../../README.md)
+> and the current [results-storage documentation](../results-storage-indexeddb.md).
+
 This document is the source of truth for Carapace's design and roadmap. It exists
 so a coding session with no prior context can pick up the project and continue
 correctly. If something here conflicts with the code, the code wins for *what
@@ -8,7 +12,7 @@ exists*, but this document should still be updated to match — don't let it rot
 Detailed rationale for individual design decisions and ported algorithms lives
 in doc comments on the relevant source/test files, not here — this document
 stays at the architecture/scope/roadmap level and points into the code for
-specifics. See [`docs/xara-feasibility.md`](xara-feasibility.md) for the
+specifics. See [`docs/xara-feasibility.md`](../xara-feasibility.md) for the
 investigation into compiling Xara/OpenSees's C++ directly to wasm that this
 project's architecture reacts against.
 
@@ -490,7 +494,7 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
 - **M12 — Algorithm richness (line search, initial/secant tangent, Krylov
   acceleration).** Not started. `Algorithm` is currently just
   `Linear`/`NewtonRaphson` (full Newton, current tangent every iteration,
-  no globalization) — see [`docs/algorithms.md`](algorithms.md) for the
+  no globalization) — see [`docs/algorithms.md`](algorithm-design.md) for the
   full design: a `TangentStrategy` axis (current/initial/reuse-first,
   needing `SparseSolver` to support factor-once-solve-many first), a
   `LineSearch` modifier (Bisection/RegulaFalsi to start), and a
@@ -513,7 +517,7 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
   other milestone here there is no source tree to port from — designed
   instead from the originating paper (Karamchandani & Cornell 1992) and
   CSI's own public terminology for the same technique in SAP2000/ETABS.
-  See [`docs/algorithms.md`](algorithms.md)'s Part II for the full
+  See [`docs/algorithms.md`](algorithm-design.md)'s Part II for the full
   design: a new `Material::distance_to_event` query (closed-enum match
   arm per variant, §12), its aggregation up through `FiberSection`/
   element/`Domain` (§13, including the harder `ForceBeamColumn` and

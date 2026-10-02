@@ -1,5 +1,9 @@
 # pysees → Carapace Handoff
 
+> Archived planning document; preserved for historical rationale. It is not a
+> current specification or implementation instruction. See [README](../../README.md)
+> and the current [results-storage documentation](../results-storage-indexeddb.md).
+
 This document defines the boundary between `pysees`, the browser authoring
 application, and Carapace, the WebAssembly analysis engine. It is the
 implementation contract for M10/M11. Read it before adding a worker protocol,

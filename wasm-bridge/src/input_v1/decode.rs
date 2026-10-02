@@ -10,7 +10,8 @@
 use std::collections::HashMap;
 
 use carapace_core::analysis::{
-    Algorithm, ConvergenceTest, GroundMotion, Integrator, RayleighDamping, TangentStrategy,
+    Algorithm, ConvergenceTest, GroundMotion, Integrator, LineSearch, RayleighDamping,
+    TangentStrategy,
 };
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
@@ -20,7 +21,10 @@ use carapace_core::model::{
 
 use super::error::DecodeError;
 use super::materials::resolve_materials;
-use super::sequence::{AlgorithmSpec, ConvergenceSpec, IntegratorSpec, RecorderSpec, StageSpec};
+use super::sequence::{
+    AlgorithmConfigSpec, AlgorithmSpec, ConvergenceSpec, IntegratorSpec, LegacyAlgorithmSpec,
+    LineSearchSpec, RecorderSpec, StageSpec, TangentStrategySpec,
+};
 use super::session::{CompiledStage, CompiledStageKind, PlanarSession, ResolvedRecorder, Session};
 use super::tables::{ElementKind, ElementLoadSpec, IntegrationSpec, TimeSeriesSpec, TransformSpec};
 use super::CarapaceInputV1;
@@ -614,33 +618,8 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                             }
                         }
                     };
-                    let algorithm = match algorithm {
-                        AlgorithmSpec::Linear => Algorithm::Linear,
-                        AlgorithmSpec::NewtonRaphson => Algorithm::Newton {
-                            tangent: TangentStrategy::Current,
-                            line_search: None,
-                        },
-                    };
-                    let convergence = match convergence.unwrap_or(ConvergenceSpec::DEFAULT) {
-                        ConvergenceSpec::NormUnbalance { tol, max_iter } => {
-                            ConvergenceTest::NormUnbalance {
-                                tol,
-                                max_iter: max_iter as usize,
-                            }
-                        }
-                        ConvergenceSpec::NormDispIncr { tol, max_iter } => {
-                            ConvergenceTest::NormDispIncr {
-                                tol,
-                                max_iter: max_iter as usize,
-                            }
-                        }
-                        ConvergenceSpec::EnergyIncr { tol, max_iter } => {
-                            ConvergenceTest::EnergyIncr {
-                                tol,
-                                max_iter: max_iter as usize,
-                            }
-                        }
-                    };
+                    let algorithm = algorithm_of(*algorithm, stage.id())?;
+                    let convergence = convergence_of(*convergence, stage.id())?;
                     let hold_patterns_after = hold_patterns_after
                         .iter()
                         .map(|&row| pattern_at(row))
@@ -669,8 +648,13 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                     dt,
                     damping,
                     ground_motions,
+                    algorithm,
+                    convergence,
                     ..
                 } => {
+                    if !dt.is_finite() || *dt <= 0.0 {
+                        return Err(invalid_option(stage.id(), "dt"));
+                    }
                     let damping = RayleighDamping::new(damping.alpha_m, damping.beta_k);
                     let ground_motions =
                         ground_motions
@@ -694,6 +678,8 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                         *steps,
                         CompiledStageKind::Transient {
                             damping,
+                            algorithm: algorithm_of(*algorithm, stage.id())?,
+                            convergence: convergence_of(*convergence, stage.id())?,
                             dt: *dt,
                             ground_motions,
                         },
@@ -710,4 +696,121 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
             })
         })
         .collect()
+}
+
+// Shared by both profiles and both iterative stage kinds.
+fn invalid_option(stage: &str, field: &'static str) -> DecodeError {
+    DecodeError::InvalidAnalysisOption {
+        stage: stage.to_owned(),
+        field,
+    }
+}
+
+fn tangent_of(spec: TangentStrategySpec) -> TangentStrategy {
+    match spec {
+        TangentStrategySpec::Current => TangentStrategy::Current,
+        TangentStrategySpec::ReuseAtStepStart => TangentStrategy::ReuseAtStepStart,
+        TangentStrategySpec::Initial => TangentStrategy::Initial,
+    }
+}
+
+fn algorithm_of(spec: AlgorithmSpec, stage: &str) -> Result<Algorithm, DecodeError> {
+    Ok(match spec {
+        AlgorithmSpec::Legacy(LegacyAlgorithmSpec::Linear)
+        | AlgorithmSpec::Config(AlgorithmConfigSpec::Linear) => Algorithm::Linear,
+        AlgorithmSpec::Legacy(LegacyAlgorithmSpec::NewtonRaphson) => Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        },
+        AlgorithmSpec::Config(AlgorithmConfigSpec::Newton {
+            tangent,
+            line_search,
+        }) => {
+            let line_search = line_search
+                .map(|search| {
+                    let (tol, max_iter, max_eta) = match search {
+                        LineSearchSpec::Bisection {
+                            tol,
+                            max_iter,
+                            max_eta,
+                        }
+                        | LineSearchSpec::RegulaFalsi {
+                            tol,
+                            max_iter,
+                            max_eta,
+                        } => (tol, max_iter, max_eta),
+                    };
+                    if !tol.is_finite() || tol <= 0.0 {
+                        return Err(invalid_option(stage, "algorithm.lineSearch.tol"));
+                    }
+                    if max_iter == 0 {
+                        return Err(invalid_option(stage, "algorithm.lineSearch.maxIter"));
+                    }
+                    if !max_eta.is_finite() || max_eta < 1.0 {
+                        return Err(invalid_option(stage, "algorithm.lineSearch.maxEta"));
+                    }
+                    Ok(match search {
+                        LineSearchSpec::Bisection { .. } => LineSearch::Bisection {
+                            tol,
+                            max_iter: max_iter as usize,
+                            max_eta,
+                        },
+                        LineSearchSpec::RegulaFalsi { .. } => LineSearch::RegulaFalsi {
+                            tol,
+                            max_iter: max_iter as usize,
+                            max_eta,
+                        },
+                    })
+                })
+                .transpose()?;
+            Algorithm::Newton {
+                tangent: tangent_of(tangent),
+                line_search,
+            }
+        }
+        AlgorithmSpec::Config(AlgorithmConfigSpec::KrylovNewton {
+            tangent,
+            max_dimension,
+        }) => {
+            if max_dimension == 0 {
+                return Err(invalid_option(stage, "algorithm.maxDimension"));
+            }
+            Algorithm::KrylovNewton {
+                tangent: tangent_of(tangent),
+                max_dimension: max_dimension as usize,
+            }
+        }
+    })
+}
+
+fn convergence_of(
+    spec: Option<ConvergenceSpec>,
+    stage: &str,
+) -> Result<ConvergenceTest, DecodeError> {
+    let spec = spec.unwrap_or(ConvergenceSpec::DEFAULT);
+    let (tol, max_iter) = match spec {
+        ConvergenceSpec::NormUnbalance { tol, max_iter }
+        | ConvergenceSpec::NormDispIncr { tol, max_iter }
+        | ConvergenceSpec::EnergyIncr { tol, max_iter } => (tol, max_iter),
+    };
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(invalid_option(stage, "convergence.tol"));
+    }
+    if max_iter == 0 {
+        return Err(invalid_option(stage, "convergence.maxIter"));
+    }
+    Ok(match spec {
+        ConvergenceSpec::NormUnbalance { .. } => ConvergenceTest::NormUnbalance {
+            tol,
+            max_iter: max_iter as usize,
+        },
+        ConvergenceSpec::NormDispIncr { .. } => ConvergenceTest::NormDispIncr {
+            tol,
+            max_iter: max_iter as usize,
+        },
+        ConvergenceSpec::EnergyIncr { .. } => ConvergenceTest::EnergyIncr {
+            tol,
+            max_iter: max_iter as usize,
+        },
+    })
 }

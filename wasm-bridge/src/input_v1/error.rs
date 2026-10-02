@@ -16,6 +16,11 @@ use serde::Serialize;
     rename_all_fields = "camelCase"
 )]
 pub enum DecodeError {
+    /// An analysis parameter is non-finite or outside its valid range.
+    InvalidAnalysisOption {
+        stage: String,
+        field: &'static str,
+    },
     /// `header.space` is neither the planar profile this decoder
     /// implements nor (yet) any other recognized value.
     UnsupportedSpace {

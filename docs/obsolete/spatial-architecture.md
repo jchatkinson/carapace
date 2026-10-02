@@ -1,5 +1,9 @@
 # Spatial (3D) Architecture Plan
 
+> Archived planning document; preserved for historical rationale. It is not a
+> current specification or implementation instruction. See [README](../../README.md)
+> and the current [results-storage documentation](../results-storage-indexeddb.md).
+
 Carapace is currently a planar frame engine: global coordinates `[x, y]`,
 node DOFs `[ux, uy, rz]`, and two-node element matrices of order 6. `pysees`
 also authors spatial models, with global **y-up** coordinates. This document

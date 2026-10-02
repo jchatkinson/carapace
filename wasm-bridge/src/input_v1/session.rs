@@ -157,6 +157,8 @@ pub(super) enum CompiledStageKind<NId> {
     /// is always `1` for this kind (`decode.rs`'s `compile_stages`).
     Modal { num_modes: usize },
     Transient {
+        algorithm: Algorithm,
+        convergence: ConvergenceTest,
         damping: RayleighDamping,
         dt: f64,
         ground_motions: Vec<GroundMotion>,
@@ -480,11 +482,14 @@ where
                 Err(error) => self.error = Some(error.into()),
             },
             CompiledStageKind::Transient {
+                algorithm,
+                convergence,
                 damping,
                 dt,
                 ground_motions,
             } => match TransientAnalysis::new(domain, *damping, *dt) {
                 Ok(mut analysis) => {
+                    analysis = analysis.with_algorithm(*algorithm, *convergence);
                     for motion in ground_motions.iter().cloned() {
                         analysis = analysis.with_ground_motion(motion);
                     }

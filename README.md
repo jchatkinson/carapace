@@ -20,12 +20,13 @@ see each element/section entry below for which profile(s) it covers.
 
 **Elements**
 - [x] Truss (2D + 3D)
-- [x] ZeroLength — independent per-DOF materials (2D + 3D; 3D springs are
+- [x] ZeroLength — per-DOF materials and Coulomb friction coupling (2D + 3D; 3D springs are
   axis-aligned only, no arbitrary orientation)
 - [x] ElasticBeamColumn — axial, bending, torsion, `Linear`/`PDelta`
   transforms (2D + 3D)
 - [x] DispBeamColumn — fiber-discretized, displacement-based (2D uniaxial,
   3D biaxial)
+- [x] ZeroLengthSection — fiber section with optional independent springs (2D + 3D)
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)
 - [x] 2D co-rotational transform (large-displacement geometry)
@@ -73,7 +74,8 @@ see each element/section entry below for which profile(s) it covers.
   (`SparseSolver::factor`/`SparseFactorization`) reused across iterations
   by `TangentStrategy::ReuseAtStepStart`/`Initial`
 - [ ] Event-to-event stepping (design in
-  [`docs/algorithms.md`](docs/algorithms.md) §9–§17, not yet implemented)
+  [the archived algorithm design](docs/obsolete/algorithm-design.md) §9–§17,
+  not yet implemented)
 
 **Constraints**
 - [x] `equal_dof` (2D + 3D)
@@ -82,25 +84,18 @@ see each element/section entry below for which profile(s) it covers.
 - [ ] Chained/nested rigid diaphragms
 
 **wasm / browser boundary**
-- [x] `CarapaceInputV1` wire format: panic-free decode plus a stepped
+- [x] `CarapaceInputV1` wire format: input decoding plus a stepped
   `Session`/`advance` API, budget-driven for cooperative cancellation
-- [x] `wasm_bindgen` boundary exposing `decodeInput`/`advance` to JS (first
-  pass: structured-clone transfer via `serde-wasm-bindgen`)
+- [x] `wasm_bindgen` boundary exposing `decodeInput`/`advance` as JS objects
+  and arrays via `serde-wasm-bindgen`, with generated TypeScript definitions
 - [ ] Zero-copy transferable-typed-array wire format for `postMessage` (the
-  wasm→JS leg is still structured-clone; the analysis-worker→storage-worker
+  wasm→JS leg still converts to JS objects; the analysis-worker→storage-worker
   leg, entirely on the `pysees` side, is already a transferred `ArrayBuffer`)
-- [ ] `TangentStrategy`/`LineSearch`/`KrylovNewton` exposed through
-  `CarapaceInputV1` — a `Static` stage's wire-format `algorithm` field still
-  only selects `Linear`/`Newton{Current, no line search}` (today's
-  `AlgorithmSpec::Linear`/`NewtonRaphson`, unchanged), and `Transient`
-  stages have no `algorithm` field at all yet (always `Algorithm::Linear`).
-  The richer core API is real and tested natively; only the wasm wire
-  format hasn't caught up. Exposing it needs a wire-compatible design, not
-  just new enum variants — `AlgorithmSpec`'s existing representation is a
-  bare string (`"linear"`/`"newtonRaphson"`), which can't hold `Newton`'s
-  `line_search: Option<LineSearch>` field without changing shape; an
-  `#[serde(untagged)]` old-string-or-new-object wrapper is the leading
-  option, not yet decided.
+- [x] Configurable `TangentStrategy`/`LineSearch`/`KrylovNewton` through
+  `CarapaceInputV1`, for static and transient stages. Existing `"linear"` and
+  `"newtonRaphson"` strings remain valid; object forms carry richer settings.
+  Transient stages default to linear analysis when `algorithm` is omitted.
+  See [the JS solver configuration guide](docs/algorithms.md).
 
 **Results / persistence** — see
 [`docs/results-storage-indexeddb.md`](docs/results-storage-indexeddb.md) for
@@ -112,26 +107,21 @@ SQLite/OPFS)
   writes, interrupted-run reconciliation on reload
 - [x] Analysis-worker ↔ storage-worker `MessageChannel` wiring with
   backpressure (bounded in-flight-byte budget)
-- [x] Node displacement recording
-- [ ] Node velocity/acceleration recording (the underlying data already
-  exists on `Node` in `core`; just not wired through the wire format or
-  storage schema)
-- [ ] Reaction-force recording (no reaction computation exists in `core` at
-  all yet — this needs new engine capability, not just plumbing)
-- [ ] Element/section response recording — basic forces, fiber stress/strain
-  (no public `core` API exposes an element's force/section state yet)
-- [ ] Modal results (mode shapes/frequencies) or transient time-histories
-  through this pipeline — `decode()` currently rejects `Modal`/`Transient`
-  stages outright, even though `core` fully implements both
+- [x] Engine recorders: node displacement, velocity/acceleration, reactions,
+  element local forces, and fiber stress/strain (2D + 3D)
+- [x] Engine modal frequencies/shape components and transient time histories
+  through per-call recorder batches
+- [ ] pysees compiler/storage integration for recorders beyond displacement,
+  modal/transient stages, and spatial models. The engine supports these;
+  the frontend compiler currently emits planar static displacement runs only.
 - [ ] Results UI beyond a minimal debug panel — paged queries work, but
   nothing yet consumes them for real plots or deformed-shape scrubbing
-- [ ] Saved-run browsing, delete, and export UI (the backend calls exist —
-  `deleteRun`, `queryResults` — but no UI surface calls them for run
-  management)
+- [ ] Saved-run browsing, delete, and export UI (`deleteRun` and `queryResults`
+  backend calls exist; export and a run-management UI remain unimplemented)
 
 Superseded planning docs (the original milestone-by-milestone implementation
 plan, the 3D-profile architecture rationale, the pysees handoff contract,
-and a rejected Turso-based storage alternative) live in
+algorithm and friction derivations, and a rejected Turso storage alternative) live in
 [`docs/obsolete/`](docs/obsolete/) — useful for the reasoning behind past
 decisions, no longer maintained as living specs.
 
@@ -144,7 +134,7 @@ carapace/
 ├── wasm-bridge/     # carapace-wasm: input decoding, session API, and JS adapter
 │   └── src/verification.rs # milestone examples for wasm/Node verification
 └── docs/
-    ├── algorithms.md               # design for not-yet-built algorithm extensions
+    ├── algorithms.md               # current solver API and JS configuration
     ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
     ├── xara-feasibility.md          # why this is a from-scratch reimplementation, not a port
     └── obsolete/                    # superseded planning docs, kept for history
@@ -208,8 +198,8 @@ For the frontend/worker boundary and results persistence, read
 — the current run lifecycle, transport, and IndexedDB results-storage design
 (implemented on the `pysees` side).
 
-For planned-but-not-built algorithm work (line search, Krylov acceleration,
-event-to-event stepping), read
+For implemented solver settings, JS examples, and remaining event-to-event
+stepping design, read
 **[`docs/algorithms.md`](docs/algorithms.md)**.
 
 For the reasoning behind building a from-scratch engine instead of porting
@@ -217,7 +207,7 @@ Xara/OpenSees to WebAssembly, read
 **[`docs/xara-feasibility.md`](docs/xara-feasibility.md)**.
 
 For historical design rationale — the original milestone plan, the
-3D-profile architecture decisions, the pysees handoff contract, and a
+3D-profile architecture decisions, the pysees handoff contract, friction and algorithm design rationale, and a
 rejected Turso-based storage alternative — see
 **[`docs/obsolete/`](docs/obsolete/)**. These are no longer maintained as
 living specs; treat them as an explanation of *why*, not a current *what*.
