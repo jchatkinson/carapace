@@ -40,7 +40,7 @@ use tables3::{
 
 /// Small structured-clone header fields — everything else in
 /// `CarapaceInputV1` is a bulk table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct Header {
     /// The wire format's own version, independent of `engine_version`.
@@ -62,7 +62,7 @@ pub struct Header {
 /// `header.space`, ignoring the other profile's tables entirely.
 /// `materials`/`load_patterns`/`nodal_loads` are dimension-agnostic and so
 /// are shared by both profiles rather than duplicated as `materials3`/etc.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct CarapaceInputV1 {
     pub header: Header,

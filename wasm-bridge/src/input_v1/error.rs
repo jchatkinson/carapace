@@ -9,7 +9,7 @@ use serde::Serialize;
 
 /// `Serialize`, not `Deserialize` — a `DecodeError` only ever flows *out*
 /// to JS (`boundary.rs`), as a `{ kind: "...", ... }`-shaped object.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",

@@ -11,7 +11,7 @@ use super::error::DecodeError;
 /// Wire-format mirror of `core::Pinching4DmgCyc` (which carries no `serde`
 /// derives of its own — `core` stays free of any wasm/serde awareness, see
 /// `decode.rs`'s module doc comment).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum Pinching4DmgCycSpec {
     EnergyBased,
@@ -20,7 +20,7 @@ pub enum Pinching4DmgCycSpec {
 
 /// One arena entry. Composite variants reference other entries by their
 /// `u32` index into the same arena, resolved by [`resolve_materials`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",

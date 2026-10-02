@@ -141,8 +141,8 @@ decisions, no longer maintained as living specs.
 carapace/
 ├── core/           # carapace-core: all FE logic. No wasm-bindgen dependency —
 │                    compiles and tests identically on native and wasm32 targets.
-├── wasm-bridge/     # carapace-wasm: thin wasm-bindgen layer exposing core's API
-│                    to JS. Should contain no numerical logic of its own.
+├── wasm-bridge/     # carapace-wasm: input decoding, session API, and JS adapter
+│   └── src/verification.rs # milestone examples for wasm/Node verification
 └── docs/
     ├── algorithms.md               # design for not-yet-built algorithm extensions
     ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
@@ -154,22 +154,50 @@ carapace/
 
 ```bash
 # native (fast iteration, real debuggers, no browser/Node round-trip)
-cargo test -p carapace-core
+cargo test --workspace
 
-# wasm32
-cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
+# one-time tool setup
+cargo install wasm-pack --locked
 
-# JS glue (wasm-bindgen-cli version MUST match the wasm-bindgen crate version
-# in wasm-bridge/Cargo.toml — mismatches are the most common footgun here)
-wasm-bindgen target/wasm32-unknown-unknown/release/carapace_wasm.wasm \
-  --out-dir pkg --target nodejs
+# build wasm, generate JS glue and TypeScript types, and package for Node
+wasm-pack build wasm-bridge --target nodejs --out-dir ../pkg
 
-node -e "console.log(require('./pkg/carapace_wasm.js').axial_displacement(50, 100, 2, 30000))"
+# check the generated package through its application API (Node 22.18+)
+node wasm-bridge/tests/boundary-smoke.ts
+
+# check the generated declarations and their use by the smoke test
+npm exec --package=typescript -- tsc --strict --noEmit --target es2022 --lib esnext,dom \
+  --module nodenext wasm-bridge/tests/boundary-smoke.ts
 ```
+
+For a browser or browser worker, build with `--target web --out-dir ../pkg-web`
+instead. This produces ES modules; initialize the wasm module with its default
+`init()` export before calling `decodeInput`.
 
 Always verify a change on the native target first, wasm32 second — it
 isolates logic bugs from platform/toolchain bugs faster than debugging
 inside a wasm runtime directly.
+
+`wasm-pack` manages the matching `wasm-bindgen` tool and generates everything
+in `pkg/`, including `carapace_wasm.d.ts`. Do not edit generated files.
+The application interface is `decodeInput(input)` → `WasmSession`, with
+`advance(stepBudget)` → `StepOutcome` and `currentStageId()` methods.
+The milestone functions remain exported for compatibility; their implementation
+lives in `wasm-bridge/src/verification.rs`.
+
+Wire-format types in `wasm-bridge/src/input_v1/` derive `tsify::Tsify` alongside
+Serde, so fields, camelCase names, and tagged enums generate TypeScript
+definitions from the Rust source. The adapter uses `Ts<T>` to connect those
+definitions to function signatures, with explicit fallible conversion inside
+each call. Malformed inputs still throw an error, and decode errors retain
+their structured `{ kind, ... }` shape (also exported as `DecodeError`).
+The current payload uses ordinary JS objects and arrays; these declarations
+do not describe the planned transferable typed-array format.
+
+When extending the engine, update the Rust input types and decoder as needed,
+then rebuild to regenerate the JS types. A new binding is only needed for a
+new operation exposed to JavaScript; adding a material or solver behind the
+existing session interface does not require one.
 
 ## Read next
 

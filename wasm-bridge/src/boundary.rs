@@ -7,7 +7,10 @@
 //! code end to end; the zero-copy transfer optimization can replace
 //! `serde-wasm-bindgen`'s JSON-ish decoding later without changing this
 //! module's shape (`decodeInput` in, `WasmSession` methods out).
+//! `Ts<T>` connects signatures to generated TypeScript definitions while
+//! keeping data conversion fallible inside the function body.
 
+use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use crate::input_v1::{self, CarapaceInputV1};
@@ -25,8 +28,9 @@ pub struct WasmSession(input_v1::Session);
 /// [`input_v1::DecodeError`], the same tagged shape a Rust caller would
 /// match on.
 #[wasm_bindgen(js_name = decodeInput)]
-pub fn decode_input(value: JsValue) -> Result<WasmSession, JsValue> {
-    let input: CarapaceInputV1 = serde_wasm_bindgen::from_value(value)
+pub fn decode_input(value: Ts<CarapaceInputV1>) -> Result<WasmSession, JsValue> {
+    let input: CarapaceInputV1 = value
+        .to_rust()
         .map_err(|error| JsValue::from_str(&format!("malformed CarapaceInputV1: {error}")))?;
     let session = input_v1::decode(input).map_err(to_js_error)?;
     Ok(WasmSession(session))
@@ -40,9 +44,10 @@ impl WasmSession {
     /// recorder that recorded this call), not the whole run's history. There is no separate
     /// "samples so far" accessor: a caller that needs the full history accumulates these
     /// batches itself, same as the planned results-storage worker will.
-    pub fn advance(&mut self, step_budget: u32) -> Result<JsValue, JsValue> {
+    pub fn advance(&mut self, step_budget: u32) -> Result<Ts<input_v1::StepOutcome>, JsValue> {
         let outcome = self.0.advance(step_budget);
-        serde_wasm_bindgen::to_value(&outcome)
+        outcome
+            .into_ts()
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 

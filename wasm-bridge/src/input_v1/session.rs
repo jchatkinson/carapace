@@ -56,7 +56,7 @@ where
 /// `AnalysisError`'s fields, restated so `advance`'s result doesn't need to
 /// name `carapace_core`'s error type directly — kept in the same tagged-
 /// variant style (implementation-plan.md §2.8).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -201,7 +201,7 @@ where
 /// `Mode::frequency` from a `ModeShape` recorder's batch instead). `error`,
 /// once set, is sticky — later stages are not attempted, matching "a
 /// stage's `AnalysisError` stops the sequence".
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct StepOutcome {
     pub done: bool,
@@ -225,7 +225,7 @@ pub struct StepOutcome {
 /// first sample/count" contract from results-storage-indexeddb.md's "Failure and cancellation
 /// contract". Scalar-only (`(pseudo_time, value)` pairs, one channel) until a vector recorder
 /// needs more.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct RecorderBatch {
     pub recorder_index: usize,

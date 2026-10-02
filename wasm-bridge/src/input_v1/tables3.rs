@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// node (bit 0..5 = ux, uy, uz, rx, ry, rz, matching `SpatialDof`'s order);
 /// mass is sparse, addressed via a parallel node-index array since most
 /// nodes carry none.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeTable3 {
     pub coords: Vec<f64>,
@@ -33,7 +33,7 @@ impl NodeTable3 {
 
 /// `GeomTransf3`'s wire mirror. No `Corotational3` — spatial corotational
 /// geometry doesn't exist in `core` yet (`GeomTransf3`'s own doc comment).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -44,7 +44,7 @@ pub enum TransformSpec3 {
     PDelta3 { vec_xz: [f64; 3] },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct TrussTable3 {
     pub node_i: Vec<u32>,
@@ -55,7 +55,7 @@ pub struct TrussTable3 {
     pub density: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ElasticBeamColumnTable3 {
     pub node_i: Vec<u32>,
@@ -80,7 +80,7 @@ pub struct ElasticBeamColumnTable3 {
 /// and no separate `transform` field — `g`/`j`/`vec_xz` are passed directly
 /// to the constructor rather than wrapped in a `GeomTransf3`, since these
 /// elements only ever use `Linear`-type geometry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct FiberBeamColumnTable3 {
     pub node_i: Vec<u32>,
@@ -99,7 +99,7 @@ pub struct FiberBeamColumnTable3 {
     pub density: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ZeroLengthTable3 {
     pub node_i: Vec<u32>,
@@ -118,7 +118,7 @@ pub struct ZeroLengthTable3 {
 /// A `ZeroLength3` driven by a coupled `FiberSection3` (axial + biaxial
 /// moment response, `[ux, ry, rz]`) instead of `ZeroLength3`'s independent
 /// per-DOF materials — see `core::ZeroLengthSection3`'s doc comment.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ZeroLengthSectionTable3 {
     pub node_i: Vec<u32>,
@@ -136,7 +136,7 @@ pub struct ZeroLengthSectionTable3 {
 /// both `y` and `z` coordinates (biaxial bending) — torsion is deliberately
 /// excluded from the fiber loop in `core` (`FiberSection3`'s doc comment)
 /// and supplied instead as each owning table's own `g`/`j` fields.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct FiberTable3 {
     pub section_offsets: Vec<u32>,
@@ -158,7 +158,7 @@ impl FiberTable3 {
 /// indexing, not wire-facing), so this is decode's own translation, the
 /// same reason `TransformSpec`/`TransformSpec3` mirror `GeomTransf`/
 /// `GeomTransf3` rather than deriving on the `core` type directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum Axis3Spec {
     X,
@@ -168,7 +168,7 @@ pub enum Axis3Spec {
 
 /// Spatial counterpart to [`super::tables::EqualDofTable`] — same shape,
 /// dofs range `0..6` instead of `0..3`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct EqualDofTable3 {
     pub retained: Vec<u32>,
@@ -182,7 +182,7 @@ pub struct EqualDofTable3 {
 /// `retained[i]`'s same in-plane translations plus the lever-arm rotation
 /// term. `constrained` is sparse per row, same convention as
 /// [`super::tables::RigidDiaphragmTable`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct RigidDiaphragmTable3 {
     pub retained: Vec<u32>,
@@ -190,7 +190,7 @@ pub struct RigidDiaphragmTable3 {
     pub constrained: Vec<(u32, u32)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum ElementKind3 {
     Truss,
@@ -201,7 +201,7 @@ pub enum ElementKind3 {
     ZeroLengthSection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -214,7 +214,7 @@ pub enum ElementLoadSpec3 {
     UniformTransverse { wy: f64, wz: f64 },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementLoadTable3 {
     pub pattern: Vec<u32>,

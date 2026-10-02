@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use super::tables::{ElementKind, TimeSeriesSpec};
 use super::tables3::ElementKind3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -29,14 +29,14 @@ pub enum IntegratorSpec {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum AlgorithmSpec {
     Linear,
     NewtonRaphson,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -61,7 +61,7 @@ impl ConvergenceSpec {
 /// Rayleigh damping (`C = alpha_m*M + beta_k*K`) — see
 /// `core::RayleighDamping`'s doc comment. Use `alpha_m: 0.0, beta_k: 0.0`
 /// for undamped (`core::RayleighDamping::NONE`).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct DampingSpec {
     pub alpha_m: f64,
@@ -75,7 +75,7 @@ pub struct DampingSpec {
 /// same wire type a static `LoadPatternTable` entry uses — an accelerogram
 /// is exactly a piecewise-linear series, no separate representation needed
 /// (`core::GroundMotion`'s own doc comment).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct GroundMotionSpec {
     pub direction: u8,
@@ -83,7 +83,7 @@ pub struct GroundMotionSpec {
     pub scale_factor: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -152,14 +152,14 @@ impl StageSpec {
 /// fiber_responses`'s doc comment) a `RecorderSpec::Fiber`/`RecorderSpec3::
 /// Fiber` reads — one scalar channel per recorder, same as every other
 /// kind here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum FiberResponseKind {
     Strain,
     Stress,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "response",
     rename_all = "camelCase",
@@ -224,7 +224,7 @@ pub enum RecorderSpec {
     },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceSpec {
     pub stages: Vec<StageSpec>,
@@ -238,7 +238,7 @@ pub struct SequenceSpec {
 /// 2), but a shared enum would need `RecorderSpec::ElementForce` to name a
 /// type that's different per profile, so this stays its own enum rather
 /// than a generic parameter.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "response",
     rename_all = "camelCase",
@@ -284,7 +284,7 @@ pub enum RecorderSpec3 {
 /// verbatim — stage/integrator/algorithm/convergence compilation
 /// (`decode.rs`'s `compile_stages`) never touches element physics, only
 /// node indices and DOF numbers, so nothing about it is planar-specific.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceSpec3 {
     pub stages: Vec<StageSpec>,

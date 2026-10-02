@@ -1,5 +1,6 @@
 /target
 /pkg
+/pkg-web
 Cargo.lock
 /comparison/.venv
 /comparison/out

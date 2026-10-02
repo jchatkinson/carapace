@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// Node table: `coords` stride 2 (x, y); `fixed` one bitmask byte per node
 /// (bit 0 = ux, bit 1 = uy, bit 2 = rz); mass is sparse, addressed via a
 /// parallel node-index array since most nodes carry none.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeTable {
     pub coords: Vec<f64>,
@@ -42,7 +42,7 @@ impl NodeTable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum TransformSpec {
     Linear,
@@ -50,7 +50,7 @@ pub enum TransformSpec {
     Corotational,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -61,7 +61,7 @@ pub enum IntegrationSpec {
     Lobatto { points: u32 },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct TrussTable {
     pub node_i: Vec<u32>,
@@ -72,7 +72,7 @@ pub struct TrussTable {
     pub density: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ElasticBeamColumnTable {
     pub node_i: Vec<u32>,
@@ -87,7 +87,7 @@ pub struct ElasticBeamColumnTable {
 /// Shared shape for `DispBeamColumn` and `ForceBeamColumn` — both are one
 /// prismatic fiber section (see [`FiberTable`]) replicated across
 /// integration points by `core`'s own element constructors.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct FiberBeamColumnTable {
     pub node_i: Vec<u32>,
@@ -99,7 +99,7 @@ pub struct FiberBeamColumnTable {
     pub density: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ZeroLengthTable {
     pub node_i: Vec<u32>,
@@ -118,7 +118,7 @@ pub struct ZeroLengthTable {
 /// A `ZeroLength` driven by a coupled `FiberSection` (axial + moment
 /// response, `[ux, rz]`) instead of `ZeroLength`'s independent per-DOF
 /// materials — see `core::ZeroLengthSection`'s doc comment.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ZeroLengthSectionTable {
     pub node_i: Vec<u32>,
@@ -135,7 +135,7 @@ pub struct ZeroLengthSectionTable {
 /// and offset-indexed: section `k` occupies
 /// `section_offsets[k]..section_offsets[k + 1]` in `y`/`area`/`material`.
 /// `section_offsets` therefore has `num_sections + 1` entries.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct FiberTable {
     pub section_offsets: Vec<u32>,
@@ -151,7 +151,7 @@ impl FiberTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -163,14 +163,14 @@ pub enum TimeSeriesSpec {
     Path { times: Vec<f64>, factors: Vec<f64> },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadPatternTable {
     pub series: Vec<TimeSeriesSpec>,
     pub scale_factor: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct NodalLoadTable {
     /// Index into `LoadPatternTable`.
@@ -190,7 +190,7 @@ pub struct NodalLoadTable {
     pub stage: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum ElementKind {
     Truss,
@@ -201,7 +201,7 @@ pub enum ElementKind {
     ZeroLengthSection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -225,7 +225,7 @@ pub enum ElementLoadSpec {
 /// dof)` pairs, mirroring `ZeroLengthTable::materials`'s own sparse
 /// convention — since most ties only ever list one or two dofs, not every
 /// dof a node has.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct EqualDofTable {
     pub retained: Vec<u32>,
@@ -237,14 +237,14 @@ pub struct EqualDofTable {
 /// row `i` ties every node listed against it in `constrained`'s own `ux`
 /// dof to `retained[i]`'s `ux`. `constrained` is sparse per row — `(row,
 /// node index)` pairs — since a diaphragm's node count varies per instance.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct RigidDiaphragmTable {
     pub retained: Vec<u32>,
     pub constrained: Vec<(u32, u32)>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementLoadTable {
     pub pattern: Vec<u32>,
