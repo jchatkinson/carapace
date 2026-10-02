@@ -159,7 +159,10 @@ pub fn newton_raphson_elastic_plastic_displacement(force: f64) -> f64 {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,

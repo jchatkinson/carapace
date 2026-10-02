@@ -1,5 +1,9 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
-use carapace_core::model::{Domain3, Element3, ElementLoad3, ElasticBeamColumn3, GeomTransf3, Node3, SpatialDof};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
+use carapace_core::model::{
+    Domain3, ElasticBeamColumn3, Element3, ElementLoad3, GeomTransf3, Node3, SpatialDof,
+};
 
 /// Spatial counterpart to `m3_beam.rs`'s `simply_supported_beam_udl_
 /// matches_closed_form_end_rotation` — `ElasticBeamColumn3`'s new local
@@ -62,10 +66,15 @@ fn axis_aligned_biaxial_udl_matches_closed_form_end_rotations_in_both_planes() {
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
-    analysis.step().expect("simply supported spatial beam under biaxial UDL should solve");
+    analysis
+        .step()
+        .expect("simply supported spatial beam under biaxial UDL should solve");
 
     let rz_i = analysis.domain().node(node_i).displacement[SpatialDof::Rz as usize];
     let rz_j = analysis.domain().node(node_j).displacement[SpatialDof::Rz as usize];
@@ -85,7 +94,10 @@ fn axis_aligned_biaxial_udl_matches_closed_form_end_rotations_in_both_planes() {
         "expected |rz_j|={expected_z}, got {}",
         rz_j.abs()
     );
-    assert!((rz_i + rz_j).abs() < 1e-9, "z-bending end rotations should be equal and opposite by symmetry");
+    assert!(
+        (rz_i + rz_j).abs() < 1e-9,
+        "z-bending end rotations should be equal and opposite by symmetry"
+    );
 
     assert!(
         (ry_i.abs() - expected_y).abs() < 1e-9,
@@ -97,7 +109,10 @@ fn axis_aligned_biaxial_udl_matches_closed_form_end_rotations_in_both_planes() {
         "expected |ry_j|={expected_y}, got {}",
         ry_j.abs()
     );
-    assert!((ry_i + ry_j).abs() < 1e-9, "y-bending end rotations should be equal and opposite by symmetry");
+    assert!(
+        (ry_i + ry_j).abs() < 1e-9,
+        "y-bending end rotations should be equal and opposite by symmetry"
+    );
 }
 
 /// Zero load must still assemble (the `wy == 0.0 && wz == 0.0` fast path in
@@ -136,7 +151,11 @@ fn zero_uniform_transverse_load_matches_no_load_at_all() {
         )));
         if with_zero_load {
             let pattern = domain.default_pattern();
-            domain.add_element_load(pattern, beam, ElementLoad3::UniformTransverse { wy: 0.0, wz: 0.0 });
+            domain.add_element_load(
+                pattern,
+                beam,
+                ElementLoad3::UniformTransverse { wy: 0.0, wz: 0.0 },
+            );
         }
         domain.load_node(node_j, SpatialDof::Uy as usize, 1.0);
 
@@ -144,9 +163,14 @@ fn zero_uniform_transverse_load_matches_no_load_at_all() {
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
             .algorithm(Algorithm::Linear)
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            })
             .build(domain);
-        analysis.step().expect("cantilever spatial beam should solve");
+        analysis
+            .step()
+            .expect("cantilever spatial beam should solve");
         analysis.domain().node(node_j).displacement[SpatialDof::Uy as usize]
     };
 

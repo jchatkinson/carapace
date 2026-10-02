@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Node};
 
 /// Not tied to a specific milestone — a correctness + scale check for the

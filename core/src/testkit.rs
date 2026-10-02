@@ -17,7 +17,10 @@ pub fn leg(analysis: &mut Analysis, node: NodeId, dof: usize, target: f64) -> f6
         dof,
         increment: target - current,
     });
-    analysis.step().expect("cyclic protocol leg should converge").load_factor
+    analysis
+        .step()
+        .expect("cyclic protocol leg should converge")
+        .load_factor
 }
 
 /// Walks the controlled DOF from wherever it is to `target` in steps no

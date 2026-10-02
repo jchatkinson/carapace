@@ -19,7 +19,7 @@ use carapace_core::analysis::{
     ConvergenceTest, GroundMotion, Integrator, Mode, RayleighDamping, TransientAnalysis,
 };
 use carapace_core::model::{
-    Domain, Element, Element3, ElementOps, LoadPatternId, NodeId, Node3Id, ELEMENT_DOF, NDF,
+    Domain, Element, Element3, ElementOps, LoadPatternId, Node3Id, NodeId, ELEMENT_DOF, NDF,
     PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
 };
 use serde::Serialize;
@@ -95,18 +95,37 @@ impl From<AnalysisError> for AnalysisErrorDetail {
 /// (`Node3Id`/`Element3Id`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResolvedRecorder<NId, EId> {
-    NodeDisp { node: NId, dof: u8 },
+    NodeDisp {
+        node: NId,
+        dof: u8,
+    },
     /// Only meaningful during a `Transient` stage (`RecorderSpec::NodeVel`'s
     /// doc comment) — a `Static`/`Modal` stage's `record_sample` skips it.
-    NodeVel { node: NId, dof: u8 },
-    NodeAccel { node: NId, dof: u8 },
-    ElementForce { element: EId, component: u8 },
+    NodeVel {
+        node: NId,
+        dof: u8,
+    },
+    NodeAccel {
+        node: NId,
+        dof: u8,
+    },
+    ElementForce {
+        element: EId,
+        component: u8,
+    },
     /// Only meaningful during a `Modal` stage (`RecorderSpec::ModeShape`'s
     /// doc comment).
-    ModeShape { mode: u32, node: NId, dof: u8 },
+    ModeShape {
+        mode: u32,
+        node: NId,
+        dof: u8,
+    },
     /// Valid during `Static`/`Transient` (`RecorderSpec::Reaction`'s doc
     /// comment); skipped during `Modal`.
-    Reaction { node: NId, dof: u8 },
+    Reaction {
+        node: NId,
+        dof: u8,
+    },
     /// Valid during `Static`/`Transient` (`RecorderSpec::Fiber`'s doc
     /// comment); skipped during `Modal`.
     Fiber {
@@ -449,7 +468,8 @@ where
             // the first `step_once` call — there's no cheaper "start" step
             // to defer it to, unlike `Static`/`Transient`'s first Newton/
             // Newmark solve, which naturally happens on the first `step()`.
-            CompiledStageKind::Modal { num_modes } => match modal_analysis(&mut domain, *num_modes) {
+            CompiledStageKind::Modal { num_modes } => match modal_analysis(&mut domain, *num_modes)
+            {
                 Ok(modes) => {
                     self.runner = Some(StageRunner::Modal {
                         domain,
@@ -481,9 +501,15 @@ where
 
     fn steps_remaining(&self) -> u32 {
         match self.runner.as_ref().expect("stage started above") {
-            StageRunner::Static { steps_remaining, .. }
-            | StageRunner::Modal { steps_remaining, .. }
-            | StageRunner::Transient { steps_remaining, .. } => *steps_remaining,
+            StageRunner::Static {
+                steps_remaining, ..
+            }
+            | StageRunner::Modal {
+                steps_remaining, ..
+            }
+            | StageRunner::Transient {
+                steps_remaining, ..
+            } => *steps_remaining,
         }
     }
 
@@ -510,7 +536,9 @@ where
                 self.load_factor = result.time;
                 *steps_remaining -= 1;
             }
-            StageRunner::Modal { steps_remaining, .. } => {
+            StageRunner::Modal {
+                steps_remaining, ..
+            } => {
                 *steps_remaining -= 1;
             }
         }
@@ -527,7 +555,10 @@ where
     /// call.
     fn finish_current_stage(&mut self) {
         let hold_patterns_after = match &self.stages[self.current_stage].kind {
-            CompiledStageKind::Static { hold_patterns_after, .. } => hold_patterns_after.clone(),
+            CompiledStageKind::Static {
+                hold_patterns_after,
+                ..
+            } => hold_patterns_after.clone(),
             CompiledStageKind::Modal { .. } | CompiledStageKind::Transient { .. } => Vec::new(),
         };
         let load_factor = self.load_factor;
@@ -562,9 +593,12 @@ where
                         ResolvedRecorder::Reaction { node, dof } => {
                             Some(analysis.domain().reaction(node, dof as usize, progress))
                         }
-                        ResolvedRecorder::Fiber { element, point, fiber, response } => {
-                            fiber_value(analysis.domain(), element, point, fiber, response)
-                        }
+                        ResolvedRecorder::Fiber {
+                            element,
+                            point,
+                            fiber,
+                            response,
+                        } => fiber_value(analysis.domain(), element, point, fiber, response),
                         ResolvedRecorder::NodeVel { .. }
                         | ResolvedRecorder::NodeAccel { .. }
                         | ResolvedRecorder::ModeShape { .. } => None,
@@ -593,9 +627,12 @@ where
                         ResolvedRecorder::Reaction { node, dof } => {
                             Some(analysis.domain().reaction(node, dof as usize, progress))
                         }
-                        ResolvedRecorder::Fiber { element, point, fiber, response } => {
-                            fiber_value(analysis.domain(), element, point, fiber, response)
-                        }
+                        ResolvedRecorder::Fiber {
+                            element,
+                            point,
+                            fiber,
+                            response,
+                        } => fiber_value(analysis.domain(), element, point, fiber, response),
                         ResolvedRecorder::ModeShape { .. } => None,
                     };
                     if let Some(value) = value {

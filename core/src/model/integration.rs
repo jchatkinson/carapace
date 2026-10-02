@@ -45,10 +45,7 @@ impl BeamIntegration {
 
 fn legendre_table(points: usize) -> (&'static [f64], &'static [f64]) {
     match points {
-        2 => (
-            &[-0.577350269189626, 0.577350269189626],
-            &[1.0, 1.0],
-        ),
+        2 => (&[-0.577350269189626, 0.577350269189626], &[1.0, 1.0]),
         3 => (
             &[-0.774596669241483, 0.0, 0.774596669241483],
             &[0.555555555555556, 0.888888888888889, 0.555555555555556],
@@ -114,7 +111,12 @@ fn lobatto_table(points: usize) -> (&'static [f64], &'static [f64]) {
         ),
         4 => (
             &[-1.0, -0.44721360, 0.44721360, 1.0],
-            &[0.166666666666667, 0.833333333333333, 0.833333333333333, 0.166666666666667],
+            &[
+                0.166666666666667,
+                0.833333333333333,
+                0.833333333333333,
+                0.166666666666667,
+            ],
         ),
         5 => (
             &[-1.0, -0.65465367, 0.0, 0.65465367, 1.0],
@@ -149,7 +151,10 @@ mod tests {
     #[test]
     fn points_are_symmetric_and_weights_sum_to_one() {
         for points in 2..=6 {
-            for integration in [BeamIntegration::Legendre { points }, BeamIntegration::Lobatto { points }] {
+            for integration in [
+                BeamIntegration::Legendre { points },
+                BeamIntegration::Lobatto { points },
+            ] {
                 let pts = integration.points();
                 assert_eq!(pts.len(), points);
                 let sum: f64 = pts.iter().map(|(_, w)| w).sum();
@@ -157,7 +162,10 @@ mod tests {
                 // higher-order Lobatto weights are truncated to ~10
                 // significant digits (e.g. `0.06666666667`), not full f64
                 // precision.
-                assert!((sum - 1.0).abs() < 1e-8, "{integration:?} weights should sum to 1, got {sum}");
+                assert!(
+                    (sum - 1.0).abs() < 1e-8,
+                    "{integration:?} weights should sum to 1, got {sum}"
+                );
             }
         }
     }

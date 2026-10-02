@@ -63,7 +63,10 @@ impl Truss {
         &self,
         node_i: &Node,
         node_j: &Node,
-    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
+    ) -> (
+        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
+        SVector<f64, ELEMENT_DOF>,
+    ) {
         let (length, cx, cy) = self.geometry(node_i, node_j);
         let strain = self.strain(node_i, node_j);
         let (stress, tangent_modulus) = self.material.trial_stress_tangent(strain);

@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{Domain, ElasticBeamColumn, Element, ElementLoad, GeomTransf, Node};
 
 /// M3 acceptance (implementation-plan §6): a single `ElasticBeamColumn`
@@ -45,7 +47,9 @@ fn simply_supported_beam_udl_matches_closed_form_end_rotation() {
         })
         .build(domain);
 
-    analysis.step().expect("simply supported beam under UDL should solve");
+    analysis
+        .step()
+        .expect("simply supported beam under UDL should solve");
 
     let theta_i = analysis.domain().node(node_i).displacement[2];
     let theta_j = analysis.domain().node(node_j).displacement[2];
@@ -105,8 +109,12 @@ fn pdelta_matches_linear_at_zero_axial_force_and_softens_under_compression() {
                 max_iter: 10,
             })
             .build(domain);
-        analysis.step().expect("cantilever beam should solve (increment 1/2)");
-        analysis.step().expect("cantilever beam should solve (increment 2/2)");
+        analysis
+            .step()
+            .expect("cantilever beam should solve (increment 1/2)");
+        analysis
+            .step()
+            .expect("cantilever beam should solve (increment 2/2)");
         analysis.domain().node(node_j).displacement[1]
     };
 

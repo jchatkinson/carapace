@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, ConvergenceTest, RayleighDamping, TangentStrategy, TransientAnalysis};
+use carapace_core::analysis::{
+    Algorithm, ConvergenceTest, RayleighDamping, TangentStrategy, TransientAnalysis,
+};
 use carapace_core::model::{Domain, Element, Material, Node, ZeroLength};
 
 /// `docs/algorithms.md` §6.1's load-bearing correctness check, run as an
@@ -33,7 +35,11 @@ fn newton_corrector_matches_algorithm_linear_bit_for_bit_on_a_linear_system() {
         let mut domain = Domain::new();
         let ground = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
         let mass_node = domain.add_node(
-            Node::new([1.0, 0.0]).fix(1).fix(2).with_mass(0, m).with_initial_displacement(0, 1.0),
+            Node::new([1.0, 0.0])
+                .fix(1)
+                .fix(2)
+                .with_mass(0, m)
+                .with_initial_displacement(0, 1.0),
         );
         domain.add_element(Element::ZeroLength(
             ZeroLength::new(ground, mass_node).with_material(0, Material::Elastic { e: k_spring }),
@@ -42,25 +48,36 @@ fn newton_corrector_matches_algorithm_linear_bit_for_bit_on_a_linear_system() {
     };
 
     let (domain_linear, mass_node) = build();
-    let mut linear = TransientAnalysis::new(domain_linear, RayleighDamping::NONE, dt).expect("well-posed");
+    let mut linear =
+        TransientAnalysis::new(domain_linear, RayleighDamping::NONE, dt).expect("well-posed");
 
     let (domain_newton, _) = build();
     let mut newton = TransientAnalysis::new(domain_newton, RayleighDamping::NONE, dt)
         .expect("well-posed")
         .with_algorithm(
-            Algorithm::Newton { tangent: TangentStrategy::ReuseAtStepStart, line_search: None },
+            Algorithm::Newton {
+                tangent: TangentStrategy::ReuseAtStepStart,
+                line_search: None,
+            },
             // Newmark's mass term scales as `1/(beta*dt^2)` (`=40000` at
             // this `dt`), so an *absolute* residual tolerance needs some
             // headroom above plain machine epsilon to be reachable at all
             // once floating-point cancellation at that magnitude is
             // accounted for — `1e-8` is still far tighter than any
             // physical modeling tolerance, just not literally `1e-12`.
-            ConvergenceTest::NormUnbalance { tol: 1e-8, max_iter: 20 },
+            ConvergenceTest::NormUnbalance {
+                tol: 1e-8,
+                max_iter: 20,
+            },
         );
 
     for step in 1..=steps {
-        linear.step().expect("Algorithm::Linear should solve every step");
-        let result = newton.step().expect("Newton corrector should solve every step");
+        linear
+            .step()
+            .expect("Algorithm::Linear should solve every step");
+        let result = newton
+            .step()
+            .expect("Newton corrector should solve every step");
 
         assert_eq!(
             result.iterations, 2,
@@ -71,13 +88,31 @@ fn newton_corrector_matches_algorithm_linear_bit_for_bit_on_a_linear_system() {
             "TangentStrategy::ReuseAtStepStart must factor only once even though this takes 2 iterations (step {step})"
         );
 
-        let (u_lin, u_new) = (linear.domain().node(mass_node).displacement[0], newton.domain().node(mass_node).displacement[0]);
-        let (v_lin, v_new) = (linear.domain().node(mass_node).velocity[0], newton.domain().node(mass_node).velocity[0]);
-        let (a_lin, a_new) = (linear.domain().node(mass_node).acceleration[0], newton.domain().node(mass_node).acceleration[0]);
+        let (u_lin, u_new) = (
+            linear.domain().node(mass_node).displacement[0],
+            newton.domain().node(mass_node).displacement[0],
+        );
+        let (v_lin, v_new) = (
+            linear.domain().node(mass_node).velocity[0],
+            newton.domain().node(mass_node).velocity[0],
+        );
+        let (a_lin, a_new) = (
+            linear.domain().node(mass_node).acceleration[0],
+            newton.domain().node(mass_node).acceleration[0],
+        );
 
-        assert!((u_lin - u_new).abs() < 1e-8, "step {step}: displacement diverged: linear={u_lin}, newton={u_new}");
-        assert!((v_lin - v_new).abs() < 1e-8, "step {step}: velocity diverged: linear={v_lin}, newton={v_new}");
-        assert!((a_lin - a_new).abs() < 1e-6, "step {step}: acceleration diverged: linear={a_lin}, newton={a_new}");
+        assert!(
+            (u_lin - u_new).abs() < 1e-8,
+            "step {step}: displacement diverged: linear={u_lin}, newton={u_new}"
+        );
+        assert!(
+            (v_lin - v_new).abs() < 1e-8,
+            "step {step}: velocity diverged: linear={v_lin}, newton={v_new}"
+        );
+        assert!(
+            (a_lin - a_new).abs() < 1e-6,
+            "step {step}: acceleration diverged: linear={a_lin}, newton={a_new}"
+        );
     }
 }
 
@@ -97,7 +132,8 @@ fn newton_corrector_matches_algorithm_linear_bit_for_bit_on_a_linear_system() {
 /// must land on visibly different displacements once yielding is engaged
 /// mid-step, even though both "solve" without error.
 #[test]
-fn newton_corrector_gives_a_different_displacement_than_algorithm_linear_once_yielding_is_engaged_mid_step() {
+fn newton_corrector_gives_a_different_displacement_than_algorithm_linear_once_yielding_is_engaged_mid_step(
+) {
     let (k0, fy): (f64, f64) = (100.0, 1.0);
     let eyp = fy / k0;
     let m = 1.0;
@@ -122,26 +158,58 @@ fn newton_corrector_gives_a_different_displacement_than_algorithm_linear_once_yi
     };
 
     let (domain_linear, mass_node, spring) = build();
-    let mut linear = TransientAnalysis::new(domain_linear, RayleighDamping::NONE, dt).expect("well-posed");
-    let linear_result = linear.step().expect("Algorithm::Linear step should still numerically solve");
-    let (u_lin, f_lin) = (linear.domain().node(mass_node).displacement[0], linear.domain().element_local_force(spring)[0]);
+    let mut linear =
+        TransientAnalysis::new(domain_linear, RayleighDamping::NONE, dt).expect("well-posed");
+    let linear_result = linear
+        .step()
+        .expect("Algorithm::Linear step should still numerically solve");
+    let (u_lin, f_lin) = (
+        linear.domain().node(mass_node).displacement[0],
+        linear.domain().element_local_force(spring)[0],
+    );
 
     let (domain_newton, _, spring2) = build();
     let mut newton = TransientAnalysis::new(domain_newton, RayleighDamping::NONE, dt)
         .expect("well-posed")
         .with_algorithm(
-            Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None },
-            ConvergenceTest::NormUnbalance { tol: 1e-6, max_iter: 100 },
+            Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            },
+            ConvergenceTest::NormUnbalance {
+                tol: 1e-6,
+                max_iter: 100,
+            },
         );
-    let newton_result = newton.step().expect("Newton-corrected step should converge");
-    let (u_new, f_new) = (newton.domain().node(mass_node).displacement[0], newton.domain().element_local_force(spring2)[0]);
+    let newton_result = newton
+        .step()
+        .expect("Newton-corrected step should converge");
+    let (u_new, f_new) = (
+        newton.domain().node(mass_node).displacement[0],
+        newton.domain().element_local_force(spring2)[0],
+    );
 
-    assert!(u_lin.abs() > eyp, "test setup should have crossed yield (eyp={eyp}), got u_linear={u_lin}");
-    assert!(f_lin.abs() <= fy * (1.0 + 1e-6), "material must clamp to fy regardless of algorithm, got f_linear={f_lin}");
-    assert!(f_new.abs() <= fy * (1.0 + 1e-6), "material must clamp to fy regardless of algorithm, got f_newton={f_new}");
+    assert!(
+        u_lin.abs() > eyp,
+        "test setup should have crossed yield (eyp={eyp}), got u_linear={u_lin}"
+    );
+    assert!(
+        f_lin.abs() <= fy * (1.0 + 1e-6),
+        "material must clamp to fy regardless of algorithm, got f_linear={f_lin}"
+    );
+    assert!(
+        f_new.abs() <= fy * (1.0 + 1e-6),
+        "material must clamp to fy regardless of algorithm, got f_newton={f_new}"
+    );
 
-    assert_eq!(linear_result.iterations, 1, "Algorithm::Linear never iterates by definition");
-    assert!(newton_result.iterations > 1, "the corrector should need real iteration once yielding engages mid-step");
+    assert_eq!(
+        linear_result.iterations, 1,
+        "Algorithm::Linear never iterates by definition"
+    );
+    assert!(
+        newton_result.iterations > 1,
+        "the corrector should need real iteration once yielding engages mid-step"
+    );
 
     // A small but real difference: at this `dt`, Newmark's mass term
     // dominates the effective operator (`~1/(beta*dt^2)` vs. the spring's

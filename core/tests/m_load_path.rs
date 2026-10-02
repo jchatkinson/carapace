@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{Domain, Element, LoadSeries, Material, Node, Truss};
 
 /// A `LoadSeries::Path` pattern driven by `Integrator::LoadControl` walking
@@ -27,7 +29,12 @@ fn load_control_walks_a_path_series_pattern_through_its_prescribed_load_factors(
     let mut domain = Domain::new();
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
-    domain.add_element(Element::Truss(Truss::new(node_i, node_j, area, Material::Elastic { e })));
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        area,
+        Material::Elastic { e },
+    )));
 
     let pattern = domain.add_load_pattern(LoadSeries::Path {
         times: times.clone(),
@@ -39,7 +46,10 @@ fn load_control_walks_a_path_series_pattern_through_its_prescribed_load_factors(
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
     // Step through every control point exactly (pseudo-time advances by
@@ -47,7 +57,9 @@ fn load_control_walks_a_path_series_pattern_through_its_prescribed_load_factors(
     // at each one — including the flat segment (2.0 -> 3.0, factor held at
     // -20.0) and the final reversal back up to 30.0.
     for (i, &expected_factor) in factors.iter().enumerate().skip(1) {
-        let result = analysis.step().expect("path-controlled truss should solve every step");
+        let result = analysis
+            .step()
+            .expect("path-controlled truss should solve every step");
         assert_eq!(result.load_factor, times[i]);
 
         let expected_u = expected_factor / k;

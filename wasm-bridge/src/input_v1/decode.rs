@@ -9,7 +9,9 @@
 
 use std::collections::HashMap;
 
-use carapace_core::analysis::{Algorithm, ConvergenceTest, GroundMotion, Integrator, RayleighDamping, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, ConvergenceTest, GroundMotion, Integrator, RayleighDamping, TangentStrategy,
+};
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
     Fiber, FiberSection, ForceBeamColumn, Friction, GeomTransf, LoadPatternId, LoadSeries,
@@ -121,7 +123,8 @@ fn decode_planar(input: CarapaceInputV1) -> Result<PlanarSession, DecodeError> {
         force_beam_ids.push(domain.add_element(Element::ForceBeamColumn(element)));
     }
 
-    let zero_length_ids = add_zero_lengths(&mut domain, &input.zero_lengths, &node_at, &material_at)?;
+    let zero_length_ids =
+        add_zero_lengths(&mut domain, &input.zero_lengths, &node_at, &material_at)?;
     let zero_length_section_ids = add_zero_length_sections(
         &mut domain,
         &input.zero_length_sections,
@@ -283,7 +286,12 @@ fn check_dof(table: &'static str, row: u32, dof: u8) -> Result<(), DecodeError> 
 
 /// `check_dof`, generalized to the caller's DOF-per-node count (`3` planar,
 /// `6` spatial — see `decode3.rs`'s own `check_dof3`).
-pub(super) fn check_dof_within(table: &'static str, row: u32, dof: u8, ndof: u8) -> Result<(), DecodeError> {
+pub(super) fn check_dof_within(
+    table: &'static str,
+    row: u32,
+    dof: u8,
+    ndof: u8,
+) -> Result<(), DecodeError> {
     if dof < ndof {
         Ok(())
     } else {
@@ -435,7 +443,8 @@ fn add_zero_lengths(
     }
 
     let mut ids = Vec::with_capacity(table.node_i.len());
-    #[allow(clippy::needless_range_loop)] // parallel-indexes node_i/node_j/materials_by_row/friction_by_row
+    #[allow(clippy::needless_range_loop)]
+    // parallel-indexes node_i/node_j/materials_by_row/friction_by_row
     for i in 0..table.node_i.len() {
         let mut element = ZeroLength::new(
             node_at(table.node_i[i], "zero_lengths")?,
@@ -478,7 +487,8 @@ fn add_zero_length_sections(
     }
 
     let mut ids = Vec::with_capacity(table.node_i.len());
-    #[allow(clippy::needless_range_loop)] // parallel-indexes node_i/node_j/fiber_section/materials_by_row
+    #[allow(clippy::needless_range_loop)]
+    // parallel-indexes node_i/node_j/fiber_section/materials_by_row
     for i in 0..table.node_i.len() {
         let section = FiberSection::new(fiber_section_at(table.fiber_section[i])?);
         let mut element = ZeroLengthSection::new(
@@ -487,8 +497,10 @@ fn add_zero_length_sections(
             section,
         );
         for &(dof, material_index) in &materials_by_row[i] {
-            element = element
-                .with_material(dof as usize, material_at(material_index, "zero_length_sections")?);
+            element = element.with_material(
+                dof as usize,
+                material_at(material_index, "zero_length_sections")?,
+            );
         }
         ids.push(domain.add_element(Element::ZeroLengthSection(element)));
     }
@@ -500,7 +512,9 @@ fn add_load_patterns(
     table: &super::tables::LoadPatternTable,
 ) -> Vec<LoadPatternId> {
     (0..table.series.len())
-        .map(|i| domain.add_load_pattern_scaled(load_series_of(&table.series[i]), table.scale_factor[i]))
+        .map(|i| {
+            domain.add_load_pattern_scaled(load_series_of(&table.series[i]), table.scale_factor[i])
+        })
         .collect()
 }
 
@@ -575,50 +589,115 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
         .zip(element_loads_by_stage)
         .map(|((stage, pending_nodal_loads), pending_element_loads)| {
             let (steps, kind) = match stage {
-                StageSpec::Static { steps, integrator, algorithm, convergence, hold_patterns_after, .. } => {
+                StageSpec::Static {
+                    steps,
+                    integrator,
+                    algorithm,
+                    convergence,
+                    hold_patterns_after,
+                    ..
+                } => {
                     let integrator = match *integrator {
-                        IntegratorSpec::LoadControl { increment } => Integrator::LoadControl { increment },
-                        IntegratorSpec::DisplacementControl { node, dof, increment } => {
+                        IntegratorSpec::LoadControl { increment } => {
+                            Integrator::LoadControl { increment }
+                        }
+                        IntegratorSpec::DisplacementControl {
+                            node,
+                            dof,
+                            increment,
+                        } => {
                             check_dof_within("sequence.integrator", node, dof, ndof)?;
-                            Integrator::DisplacementControl { node: node_at(node, "sequence.integrator")?, dof: dof as usize, increment }
+                            Integrator::DisplacementControl {
+                                node: node_at(node, "sequence.integrator")?,
+                                dof: dof as usize,
+                                increment,
+                            }
                         }
                     };
                     let algorithm = match algorithm {
                         AlgorithmSpec::Linear => Algorithm::Linear,
-                        AlgorithmSpec::NewtonRaphson => {
-                            Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None }
-                        }
+                        AlgorithmSpec::NewtonRaphson => Algorithm::Newton {
+                            tangent: TangentStrategy::Current,
+                            line_search: None,
+                        },
                     };
                     let convergence = match convergence.unwrap_or(ConvergenceSpec::DEFAULT) {
                         ConvergenceSpec::NormUnbalance { tol, max_iter } => {
-                            ConvergenceTest::NormUnbalance { tol, max_iter: max_iter as usize }
+                            ConvergenceTest::NormUnbalance {
+                                tol,
+                                max_iter: max_iter as usize,
+                            }
                         }
                         ConvergenceSpec::NormDispIncr { tol, max_iter } => {
-                            ConvergenceTest::NormDispIncr { tol, max_iter: max_iter as usize }
+                            ConvergenceTest::NormDispIncr {
+                                tol,
+                                max_iter: max_iter as usize,
+                            }
                         }
                         ConvergenceSpec::EnergyIncr { tol, max_iter } => {
-                            ConvergenceTest::EnergyIncr { tol, max_iter: max_iter as usize }
+                            ConvergenceTest::EnergyIncr {
+                                tol,
+                                max_iter: max_iter as usize,
+                            }
                         }
                     };
-                    let hold_patterns_after = hold_patterns_after.iter().map(|&row| pattern_at(row)).collect::<Result<Vec<_>, _>>()?;
-                    (*steps, CompiledStageKind::Static { integrator, algorithm, convergence, hold_patterns_after })
+                    let hold_patterns_after = hold_patterns_after
+                        .iter()
+                        .map(|&row| pattern_at(row))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    (
+                        *steps,
+                        CompiledStageKind::Static {
+                            integrator,
+                            algorithm,
+                            convergence,
+                            hold_patterns_after,
+                        },
+                    )
                 }
                 // A single eigensolve, not an iterative step loop — always
                 // exactly one `advance()` step (`StageSpec::Modal`'s doc
                 // comment).
-                StageSpec::Modal { modes, .. } => (1, CompiledStageKind::Modal { num_modes: *modes as usize }),
-                StageSpec::Transient { steps, dt, damping, ground_motions, .. } => {
+                StageSpec::Modal { modes, .. } => (
+                    1,
+                    CompiledStageKind::Modal {
+                        num_modes: *modes as usize,
+                    },
+                ),
+                StageSpec::Transient {
+                    steps,
+                    dt,
+                    damping,
+                    ground_motions,
+                    ..
+                } => {
                     let damping = RayleighDamping::new(damping.alpha_m, damping.beta_k);
-                    let ground_motions = ground_motions
-                        .iter()
-                        .enumerate()
-                        .map(|(row, gm)| {
-                            check_dof_within("sequence.groundMotion", row as u32, gm.direction, ndim)?;
-                            Ok(GroundMotion::new(gm.direction as usize, load_series_of(&gm.series))
+                    let ground_motions =
+                        ground_motions
+                            .iter()
+                            .enumerate()
+                            .map(|(row, gm)| {
+                                check_dof_within(
+                                    "sequence.groundMotion",
+                                    row as u32,
+                                    gm.direction,
+                                    ndim,
+                                )?;
+                                Ok(GroundMotion::new(
+                                    gm.direction as usize,
+                                    load_series_of(&gm.series),
+                                )
                                 .with_scale_factor(gm.scale_factor))
-                        })
-                        .collect::<Result<Vec<_>, DecodeError>>()?;
-                    (*steps, CompiledStageKind::Transient { damping, dt: *dt, ground_motions })
+                            })
+                            .collect::<Result<Vec<_>, DecodeError>>()?;
+                    (
+                        *steps,
+                        CompiledStageKind::Transient {
+                            damping,
+                            dt: *dt,
+                            ground_motions,
+                        },
+                    )
                 }
             };
 

@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{Domain, Element, Material, Node, Truss};
 
 /// A ground-anchored truss oriented along x (like `m1_truss.rs`'s case), so
@@ -11,7 +13,14 @@ fn truss_to_ground(domain: &mut Domain, y: f64, k: f64, load: f64) -> carapace_c
     let ground = domain.add_node(Node::new([0.0, y]).fix(0).fix(1).fix(2));
     let free = domain.add_node(Node::new([length, y]).fix(1).fix(2));
     domain.load_node(free, 0, load);
-    domain.add_element(Element::Truss(Truss::new(ground, free, area, Material::Elastic { e: k * length / area })));
+    domain.add_element(Element::Truss(Truss::new(
+        ground,
+        free,
+        area,
+        Material::Elastic {
+            e: k * length / area,
+        },
+    )));
     free
 }
 
@@ -37,16 +46,27 @@ fn equal_dof_couples_two_nodes_x_translation_like_parallel_springs() {
         .constraint_handler(ConstraintHandler::Transformation)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
-    analysis.step().expect("linear elastic parallel-spring system should solve");
+    analysis
+        .step()
+        .expect("linear elastic parallel-spring system should solve");
 
     let expected = force / (k1 + k2);
     let u_retained = analysis.domain().node(retained).displacement[0];
     let u_constrained = analysis.domain().node(constrained).displacement[0];
-    assert!((u_retained - expected).abs() < 1e-9, "expected u={expected}, got {u_retained}");
-    assert_eq!(u_retained, u_constrained, "constrained node must move exactly with the retained node");
+    assert!(
+        (u_retained - expected).abs() < 1e-9,
+        "expected u={expected}, got {u_retained}"
+    );
+    assert_eq!(
+        u_retained, u_constrained,
+        "constrained node must move exactly with the retained node"
+    );
 }
 
 /// `rigid_diaphragm` ties every constrained node's x DOF to the retained
@@ -68,16 +88,24 @@ fn rigid_diaphragm_couples_every_constrained_node_to_the_retained_node() {
         .constraint_handler(ConstraintHandler::Transformation)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
-    analysis.step().expect("linear elastic rigid-diaphragm system should solve");
+    analysis
+        .step()
+        .expect("linear elastic rigid-diaphragm system should solve");
 
     let expected = force / (k0 + k1 + k2);
     let u0 = analysis.domain().node(retained).displacement[0];
     let u1 = analysis.domain().node(c1).displacement[0];
     let u2 = analysis.domain().node(c2).displacement[0];
-    assert!((u0 - expected).abs() < 1e-9, "expected u={expected}, got {u0}");
+    assert!(
+        (u0 - expected).abs() < 1e-9,
+        "expected u={expected}, got {u0}"
+    );
     assert_eq!(u0, u1);
     assert_eq!(u0, u2);
 }
@@ -97,6 +125,9 @@ fn plain_handler_rejects_a_domain_with_multi_point_constraints() {
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 }

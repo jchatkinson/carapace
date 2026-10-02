@@ -3,7 +3,10 @@ use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, SparseMatrix};
 
-use super::{Algorithm, AnalysisError, ConvergenceTest, KrylovAccelerator, SparseFactorization, SparseSolver, TangentStrategy};
+use super::{
+    Algorithm, AnalysisError, ConvergenceTest, KrylovAccelerator, SparseFactorization,
+    SparseSolver, TangentStrategy,
+};
 
 /// How many Newton iterations ran, and how many times the tangent was
 /// actually factored — `docs/algorithms.md` §8's verification hook for
@@ -52,7 +55,13 @@ pub(crate) struct IterationOutcome {
 /// `TangentStrategy::Initial` can actually skip re-factoring across every
 /// step of an analysis's lifetime, not just within one step.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn iterate_to_equilibrium<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>(
+pub(crate) fn iterate_to_equilibrium<
+    const NDIM: usize,
+    const NDOF: usize,
+    const ELEMENT_DOF: usize,
+    NId,
+    E,
+>(
     step: usize,
     algorithm: &Algorithm,
     test: &ConvergenceTest,
@@ -60,7 +69,10 @@ pub(crate) fn iterate_to_equilibrium<const NDIM: usize, const NDOF: usize, const
     cached_factorization: &mut Option<SparseFactorization>,
     domain: &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
     scalar0: f64,
-    mut form_system: impl FnMut(&Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>, f64) -> (SparseMatrix, DVector<f64>),
+    mut form_system: impl FnMut(
+        &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        f64,
+    ) -> (SparseMatrix, DVector<f64>),
     mut correct_du: impl FnMut(
         &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
         &SparseMatrix,
@@ -75,9 +87,17 @@ where
     E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
 {
     let (tangent, line_search, krylov_max_dimension) = match algorithm {
-        Algorithm::Newton { tangent, line_search } => (*tangent, *line_search, None),
-        Algorithm::KrylovNewton { tangent, max_dimension } => (*tangent, None, Some(*max_dimension)),
-        Algorithm::Linear => unreachable!("Algorithm::Linear never routes through iterate_to_equilibrium"),
+        Algorithm::Newton {
+            tangent,
+            line_search,
+        } => (*tangent, *line_search, None),
+        Algorithm::KrylovNewton {
+            tangent,
+            max_dimension,
+        } => (*tangent, None, Some(*max_dimension)),
+        Algorithm::Linear => {
+            unreachable!("Algorithm::Linear never routes through iterate_to_equilibrium")
+        }
     };
 
     // `ReuseAtStepStart` means "once per this step" — whatever was cached
@@ -98,7 +118,9 @@ where
 
         let force_refactor = tangent == TangentStrategy::Current
             || cached_factorization.is_none()
-            || krylov.as_ref().is_some_and(KrylovAccelerator::should_refactor);
+            || krylov
+                .as_ref()
+                .is_some_and(KrylovAccelerator::should_refactor);
         if force_refactor {
             *cached_factorization = Some(solver.factor(&k)?);
             outcome.factorizations += 1;
@@ -106,7 +128,9 @@ where
                 krylov = Some(KrylovAccelerator::new(dim));
             }
         }
-        let factorization = cached_factorization.as_ref().expect("just factored or already cached above");
+        let factorization = cached_factorization
+            .as_ref()
+            .expect("just factored or already cached above");
         let du_raw = factorization.solve(&residual);
 
         let du_pre_correct = match &mut krylov {

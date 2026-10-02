@@ -1,5 +1,7 @@
 use carapace_core::analysis::{modal_analysis, GroundMotion, RayleighDamping, TransientAnalysis};
-use carapace_core::model::{Domain3, Element3, LoadSeries, Material, Node3, SpatialDof, Truss3, ZeroLength3};
+use carapace_core::model::{
+    Domain3, Element3, LoadSeries, Material, Node3, SpatialDof, Truss3, ZeroLength3,
+};
 
 /// Spatial counterpart to `m6_dynamics.rs`'s `truss_element_mass_matches_
 /// sdof_closed_form_frequency` — `modal_analysis`/`TransientAnalysis`
@@ -36,7 +38,8 @@ fn spatial_truss_mass_matches_sdof_closed_form_frequency_via_modal_analysis3() {
         Truss3::new(node_i, node_j, area, Material::Elastic { e }).with_density(density),
     ));
 
-    let modes = modal_analysis(&mut domain, 1).expect("spatial SDOF truss should have a well-posed eigenproblem");
+    let modes = modal_analysis(&mut domain, 1)
+        .expect("spatial SDOF truss should have a well-posed eigenproblem");
 
     let k = e * area / length;
     let m = density * area * length / 2.0;
@@ -80,7 +83,8 @@ fn spatial_zero_length_sdof_matches_closed_form_free_vibration_via_transient_ana
             .with_initial_displacement(SpatialDof::Ux as usize, 1.0),
     );
     domain.add_element(Element3::ZeroLength3(
-        ZeroLength3::new(ground, mass_node).with_material(SpatialDof::Ux as usize, Material::Elastic { e: k_spring }),
+        ZeroLength3::new(ground, mass_node)
+            .with_material(SpatialDof::Ux as usize, Material::Elastic { e: k_spring }),
     ));
 
     let dt = 0.01;
@@ -89,13 +93,18 @@ fn spatial_zero_length_sdof_matches_closed_form_free_vibration_via_transient_ana
 
     let steps = 100;
     for _ in 0..steps {
-        analysis.step().expect("spatial undamped SDOF should solve every step");
+        analysis
+            .step()
+            .expect("spatial undamped SDOF should solve every step");
     }
 
     let t = dt * steps as f64;
     let expected = (omega * t).cos();
     let u = analysis.domain().node(mass_node).displacement[SpatialDof::Ux as usize];
-    assert!((u - expected).abs() < 1e-4, "expected u({t})={expected}, got {u}");
+    assert!(
+        (u - expected).abs() < 1e-4,
+        "expected u({t})={expected}, got {u}"
+    );
 }
 
 /// Spatial Rayleigh-damped counterpart — same closed form and tolerance as
@@ -130,7 +139,8 @@ fn spatial_rayleigh_damped_sdof_matches_closed_form_free_vibration_via_transient
             .with_initial_displacement(SpatialDof::Uy as usize, 1.0),
     );
     domain.add_element(Element3::ZeroLength3(
-        ZeroLength3::new(ground, mass_node).with_material(SpatialDof::Uy as usize, Material::Elastic { e: k_spring }),
+        ZeroLength3::new(ground, mass_node)
+            .with_material(SpatialDof::Uy as usize, Material::Elastic { e: k_spring }),
     ));
 
     let dt = 0.01;
@@ -139,7 +149,9 @@ fn spatial_rayleigh_damped_sdof_matches_closed_form_free_vibration_via_transient
 
     let steps = 100;
     for _ in 0..steps {
-        analysis.step().expect("spatial damped SDOF should solve every step");
+        analysis
+            .step()
+            .expect("spatial damped SDOF should solve every step");
     }
 
     let t = dt * steps as f64;
@@ -148,7 +160,10 @@ fn spatial_rayleigh_damped_sdof_matches_closed_form_free_vibration_via_transient
         * ((omega_d * t).cos() + (xi * omega / omega_d) * (omega_d * t).sin());
 
     let u = analysis.domain().node(mass_node).displacement[SpatialDof::Uy as usize];
-    assert!((u - expected).abs() < 1e-4, "expected u({t})={expected}, got {u}");
+    assert!(
+        (u - expected).abs() < 1e-4,
+        "expected u({t})={expected}, got {u}"
+    );
 }
 
 /// "3D ground motion": two independent `GroundMotion`s active at once, one
@@ -196,8 +211,14 @@ fn orthogonal_ground_motions_drive_independent_spatial_sdof_responses() {
     let dt = 0.01;
     let mut analysis = TransientAnalysis::new(domain, RayleighDamping::NONE, dt)
         .expect("orthogonal spatial SDOF pair should be well-posed")
-        .with_ground_motion(GroundMotion::new(SpatialDof::Ux as usize, LoadSeries::Constant).with_scale_factor(ag_x))
-        .with_ground_motion(GroundMotion::new(SpatialDof::Uz as usize, LoadSeries::Constant).with_scale_factor(ag_z));
+        .with_ground_motion(
+            GroundMotion::new(SpatialDof::Ux as usize, LoadSeries::Constant)
+                .with_scale_factor(ag_x),
+        )
+        .with_ground_motion(
+            GroundMotion::new(SpatialDof::Uz as usize, LoadSeries::Constant)
+                .with_scale_factor(ag_z),
+        );
 
     let steps = 100;
     for _ in 0..steps {

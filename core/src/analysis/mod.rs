@@ -16,7 +16,6 @@ mod tangent_strategy;
 mod transient;
 
 pub use algorithm::Algorithm;
-pub use state::{Analysis, Analysis3, StepResult};
 pub use builder::AnalysisBuilder;
 pub use constraint::ConstraintHandler;
 pub use convergence::ConvergenceTest;
@@ -29,5 +28,6 @@ pub use line_search::LineSearch;
 pub use modal::{modal_analysis, Mode};
 pub(crate) use newton_loop::iterate_to_equilibrium;
 pub use solver::{SparseFactorization, SparseSolver};
+pub use state::{Analysis, Analysis3, StepResult};
 pub use tangent_strategy::TangentStrategy;
 pub use transient::{TransientAnalysis, TransientAnalysis3, TransientStepResult};

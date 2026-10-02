@@ -79,7 +79,9 @@ mod tests {
 
         // Load past yield (strain=0.02 well beyond eyp=0.01) and commit.
         let m = m.commit(0.02);
-        let Material::ElasticPP { ep, .. } = m else { panic!() };
+        let Material::ElasticPP { ep, .. } = m else {
+            panic!()
+        };
         assert!((ep - 0.01).abs() < 1e-12, "expected ep=0.01, got {ep}");
 
         // Partially unload to strain=0.015 (still positive, but now less
@@ -89,16 +91,28 @@ mod tests {
         // the origin: trial_stress = e*(strain-ep) = 100*(0.015-0.01)=0.5,
         // well inside the yield surface.
         let (stress, tangent) = m.trial_stress_tangent(0.015);
-        assert!((stress - 0.5).abs() < 1e-12, "expected elastic unload stress=0.5, got {stress}");
-        assert_eq!(tangent, 100.0, "should be elastic (unloading), not the plastic tangent");
+        assert!(
+            (stress - 0.5).abs() < 1e-12,
+            "expected elastic unload stress=0.5, got {stress}"
+        );
+        assert_eq!(
+            tangent, 100.0,
+            "should be elastic (unloading), not the plastic tangent"
+        );
     }
 
     #[test]
     fn gap_only_engages_past_closure() {
-        let m = Material::Gap { e: 100.0, gap: 0.01 };
+        let m = Material::Gap {
+            e: 100.0,
+            gap: 0.01,
+        };
         assert_eq!(m.trial_stress_tangent(0.0), (0.0, 0.0));
         assert_eq!(m.trial_stress_tangent(-0.005), (0.0, 0.0));
-        assert_eq!(m.trial_stress_tangent(-0.02), (100.0 * (-0.02 + 0.01), 100.0));
+        assert_eq!(
+            m.trial_stress_tangent(-0.02),
+            (100.0 * (-0.02 + 0.01), 100.0)
+        );
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{Domain3, Element3, Material, Node3, SpatialDof, Truss3};
 
 /// Spatial counterpart to `m1_truss.rs`'s acceptance case, run through the
@@ -45,7 +47,12 @@ fn symmetric_tripod_matches_analytical_vertical_stiffness_via_analysis3() {
                 .fix(SpatialDof::Ry as usize)
                 .fix(SpatialDof::Rz as usize),
         );
-        domain.add_element(Element3::Truss3(Truss3::new(apex, support, area, Material::Elastic { e })));
+        domain.add_element(Element3::Truss3(Truss3::new(
+            apex,
+            support,
+            area,
+            Material::Elastic { e },
+        )));
     }
 
     let load = 100.0;
@@ -55,10 +62,15 @@ fn symmetric_tripod_matches_analytical_vertical_stiffness_via_analysis3() {
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
-    let result = analysis.step().expect("linear elastic space truss should solve");
+    let result = analysis
+        .step()
+        .expect("linear elastic space truss should solve");
     assert_eq!(result.step, 1);
     assert_eq!(result.load_factor, 1.0);
 

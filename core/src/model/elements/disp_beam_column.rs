@@ -46,9 +46,16 @@ pub struct DispBeamColumn {
 }
 
 impl DispBeamColumn {
-    pub fn new(node_i: NodeId, node_j: NodeId, fibers: Vec<Fiber>, integration: BeamIntegration) -> Self {
+    pub fn new(
+        node_i: NodeId,
+        node_j: NodeId,
+        fibers: Vec<Fiber>,
+        integration: BeamIntegration,
+    ) -> Self {
         let n_points = integration.points().len();
-        let sections = (0..n_points).map(|_| FiberSection::new(fibers.clone())).collect();
+        let sections = (0..n_points)
+            .map(|_| FiberSection::new(fibers.clone()))
+            .collect();
         DispBeamColumn {
             node_i,
             node_j,
@@ -116,7 +123,11 @@ impl DispBeamColumn {
         (b_eps0, b_kappa)
     }
 
-    fn local_displacement(&self, node_i: &Node, node_j: &Node) -> (f64, SMatrix<f64, 6, 6>, SVector<f64, 6>) {
+    fn local_displacement(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+    ) -> (f64, SMatrix<f64, 6, 6>, SVector<f64, 6>) {
         let (length, cx, cy) = self.geometry(node_i, node_j);
         let t = self.transformation(cx, cy);
         let d_global = SVector::<f64, 6>::from_row_slice(&[
@@ -206,9 +217,13 @@ impl DispBeamColumn {
     /// this element has no Newton loop between a target and the committed
     /// answer the way `ForceBeamColumn` does.
     pub(super) fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
-        let corotational = (self.transform == GeomTransf::Corotational).then(|| Corotational2d::new(node_i, node_j));
+        let corotational = (self.transform == GeomTransf::Corotational)
+            .then(|| Corotational2d::new(node_i, node_j));
         let (length, d_local) = if let Some(state) = &corotational {
-            (state.initial_length(), Corotational2d::local_basic_modes() * state.basic_deformation())
+            (
+                state.initial_length(),
+                Corotational2d::local_basic_modes() * state.basic_deformation(),
+            )
         } else {
             let (length, _t, d_local) = self.local_displacement(node_i, node_j);
             (length, d_local)
@@ -229,7 +244,9 @@ impl DispBeamColumn {
         // rotation needed, unlike that method's `t.transpose() * r_local`
         // step, which converts *to* global.
         match &corotational {
-            Some(state) => state.local_resistance(&(Corotational2d::local_basic_modes().transpose() * r_local)),
+            Some(state) => {
+                state.local_resistance(&(Corotational2d::local_basic_modes().transpose() * r_local))
+            }
             None => r_local,
         }
     }
@@ -252,9 +269,13 @@ impl DispBeamColumn {
     /// integration point (`BeamIntegration::points()` order), inner `Vec`
     /// one entry per fiber (the order originally passed to `new`).
     pub fn fiber_responses(&self, node_i: &Node, node_j: &Node) -> Vec<Vec<(f64, f64)>> {
-        let corotational = (self.transform == GeomTransf::Corotational).then(|| Corotational2d::new(node_i, node_j));
+        let corotational = (self.transform == GeomTransf::Corotational)
+            .then(|| Corotational2d::new(node_i, node_j));
         let (length, d_local) = if let Some(state) = &corotational {
-            (state.initial_length(), Corotational2d::local_basic_modes() * state.basic_deformation())
+            (
+                state.initial_length(),
+                Corotational2d::local_basic_modes() * state.basic_deformation(),
+            )
         } else {
             let (length, _t, d_local) = self.local_displacement(node_i, node_j);
             (length, d_local)
@@ -318,7 +339,9 @@ impl DispBeamColumn3 {
         integration: BeamIntegration,
     ) -> Self {
         let n_points = integration.points().len();
-        let sections = (0..n_points).map(|_| FiberSection3::new(fibers.clone())).collect();
+        let sections = (0..n_points)
+            .map(|_| FiberSection3::new(fibers.clone()))
+            .collect();
         DispBeamColumn3 {
             node_i,
             node_j,
@@ -352,7 +375,14 @@ impl DispBeamColumn3 {
     /// to `z_block`. Verified, not just plausible-by-analogy, in
     /// `core/tests/m17_disp_beam_column3.rs` against `ElasticBeamColumn3`'s
     /// exact closed-form biaxial-bending stiffness.
-    fn strain_displacement(xi: f64, length: f64) -> (SpatialElementVector, SpatialElementVector, SpatialElementVector) {
+    fn strain_displacement(
+        xi: f64,
+        length: f64,
+    ) -> (
+        SpatialElementVector,
+        SpatialElementVector,
+        SpatialElementVector,
+    ) {
         let l = length;
         let mut b_eps0 = SpatialElementVector::zeros();
         b_eps0[0] = -1.0 / l;
@@ -373,11 +403,21 @@ impl DispBeamColumn3 {
         (b_eps0, b_kappa_z, b_kappa_y)
     }
 
-    fn local_displacement(&self, node_i: &Node3, node_j: &Node3) -> (f64, SpatialElementMatrix, SpatialElementVector) {
+    fn local_displacement(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+    ) -> (f64, SpatialElementMatrix, SpatialElementVector) {
         let transform = GeomTransf3::linear(self.vec_xz);
         let (length, r) = transform.local_axes(node_i, node_j);
         let t = GeomTransf3::rotation_matrix(&r);
-        let d_global = SpatialElementVector::from_iterator(node_i.displacement.iter().chain(node_j.displacement.iter()).copied());
+        let d_global = SpatialElementVector::from_iterator(
+            node_i
+                .displacement
+                .iter()
+                .chain(node_j.displacement.iter())
+                .copied(),
+        );
         (length, t, t * d_global)
     }
 
@@ -393,7 +433,11 @@ impl DispBeamColumn3 {
         k
     }
 
-    pub(super) fn form_tangent_and_resistance(&self, node_i: &Node3, node_j: &Node3) -> (SpatialElementMatrix, SpatialElementVector) {
+    pub(super) fn form_tangent_and_resistance(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+    ) -> (SpatialElementMatrix, SpatialElementVector) {
         let (length, t, d_local) = self.local_displacement(node_i, node_j);
 
         let mut k_local = self.torsion_stiffness(length);

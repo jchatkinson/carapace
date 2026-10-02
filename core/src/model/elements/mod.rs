@@ -2,8 +2,8 @@ use nalgebra::{SMatrix, SVector};
 use slotmap::{new_key_type, Key};
 
 use super::{
-    ElementLoad, ElementLoad3, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
-    SPATIAL_NDF, SPATIAL_NDIM,
+    ElementLoad, ElementLoad3, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_NDIM,
+    SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// What `Domain`'s generic assembly/state plumbing needs from an element
@@ -44,11 +44,23 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: us
         &self,
         node_i: &Node<NDIM, NDOF>,
         node_j: &Node<NDIM, NDOF>,
-    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>);
+    ) -> (
+        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
+        SVector<f64, ELEMENT_DOF>,
+    );
 
-    fn form_load_vector(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>, load: Option<&Self::Load>) -> SVector<f64, ELEMENT_DOF>;
+    fn form_load_vector(
+        &self,
+        node_i: &Node<NDIM, NDOF>,
+        node_j: &Node<NDIM, NDOF>,
+        load: Option<&Self::Load>,
+    ) -> SVector<f64, ELEMENT_DOF>;
 
-    fn form_mass(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>) -> SVector<f64, ELEMENT_DOF>;
+    fn form_mass(
+        &self,
+        node_i: &Node<NDIM, NDOF>,
+        node_j: &Node<NDIM, NDOF>,
+    ) -> SVector<f64, ELEMENT_DOF>;
 
     fn commit(&mut self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>);
 
@@ -68,14 +80,22 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: us
     /// fresh (every other element, all cheap closed-form/direct
     /// evaluations) — never anything that mutates state, so safe to call
     /// any time after a step, like `form_tangent_and_resistance`.
-    fn local_force(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>) -> SVector<f64, ELEMENT_DOF>;
+    fn local_force(
+        &self,
+        node_i: &Node<NDIM, NDOF>,
+        node_j: &Node<NDIM, NDOF>,
+    ) -> SVector<f64, ELEMENT_DOF>;
 
     /// Every integration point's per-fiber `(strain, stress)` — `None` for
     /// every element kind that isn't fiber-discretized (`Truss`/
     /// `ZeroLength`/`ZeroLengthSection`/`ElasticBeamColumn`; only
     /// `DispBeamColumn`/`ForceBeamColumn` and their spatial counterparts
     /// have one). See `Domain::element_fiber_responses`'s doc comment.
-    fn fiber_responses(&self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>) -> Option<Vec<Vec<(f64, f64)>>>;
+    fn fiber_responses(
+        &self,
+        node_i: &Node<NDIM, NDOF>,
+        node_j: &Node<NDIM, NDOF>,
+    ) -> Option<Vec<Vec<(f64, f64)>>>;
 }
 
 mod disp_beam_column;
@@ -88,7 +108,9 @@ pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
-pub use zero_length::{Friction, Friction3, ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3};
+pub use zero_length::{
+    Friction, Friction3, ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3,
+};
 
 new_key_type! {
     /// Generational index into `Domain`'s element store (§2.2).
@@ -134,7 +156,10 @@ impl Element {
         &self,
         node_i: &Node,
         node_j: &Node,
-    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
+    ) -> (
+        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
+        SVector<f64, ELEMENT_DOF>,
+    ) {
         match self {
             Element::Truss(t) => t.form_tangent_and_resistance(node_i, node_j),
             Element::ZeroLength(z) => z.form_tangent_and_resistance(node_i, node_j),
@@ -152,9 +177,16 @@ impl Element {
     /// load. Zero when `load` is `None`, and for elements with no
     /// element-load support at all (`Truss`, `ZeroLength`, `DispBeamColumn`
     /// — see its doc comment for why).
-    pub fn form_load_vector(&self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) -> SVector<f64, ELEMENT_DOF> {
+    pub fn form_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        load: Option<&ElementLoad>,
+    ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
-            (Element::ElasticBeamColumn(b), Some(ElementLoad::UniformTransverse(w))) => b.form_load_vector(node_i, node_j, *w),
+            (Element::ElasticBeamColumn(b), Some(ElementLoad::UniformTransverse(w))) => {
+                b.form_load_vector(node_i, node_j, *w)
+            }
             _ => SVector::<f64, ELEMENT_DOF>::zeros(),
         }
     }
@@ -211,7 +243,10 @@ impl Element {
         match self {
             Element::DispBeamColumn(b) => Some(b.fiber_responses(node_i, node_j)),
             Element::ForceBeamColumn(b) => Some(b.fiber_responses()),
-            Element::Truss(_) | Element::ZeroLength(_) | Element::ZeroLengthSection(_) | Element::ElasticBeamColumn(_) => None,
+            Element::Truss(_)
+            | Element::ZeroLength(_)
+            | Element::ZeroLengthSection(_)
+            | Element::ElasticBeamColumn(_) => None,
         }
     }
 }
@@ -224,11 +259,23 @@ impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
         Element::nodes(self)
     }
 
-    fn form_tangent_and_resistance(&self, node_i: &Node, node_j: &Node) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
+    fn form_tangent_and_resistance(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+    ) -> (
+        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
+        SVector<f64, ELEMENT_DOF>,
+    ) {
         Element::form_tangent_and_resistance(self, node_i, node_j)
     }
 
-    fn form_load_vector(&self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) -> SVector<f64, ELEMENT_DOF> {
+    fn form_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        load: Option<&ElementLoad>,
+    ) -> SVector<f64, ELEMENT_DOF> {
         Element::form_load_vector(self, node_i, node_j, load)
     }
 
@@ -277,7 +324,10 @@ impl Element3 {
         &self,
         node_i: &Node3,
         node_j: &Node3,
-    ) -> (SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>, SVector<f64, SPATIAL_ELEMENT_DOF>) {
+    ) -> (
+        SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>,
+        SVector<f64, SPATIAL_ELEMENT_DOF>,
+    ) {
         match self {
             Element3::Truss3(t) => t.form_tangent_and_resistance(node_i, node_j),
             Element3::ZeroLength3(z) => z.form_tangent_and_resistance(node_i, node_j),
@@ -294,7 +344,12 @@ impl Element3 {
     /// (`Truss3`, `ZeroLength3`, `DispBeamColumn3`, `ForceBeamColumn3` —
     /// matching their planar counterparts, see `ElementOps::Load`'s doc
     /// comment).
-    pub fn form_load_vector(&self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+    pub fn form_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        load: Option<&ElementLoad3>,
+    ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         match (self, load) {
             (Element3::ElasticBeamColumn3(b), Some(ElementLoad3::UniformTransverse { wy, wz })) => {
                 b.form_load_vector(node_i, node_j, *wy, *wz)
@@ -343,7 +398,10 @@ impl Element3 {
         match self {
             Element3::DispBeamColumn3(b) => Some(b.fiber_responses(node_i, node_j)),
             Element3::ForceBeamColumn3(b) => Some(b.fiber_responses()),
-            Element3::Truss3(_) | Element3::ZeroLength3(_) | Element3::ZeroLengthSection3(_) | Element3::ElasticBeamColumn3(_) => None,
+            Element3::Truss3(_)
+            | Element3::ZeroLength3(_)
+            | Element3::ZeroLengthSection3(_)
+            | Element3::ElasticBeamColumn3(_) => None,
         }
     }
 }
@@ -360,11 +418,19 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Ele
         &self,
         node_i: &Node3,
         node_j: &Node3,
-    ) -> (SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>, SVector<f64, SPATIAL_ELEMENT_DOF>) {
+    ) -> (
+        SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>,
+        SVector<f64, SPATIAL_ELEMENT_DOF>,
+    ) {
         Element3::form_tangent_and_resistance(self, node_i, node_j)
     }
 
-    fn form_load_vector(&self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+    fn form_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        load: Option<&ElementLoad3>,
+    ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         Element3::form_load_vector(self, node_i, node_j, load)
     }
 

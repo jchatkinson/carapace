@@ -54,8 +54,14 @@ impl<NId: Copy> Integrator<NId> {
     {
         match self {
             Integrator::LoadControl { increment } => Ok(current_pseudo_time + increment),
-            Integrator::DisplacementControl { node, dof, increment } => {
-                let eq = domain.equation_of(*node, *dof).ok_or(AnalysisError::InvalidConstraint)?;
+            Integrator::DisplacementControl {
+                node,
+                dof,
+                increment,
+            } => {
+                let eq = domain
+                    .equation_of(*node, *dof)
+                    .ok_or(AnalysisError::InvalidConstraint)?;
                 let (k, _resistance) = domain.assemble_tangent_and_resistance();
                 let sensitivity = domain.assemble_reference_load_sensitivity(current_pseudo_time);
                 let unit_response = solver.solve(&k, &sensitivity)?;
@@ -109,7 +115,9 @@ impl<NId: Copy> Integrator<NId> {
         match self {
             Integrator::LoadControl { .. } => Ok((0.0, du_bar)),
             Integrator::DisplacementControl { node, dof, .. } => {
-                let eq = domain.equation_of(*node, *dof).ok_or(AnalysisError::InvalidConstraint)?;
+                let eq = domain
+                    .equation_of(*node, *dof)
+                    .ok_or(AnalysisError::InvalidConstraint)?;
                 let sensitivity = domain.assemble_reference_load_sensitivity(pseudo_time);
                 let unit_response = solver.solve(k, &sensitivity)?;
                 let delta_lambda = -du_bar[eq] / unit_response[eq];

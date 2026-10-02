@@ -6,8 +6,8 @@ use slotmap::{Key, SlotMap};
 
 use super::load_pattern::LoadPattern;
 use super::{
-    Axis3, Element, Element3, ElementOps, LoadPatternId, LoadSeries, Node, Node3Id, NodeId, SparseMatrix, NDF,
-    PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, Element, Element3, ElementOps, LoadPatternId, LoadSeries, Node, Node3Id, NodeId,
+    SparseMatrix, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// A multi-point constraint tying `dofs` of `constrained` exactly to the
@@ -193,7 +193,8 @@ where
     }
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
+    Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
 where
     NId: Key,
     E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
@@ -206,7 +207,8 @@ where
     /// every `Analysis` had before multi-pattern support existed.
     pub fn new() -> Self {
         let mut load_patterns = SlotMap::default();
-        let default_pattern = load_patterns.insert(LoadPattern::new(LoadSeries::Linear { slope: 1.0 }));
+        let default_pattern =
+            load_patterns.insert(LoadPattern::new(LoadSeries::Linear { slope: 1.0 }));
         Domain {
             nodes: SlotMap::default(),
             elements: SlotMap::default(),
@@ -289,8 +291,11 @@ where
         let mut resistance = 0.0;
         for (_, element) in self.elements.iter() {
             let [id_i, id_j] = element.nodes();
-            let Some(a) = local_index_at(id_i, id_j) else { continue };
-            let (_k_local, r_local) = element.form_tangent_and_resistance(&self.nodes[id_i], &self.nodes[id_j]);
+            let Some(a) = local_index_at(id_i, id_j) else {
+                continue;
+            };
+            let (_k_local, r_local) =
+                element.form_tangent_and_resistance(&self.nodes[id_i], &self.nodes[id_j]);
             resistance += r_local[a];
         }
 
@@ -304,10 +309,18 @@ where
                 applied += factor * nodal_load[dof];
             }
             for (element_id, element) in self.elements.iter() {
-                let Some(element_load) = pattern.element_load(element_id) else { continue };
+                let Some(element_load) = pattern.element_load(element_id) else {
+                    continue;
+                };
                 let [id_i, id_j] = element.nodes();
-                let Some(a) = local_index_at(id_i, id_j) else { continue };
-                let load_local = element.form_load_vector(&self.nodes[id_i], &self.nodes[id_j], Some(element_load));
+                let Some(a) = local_index_at(id_i, id_j) else {
+                    continue;
+                };
+                let load_local = element.form_load_vector(
+                    &self.nodes[id_i],
+                    &self.nodes[id_j],
+                    Some(element_load),
+                );
                 applied += factor * load_local[a];
             }
         }
@@ -330,8 +343,13 @@ where
     /// Same as `add_load_pattern`, with an explicit scale factor (e.g. a
     /// ground-motion PGA scale, or a load-factor-vs-displacement-target
     /// unit conversion) applied on top of the series' own factor.
-    pub fn add_load_pattern_scaled(&mut self, series: LoadSeries, scale_factor: f64) -> LoadPatternId {
-        self.load_patterns.insert(LoadPattern::new(series).with_scale_factor(scale_factor))
+    pub fn add_load_pattern_scaled(
+        &mut self,
+        series: LoadSeries,
+        scale_factor: f64,
+    ) -> LoadPatternId {
+        self.load_patterns
+            .insert(LoadPattern::new(series).with_scale_factor(scale_factor))
     }
 
     /// Add a nodal load to `pattern` — Xara/OpenSees's `load <node> <...>`
@@ -468,7 +486,8 @@ where
                         ),
                     })
                     .collect();
-                self.dof_transform.insert((constraint.constrained, *dof), resolved);
+                self.dof_transform
+                    .insert((constraint.constrained, *dof), resolved);
             }
         }
 
@@ -553,7 +572,11 @@ where
             let mass_local = element.form_mass(node_i, node_j);
 
             for a in 0..ELEMENT_DOF {
-                let (node_id, dof) = if a < NDOF { (id_i, a) } else { (id_j, a - NDOF) };
+                let (node_id, dof) = if a < NDOF {
+                    (id_i, a)
+                } else {
+                    (id_j, a - NDOF)
+                };
                 accumulate(&mut mass, self.dof_terms(node_id, dof), mass_local[a]);
             }
         }
@@ -579,7 +602,11 @@ where
 
             let mut dof_terms = [DofTerms::empty(); ELEMENT_DOF];
             for (a, terms) in dof_terms.iter_mut().enumerate() {
-                let (node_id, dof) = if a < NDOF { (id_i, a) } else { (id_j, a - NDOF) };
+                let (node_id, dof) = if a < NDOF {
+                    (id_i, a)
+                } else {
+                    (id_j, a - NDOF)
+                };
                 *terms = self.dof_terms(node_id, dof);
             }
 
@@ -588,7 +615,11 @@ where
                     resistance[eq_a] += coeff_a * r_local[a];
                     for (b, terms_b) in dof_terms.iter().enumerate() {
                         for &(eq_b, coeff_b) in terms_b.iter() {
-                            triplets.push(Triplet::new(eq_a, eq_b, coeff_a * coeff_b * k_local[(a, b)]));
+                            triplets.push(Triplet::new(
+                                eq_a,
+                                eq_b,
+                                coeff_a * coeff_b * k_local[(a, b)],
+                            ));
                         }
                     }
                 }
@@ -638,7 +669,10 @@ where
     /// pattern's nodal + element reference load, each scaled by whatever
     /// `pattern_factor` computes for that pattern (its current factor, or
     /// its sensitivity — the only difference between the two callers).
-    fn assemble_load_with(&self, pattern_factor: impl Fn(&LoadPattern<NDOF, NId, E::Id, E::Load>) -> f64) -> DVector<f64> {
+    fn assemble_load_with(
+        &self,
+        pattern_factor: impl Fn(&LoadPattern<NDOF, NId, E::Id, E::Load>) -> f64,
+    ) -> DVector<f64> {
         let n = self.num_free_dofs;
         let mut load = DVector::<f64>::zeros(n);
 
@@ -649,7 +683,9 @@ where
             }
 
             for (node_id, _node) in self.nodes.iter() {
-                let Some(nodal_load) = pattern.nodal_load(node_id) else { continue };
+                let Some(nodal_load) = pattern.nodal_load(node_id) else {
+                    continue;
+                };
                 for (dof, &value) in nodal_load.iter().enumerate() {
                     for &(eq, coeff) in self.dof_terms(node_id, dof).iter() {
                         load[eq] += coeff * factor * value;
@@ -658,14 +694,20 @@ where
             }
 
             for (element_id, element) in self.elements.iter() {
-                let Some(element_load) = pattern.element_load(element_id) else { continue };
+                let Some(element_load) = pattern.element_load(element_id) else {
+                    continue;
+                };
                 let [id_i, id_j] = element.nodes();
                 let node_i = &self.nodes[id_i];
                 let node_j = &self.nodes[id_j];
                 let load_local = element.form_load_vector(node_i, node_j, Some(element_load));
 
                 for a in 0..ELEMENT_DOF {
-                    let (node_id, dof) = if a < NDOF { (id_i, a) } else { (id_j, a - NDOF) };
+                    let (node_id, dof) = if a < NDOF {
+                        (id_i, a)
+                    } else {
+                        (id_j, a - NDOF)
+                    };
                     for &(eq, coeff) in self.dof_terms(node_id, dof).iter() {
                         load[eq] += coeff * factor * load_local[a];
                     }
@@ -683,7 +725,10 @@ where
     /// multiplier on a single reference-load vector — each `LoadPattern`
     /// scales its own contribution internally (`assemble_reference_load`),
     /// so this is just their difference from internal resistance.
-    pub(crate) fn form_tangent_and_residual(&self, pseudo_time: f64) -> (SparseMatrix, DVector<f64>) {
+    pub(crate) fn form_tangent_and_residual(
+        &self,
+        pseudo_time: f64,
+    ) -> (SparseMatrix, DVector<f64>) {
         let (k, resistance) = self.assemble_tangent_and_resistance();
         let residual = self.assemble_reference_load(pseudo_time) - resistance;
         (k, residual)
@@ -929,7 +974,12 @@ impl Domain3 {
 
     /// `rigid_diaphragm` with an explicit diaphragm-plane normal — see this
     /// impl block's doc comment for the kinematics and scope.
-    pub fn rigid_diaphragm_about(&mut self, retained: Node3Id, constrained: &[Node3Id], normal: Axis3) {
+    pub fn rigid_diaphragm_about(
+        &mut self,
+        retained: Node3Id,
+        constrained: &[Node3Id],
+        normal: Axis3,
+    ) {
         let n = normal as usize;
         let a = (n + 1) % SPATIAL_NDIM;
         let b = (n + 2) % SPATIAL_NDIM;
@@ -943,7 +993,10 @@ impl Domain3 {
             self.affine_constraints.push(AffineConstraint {
                 retained,
                 constrained: c,
-                ties: vec![(a, vec![(a, 1.0), (rot_normal, -lever_b)]), (b, vec![(b, 1.0), (rot_normal, lever_a)])],
+                ties: vec![
+                    (a, vec![(a, 1.0), (rot_normal, -lever_b)]),
+                    (b, vec![(b, 1.0), (rot_normal, lever_a)]),
+                ],
             });
         }
     }
@@ -982,7 +1035,12 @@ mod domain3_tests {
         let area = 2.0;
         let e = 1000.0;
         let length = 5.0; // 3-4-5 triangle
-        domain.add_element(Element3::Truss3(Truss3::new(fixed, free, area, Material::Elastic { e })));
+        domain.add_element(Element3::Truss3(Truss3::new(
+            fixed,
+            free,
+            area,
+            Material::Elastic { e },
+        )));
 
         let force = 100.0;
         domain.load_node(free, SpatialDof::Ux as usize, force * 3.0 / 5.0);
@@ -992,7 +1050,9 @@ mod domain3_tests {
         assert_eq!(domain.num_free_dofs(), 2);
 
         let (k, residual) = domain.form_tangent_and_residual(1.0);
-        let du = SparseSolver::new().solve(&k, &residual).expect("well-posed system");
+        let du = SparseSolver::new()
+            .solve(&k, &residual)
+            .expect("well-posed system");
         domain.apply_displacement_increment(&du);
 
         let expected_elongation = force * length / (area * e);

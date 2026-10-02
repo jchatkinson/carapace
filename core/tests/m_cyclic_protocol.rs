@@ -1,4 +1,7 @@
-use carapace_core::analysis::{Algorithm, Analysis, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, Analysis, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+    TangentStrategy,
+};
 use carapace_core::model::{Domain, Element, Material, Node, NodeId, Truss, ZeroLength};
 
 /// Same `Truss` (k_t=50, elastic) + `ZeroLength`+`ElasticPP` (k_epp=100,
@@ -16,7 +19,12 @@ fn build_system() -> (Domain, NodeId) {
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
     domain.load_node(node_j, 0, 1.0);
 
-    domain.add_element(Element::Truss(Truss::new(node_i, node_j, e_area, Material::Elastic { e: e_modulus })));
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        e_area,
+        Material::Elastic { e: e_modulus },
+    )));
     domain.add_element(Element::ZeroLength(
         ZeroLength::new(node_i, node_j).with_material(0, Material::elastic_pp(e_epp, eyp)),
     ));
@@ -35,7 +43,10 @@ fn leg(analysis: &mut Analysis, node_j: NodeId, target: f64) -> f64 {
         dof: 0,
         increment: target - current,
     });
-    analysis.step().expect("cyclic protocol leg should converge").load_factor
+    analysis
+        .step()
+        .expect("cyclic protocol leg should converge")
+        .load_factor
 }
 
 /// Walks the controlled DOF from wherever it is to `target` in steps no
@@ -79,8 +90,14 @@ fn set_integrator_drives_a_cyclic_protocol_with_permanent_set_at_zero_displaceme
             dof: 0,
             increment: 0.0, // placeholder — `ramp_to` calls `set_integrator` before every step
         })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 20 })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 20,
+        })
         .build(domain);
 
     let step = 0.001; // a tenth of eyp — small enough to keep per-leg regime-crossing error negligible
@@ -90,23 +107,38 @@ fn set_integrator_drives_a_cyclic_protocol_with_permanent_set_at_zero_displaceme
     // spring's clamped yield force, F = k_t*0.03 + fy = 50*0.03 + 1.0 = 2.5).
     let peak = ramp_to(&mut analysis, node_j, 0.03, step);
     let u_peak = analysis.domain().node(node_j).displacement[0];
-    assert!((u_peak - 0.03).abs() < tol, "expected u=0.03 at peak, got {u_peak}");
+    assert!(
+        (u_peak - 0.03).abs() < tol,
+        "expected u=0.03 at peak, got {u_peak}"
+    );
     // A generous tolerance: exact only if every ~30 small legs landed
     // exactly on a plastic-branch commit; some accumulate a little
     // regime-boundary imprecision (see `ramp_to`'s doc comment) without
     // affecting the final *displacement* (self-corrected every leg).
-    assert!((peak - 2.5).abs() < 0.15, "expected peak force~2.5, got {peak}");
+    assert!(
+        (peak - 2.5).abs() < 0.15,
+        "expected peak force~2.5, got {peak}"
+    );
 
     // +0.03 -> -0.03 (through zero, well past yield in the other direction).
     let trough = ramp_to(&mut analysis, node_j, -0.03, step);
     let u_trough = analysis.domain().node(node_j).displacement[0];
-    assert!((u_trough - (-0.03)).abs() < tol, "expected u=-0.03 at trough, got {u_trough}");
-    assert!((trough - (-2.5)).abs() < 0.15, "expected trough force~-2.5, got {trough}");
+    assert!(
+        (u_trough - (-0.03)).abs() < tol,
+        "expected u=-0.03 at trough, got {u_trough}"
+    );
+    assert!(
+        (trough - (-2.5)).abs() < 0.15,
+        "expected trough force~-2.5, got {trough}"
+    );
 
     // -0.03 -> 0.0 (unloading from the most recent, negative-going yield).
     let residual_force = ramp_to(&mut analysis, node_j, 0.0, step);
     let u_final = analysis.domain().node(node_j).displacement[0];
-    assert!(u_final.abs() < tol, "expected u=0.0 after returning, got {u_final}");
+    assert!(
+        u_final.abs() < tol,
+        "expected u=0.0 after returning, got {u_final}"
+    );
 
     // A stateless (path-independent) material would give zero force at
     // zero displacement (the truss alone is zero at u=0, and a stateless

@@ -71,10 +71,13 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
 
     let (stress, tangent, min_strain, end_strain, unload_slope) = if strain < cstrain {
         // Further into compression: `reload()`.
-        let (mut stress, mut tangent, min_strain, end_strain, unload_slope) = if strain <= min_strain {
+        let (mut stress, mut tangent, min_strain, end_strain, unload_slope) = if strain
+            <= min_strain
+        {
             let new_min_strain = strain;
             let (stress, tangent) = concrete01_envelope(new_min_strain, fpc, epsc0, fpcu, epscu);
-            let (end_strain, unload_slope) = concrete01_unload(new_min_strain, stress, fpc, epsc0, epscu);
+            let (end_strain, unload_slope) =
+                concrete01_unload(new_min_strain, stress, fpc, epsc0, epscu);
             (stress, tangent, new_min_strain, end_strain, unload_slope)
         } else if strain <= end_strain {
             let tangent = unload_slope;
@@ -91,7 +94,13 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
 
         (stress, tangent, min_strain, end_strain, unload_slope)
     } else if temp_stress <= 0.0 {
-        (temp_stress, unload_slope, min_strain, end_strain, unload_slope)
+        (
+            temp_stress,
+            unload_slope,
+            min_strain,
+            end_strain,
+            unload_slope,
+        )
     } else {
         (0.0, 0.0, min_strain, end_strain, unload_slope)
     };
@@ -134,7 +143,13 @@ fn concrete01_envelope(strain: f64, fpc: f64, epsc0: f64, fpcu: f64, epscu: f64)
 
 /// `Concrete01::unload()`: the Karsan-Jirsa degrading unload-slope formula,
 /// given the new `min_strain` and the envelope stress just computed there.
-fn concrete01_unload(min_strain: f64, stress_at_min: f64, fpc: f64, epsc0: f64, epscu: f64) -> (f64, f64) {
+fn concrete01_unload(
+    min_strain: f64,
+    stress_at_min: f64,
+    fpc: f64,
+    epsc0: f64,
+    epscu: f64,
+) -> (f64, f64) {
     let mut temp_strain = min_strain;
     if temp_strain < epscu {
         temp_strain = epscu;
@@ -179,7 +194,10 @@ mod tests {
         let (stress, _tangent) = m.trial_stress_tangent(strain);
         let eta = strain / -0.002;
         let expected = -4.0 * (2.0 * eta - eta * eta);
-        assert!((stress - expected).abs() < 1e-9, "expected {expected}, got {stress}");
+        assert!(
+            (stress - expected).abs() < 1e-9,
+            "expected {expected}, got {stress}"
+        );
     }
 
     #[test]

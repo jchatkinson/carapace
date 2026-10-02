@@ -23,7 +23,14 @@ pub struct ElasticBeamColumn {
 }
 
 impl ElasticBeamColumn {
-    pub fn new(node_i: NodeId, node_j: NodeId, e: f64, a: f64, iz: f64, transform: GeomTransf) -> Self {
+    pub fn new(
+        node_i: NodeId,
+        node_j: NodeId,
+        e: f64,
+        a: f64,
+        iz: f64,
+        transform: GeomTransf,
+    ) -> Self {
         ElasticBeamColumn {
             node_i,
             node_j,
@@ -181,7 +188,15 @@ impl ElasticBeamColumn {
             let ea_l = self.e * self.a / l;
             let eiz_l = self.e * self.iz / l;
             let k_basic = SMatrix::<f64, 3, 3>::new(
-                ea_l, 0.0, 0.0, 0.0, 4.0 * eiz_l, 2.0 * eiz_l, 0.0, 2.0 * eiz_l, 4.0 * eiz_l,
+                ea_l,
+                0.0,
+                0.0,
+                0.0,
+                4.0 * eiz_l,
+                2.0 * eiz_l,
+                0.0,
+                2.0 * eiz_l,
+                4.0 * eiz_l,
             );
             let q = k_basic * transform.basic_deformation();
             return transform.local_resistance(&q);
@@ -279,7 +294,17 @@ pub struct ElasticBeamColumn3 {
 
 impl ElasticBeamColumn3 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(node_i: Node3Id, node_j: Node3Id, e: f64, g: f64, a: f64, j: f64, iy: f64, iz: f64, transform: GeomTransf3) -> Self {
+    pub fn new(
+        node_i: Node3Id,
+        node_j: Node3Id,
+        e: f64,
+        g: f64,
+        a: f64,
+        j: f64,
+        iy: f64,
+        iz: f64,
+        transform: GeomTransf3,
+    ) -> Self {
         ElasticBeamColumn3 {
             node_i,
             node_j,
@@ -416,12 +441,22 @@ impl ElasticBeamColumn3 {
         kg
     }
 
-    pub(super) fn form_tangent_and_resistance(&self, node_i: &Node3, node_j: &Node3) -> (SpatialElementMatrix, SpatialElementVector) {
+    pub(super) fn form_tangent_and_resistance(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+    ) -> (SpatialElementMatrix, SpatialElementVector) {
         let (length, r) = self.transform.local_axes(node_i, node_j);
         let t = GeomTransf3::rotation_matrix(&r);
         let k_local = self.local_elastic_stiffness(length);
 
-        let d_global = SpatialElementVector::from_iterator(node_i.displacement.iter().chain(node_j.displacement.iter()).copied());
+        let d_global = SpatialElementVector::from_iterator(
+            node_i
+                .displacement
+                .iter()
+                .chain(node_j.displacement.iter())
+                .copied(),
+        );
         let d_local = t * d_global;
 
         let resistance_local = k_local * d_local;
@@ -446,7 +481,13 @@ impl ElasticBeamColumn3 {
         let (length, r) = self.transform.local_axes(node_i, node_j);
         let t = GeomTransf3::rotation_matrix(&r);
         let k_local = self.local_elastic_stiffness(length);
-        let d_global = SpatialElementVector::from_iterator(node_i.displacement.iter().chain(node_j.displacement.iter()).copied());
+        let d_global = SpatialElementVector::from_iterator(
+            node_i
+                .displacement
+                .iter()
+                .chain(node_j.displacement.iter())
+                .copied(),
+        );
         k_local * (t * d_global)
     }
 
@@ -466,7 +507,13 @@ impl ElasticBeamColumn3 {
     /// negated here since a fixed-end restraint force is the negative of
     /// the equivalent nodal load it corresponds to), not just asserted by
     /// analogy to the planar case.
-    pub(super) fn form_load_vector(&self, node_i: &Node3, node_j: &Node3, wy: f64, wz: f64) -> SpatialElementVector {
+    pub(super) fn form_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        wy: f64,
+        wz: f64,
+    ) -> SpatialElementVector {
         if wy == 0.0 && wz == 0.0 {
             return SpatialElementVector::zeros();
         }
@@ -523,13 +570,26 @@ mod spatial_tests {
         let (e, g, a, j, iy, iz) = (30_000.0, 12_000.0, 20.0, 5.0, 400.0, 800.0);
         let length = 100.0;
         let transform = GeomTransf3::linear([0.0, 0.0, 1.0]);
-        let beam = ElasticBeamColumn3::new(Node3Id::default(), Node3Id::default(), e, g, a, j, iy, iz, transform);
+        let beam = ElasticBeamColumn3::new(
+            Node3Id::default(),
+            Node3Id::default(),
+            e,
+            g,
+            a,
+            j,
+            iy,
+            iz,
+            transform,
+        );
 
         let node_i = Node3::new([0.0, 0.0, 0.0]);
         let node_j = Node3::new([length, 0.0, 0.0]);
         let (geom_length, r) = beam.transform.local_axes(&node_i, &node_j);
         assert_eq!(geom_length, length);
-        assert!((r - Matrix3::identity()).norm() < 1e-12, "vec_xz=[0,0,1] with a member along x must give R = identity");
+        assert!(
+            (r - Matrix3::identity()).norm() < 1e-12,
+            "vec_xz=[0,0,1] with a member along x must give R = identity"
+        );
 
         let k_local = beam.local_elastic_stiffness(length);
 
@@ -539,7 +599,10 @@ mod spatial_tests {
         let (axial_force, fy, fz, torque) = (100.0, 50.0, 30.0, 20.0);
         // [ux, uy, uz, rx, ry, rz] at node_j; no applied end moments (my, mz).
         let f = SVector::<f64, 6>::from_row_slice(&[axial_force, fy, fz, torque, 0.0, 0.0]);
-        let d = k_free.lu().solve(&f).expect("k_free is nonsingular for a real prismatic section");
+        let d = k_free
+            .lu()
+            .solve(&f)
+            .expect("k_free is nonsingular for a real prismatic section");
 
         let expected_ux = axial_force * length / (e * a);
         let expected_uy = fy * length.powi(3) / (3.0 * e * iz);
@@ -549,12 +612,42 @@ mod spatial_tests {
         let expected_rx = torque * length / (g * j);
 
         let tol = 1e-9;
-        assert!((d[0] - expected_ux).abs() < tol, "axial: {} vs {}", d[0], expected_ux);
-        assert!((d[1] - expected_uy).abs() < tol, "z-bending deflection: {} vs {}", d[1], expected_uy);
-        assert!((d[5] - expected_rz).abs() < tol, "z-bending rotation: {} vs {}", d[5], expected_rz);
-        assert!((d[2] - expected_uz).abs() < tol, "y-bending deflection: {} vs {}", d[2], expected_uz);
-        assert!((d[4] - expected_ry).abs() < tol, "y-bending rotation: {} vs {}", d[4], expected_ry);
-        assert!((d[3] - expected_rx).abs() < tol, "torsion: {} vs {}", d[3], expected_rx);
+        assert!(
+            (d[0] - expected_ux).abs() < tol,
+            "axial: {} vs {}",
+            d[0],
+            expected_ux
+        );
+        assert!(
+            (d[1] - expected_uy).abs() < tol,
+            "z-bending deflection: {} vs {}",
+            d[1],
+            expected_uy
+        );
+        assert!(
+            (d[5] - expected_rz).abs() < tol,
+            "z-bending rotation: {} vs {}",
+            d[5],
+            expected_rz
+        );
+        assert!(
+            (d[2] - expected_uz).abs() < tol,
+            "y-bending deflection: {} vs {}",
+            d[2],
+            expected_uz
+        );
+        assert!(
+            (d[4] - expected_ry).abs() < tol,
+            "y-bending rotation: {} vs {}",
+            d[4],
+            expected_ry
+        );
+        assert!(
+            (d[3] - expected_rx).abs() < tol,
+            "torsion: {} vs {}",
+            d[3],
+            expected_rx
+        );
     }
 
     /// The same cantilever driven through the full `form_tangent_and_
@@ -570,7 +663,17 @@ mod spatial_tests {
         let node_i = Node3::new([0.0, 0.0, 0.0]);
         let node_j = Node3::new([3.0, 4.0, 12.0]); // length 13, skew in all three axes
         let transform = GeomTransf3::linear([1.0, 0.0, 0.0]);
-        let beam = ElasticBeamColumn3::new(Node3Id::default(), Node3Id::default(), e, g, a, j, iy, iz, transform);
+        let beam = ElasticBeamColumn3::new(
+            Node3Id::default(),
+            Node3Id::default(),
+            e,
+            g,
+            a,
+            j,
+            iy,
+            iz,
+            transform,
+        );
 
         let (length, r) = beam.transform.local_axes(&node_i, &node_j);
         assert!((length - 13.0).abs() < 1e-12);
@@ -595,7 +698,10 @@ mod spatial_tests {
         // Pure axial elongation should produce a pure axial force pair,
         // recoverable via the same projection `Truss3`'s skew test uses.
         let expected_axial_force = e * a * delta / length;
-        let axial_disp_of_force = resistance.fixed_rows::<3>(6).into_owned().dot(&r.row(0).transpose());
+        let axial_disp_of_force = resistance
+            .fixed_rows::<3>(6)
+            .into_owned()
+            .dot(&r.row(0).transpose());
         assert!((axial_disp_of_force - expected_axial_force).abs() < 1e-9);
     }
 }

@@ -166,16 +166,25 @@ mod tests {
 
     #[test]
     fn parallel_of_two_elastics_equals_one_elastic_with_summed_stiffness() {
-        let combined = Material::parallel(vec![Material::Elastic { e: 100.0 }, Material::Elastic { e: 50.0 }]);
+        let combined = Material::parallel(vec![
+            Material::Elastic { e: 100.0 },
+            Material::Elastic { e: 50.0 },
+        ]);
         let single = Material::Elastic { e: 150.0 };
-        assert_eq!(combined.trial_stress_tangent(0.01), single.trial_stress_tangent(0.01));
+        assert_eq!(
+            combined.trial_stress_tangent(0.01),
+            single.trial_stress_tangent(0.01)
+        );
     }
 
     #[test]
     fn parallel_history_is_independent_per_child() {
         // Two ElasticPP with different yield points in parallel: combined
         // response is the sum of each independently-clamped branch.
-        let combined = Material::parallel(vec![Material::elastic_pp(100.0, 0.01), Material::elastic_pp(50.0, 0.02)]);
+        let combined = Material::parallel(vec![
+            Material::elastic_pp(100.0, 0.01),
+            Material::elastic_pp(50.0, 0.02),
+        ]);
         let (stress, _tangent) = combined.trial_stress_tangent(0.05);
         // Both branches are well past yield: 100*0.01 + 50*0.02 = 2.0.
         assert!((stress - 2.0).abs() < 1e-9, "got {stress}");
@@ -183,36 +192,56 @@ mod tests {
 
     #[test]
     fn series_of_two_equal_elastics_halves_the_stiffness() {
-        let series = Material::series(vec![Material::Elastic { e: 100.0 }, Material::Elastic { e: 100.0 }]);
+        let series = Material::series(vec![
+            Material::Elastic { e: 100.0 },
+            Material::Elastic { e: 100.0 },
+        ]);
         let (stress, tangent) = series.trial_stress_tangent(0.02);
         // Two equal springs in series: combined stiffness = E/2, so for a
         // given total strain the stress equals a single spring of
         // stiffness 50 at that same total strain.
-        assert!((tangent - 50.0).abs() < 1e-6, "expected tangent 50, got {tangent}");
+        assert!(
+            (tangent - 50.0).abs() < 1e-6,
+            "expected tangent 50, got {tangent}"
+        );
         assert!((stress - 50.0 * 0.02).abs() < 1e-6, "got {stress}");
     }
 
     #[test]
     fn series_splits_strain_so_each_child_sees_equal_stress() {
-        let series = Material::series(vec![Material::Elastic { e: 100.0 }, Material::Elastic { e: 300.0 }]);
+        let series = Material::series(vec![
+            Material::Elastic { e: 100.0 },
+            Material::Elastic { e: 300.0 },
+        ]);
         let Material::Series { child_strains, .. } = series.commit(0.04) else {
             panic!()
         };
         // Equilibrium requires equal stress: 100*e0 = 300*e1, and
         // compatibility requires e0+e1=0.04 => e0=0.03, e1=0.01.
-        assert!((child_strains[0] - 0.03).abs() < 1e-6, "got {child_strains:?}");
-        assert!((child_strains[1] - 0.01).abs() < 1e-6, "got {child_strains:?}");
+        assert!(
+            (child_strains[0] - 0.03).abs() < 1e-6,
+            "got {child_strains:?}"
+        );
+        assert!(
+            (child_strains[1] - 0.01).abs() < 1e-6,
+            "got {child_strains:?}"
+        );
     }
 
     #[test]
     fn min_max_fails_permanently_once_strain_exits_bounds() {
         let m = Material::min_max(Material::Elastic { e: 100.0 }, -0.01, 0.01);
         let m = m.commit(0.02); // exceeds max_strain
-        let Material::MinMax { failed, .. } = m else { panic!() };
+        let Material::MinMax { failed, .. } = m else {
+            panic!()
+        };
         assert!(failed);
 
         let (stress, tangent) = m.trial_stress_tangent(0.0); // back within bounds
-        assert_eq!(stress, 0.0, "failed material must read zero stress even if strain re-enters bounds");
+        assert_eq!(
+            stress, 0.0,
+            "failed material must read zero stress even if strain re-enters bounds"
+        );
         assert!((tangent - 1.0e-8 * 100.0).abs() < 1e-12, "got {tangent}");
     }
 

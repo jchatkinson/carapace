@@ -413,7 +413,8 @@ fn add_zero_lengths(
     }
 
     let mut ids = Vec::with_capacity(table.node_i.len());
-    #[allow(clippy::needless_range_loop)] // parallel-indexes node_i/node_j/materials_by_row/friction_by_row
+    #[allow(clippy::needless_range_loop)]
+    // parallel-indexes node_i/node_j/materials_by_row/friction_by_row
     for i in 0..table.node_i.len() {
         let mut element = ZeroLength3::new(
             node_at(table.node_i[i], "zero_lengths")?,
@@ -456,7 +457,8 @@ fn add_zero_length_sections(
     }
 
     let mut ids = Vec::with_capacity(table.node_i.len());
-    #[allow(clippy::needless_range_loop)] // parallel-indexes node_i/node_j/fiber_section/materials_by_row
+    #[allow(clippy::needless_range_loop)]
+    // parallel-indexes node_i/node_j/fiber_section/materials_by_row
     for i in 0..table.node_i.len() {
         let section = FiberSection3::new(fiber_section_at(table.fiber_section[i])?);
         let mut element = ZeroLengthSection3::new(
@@ -465,8 +467,10 @@ fn add_zero_length_sections(
             section,
         );
         for &(dof, material_index) in &materials_by_row[i] {
-            element = element
-                .with_material(dof as usize, material_at(material_index, "zero_length_sections")?);
+            element = element.with_material(
+                dof as usize,
+                material_at(material_index, "zero_length_sections")?,
+            );
         }
         ids.push(domain.add_element(Element3::ZeroLengthSection3(element)));
     }
@@ -478,7 +482,9 @@ fn add_load_patterns(
     table: &super::tables::LoadPatternTable,
 ) -> Vec<LoadPatternId> {
     (0..table.series.len())
-        .map(|i| domain.add_load_pattern_scaled(load_series_of(&table.series[i]), table.scale_factor[i]))
+        .map(|i| {
+            domain.add_load_pattern_scaled(load_series_of(&table.series[i]), table.scale_factor[i])
+        })
         .collect()
 }
 

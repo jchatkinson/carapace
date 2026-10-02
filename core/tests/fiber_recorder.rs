@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
+};
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, Element, Fiber, ForceBeamColumn, Material, Node,
 };
@@ -13,7 +15,8 @@ use carapace_core::model::{
 /// strain `== eps0 == axial_disp/length` and stress `== e*eps0`.
 #[test]
 fn disp_beam_column_fiber_responses_match_hand_computed_strain_and_stress() {
-    let (e, area, iz, length, axial_load): (f64, f64, f64, f64, f64) = (30_000.0, 2.0, 1000.0, 100.0, 60.0);
+    let (e, area, iz, length, axial_load): (f64, f64, f64, f64, f64) =
+        (30_000.0, 2.0, 1000.0, 100.0, 60.0);
     let h = (iz / area).sqrt();
     let fibers = vec![
         Fiber::new(h, area / 2.0, Material::Elastic { e }),
@@ -35,9 +38,14 @@ fn disp_beam_column_fiber_responses_match_hand_computed_strain_and_stress() {
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
-    analysis.step().expect("elastic axial DispBeamColumn should solve");
+    analysis
+        .step()
+        .expect("elastic axial DispBeamColumn should solve");
 
     let expected_strain = axial_load / (e * area);
     let expected_stress = e * expected_strain;
@@ -49,8 +57,14 @@ fn disp_beam_column_fiber_responses_match_hand_computed_strain_and_stress() {
     for point in &responses {
         assert_eq!(point.len(), 2, "two fibers per section");
         for &(strain, stress) in point {
-            assert!((strain - expected_strain).abs() < 1e-9, "expected strain {expected_strain}, got {strain}");
-            assert!((stress - expected_stress).abs() < 1e-6, "expected stress {expected_stress}, got {stress}");
+            assert!(
+                (strain - expected_strain).abs() < 1e-9,
+                "expected strain {expected_strain}, got {strain}"
+            );
+            assert!(
+                (stress - expected_stress).abs() < 1e-6,
+                "expected stress {expected_stress}, got {stress}"
+            );
         }
     }
 }
@@ -65,7 +79,8 @@ fn disp_beam_column_fiber_responses_match_hand_computed_strain_and_stress() {
 /// data.
 #[test]
 fn force_beam_column_fiber_responses_are_internally_consistent_with_committed_section_state() {
-    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) = (30_000.0, 2.0, 1000.0, 100.0, -10.0);
+    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) =
+        (30_000.0, 2.0, 1000.0, 100.0, -10.0);
     let h = (iz / area).sqrt();
     let fibers = vec![
         Fiber::new(h, area / 2.0, Material::elastic_pp(e, 0.01)),
@@ -86,10 +101,18 @@ fn force_beam_column_fiber_responses_are_internally_consistent_with_committed_se
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-10,
+            max_iter: 30,
+        })
         .build(domain);
-    analysis.step().expect("elastic-range force-beam-column cantilever should converge");
+    analysis
+        .step()
+        .expect("elastic-range force-beam-column cantilever should converge");
 
     let responses = analysis
         .domain()
@@ -97,7 +120,13 @@ fn force_beam_column_fiber_responses_are_internally_consistent_with_committed_se
         .expect("ForceBeamColumn should have fiber responses");
 
     for point in &responses {
-        let axial: f64 = point.iter().map(|&(_strain, stress)| stress * (area / 2.0)).sum();
-        assert!(axial.abs() < 1e-6, "expected ~0 net axial force, got {axial}");
+        let axial: f64 = point
+            .iter()
+            .map(|&(_strain, stress)| stress * (area / 2.0))
+            .sum();
+        assert!(
+            axial.abs() < 1e-6,
+            "expected ~0 net axial force, got {axial}"
+        );
     }
 }

@@ -173,7 +173,8 @@ impl Trial {
             i += 1;
         }
         if k == 0.0 {
-            k = (self.pos_damgd_stress[5] - self.pos_damgd_stress[4]) / (p.envlp_pos_strain[5] - p.envlp_pos_strain[4]);
+            k = (self.pos_damgd_stress[5] - self.pos_damgd_stress[4])
+                / (p.envlp_pos_strain[5] - p.envlp_pos_strain[4]);
             f = self.pos_damgd_stress[5] + k * (u - p.envlp_pos_strain[5]);
         }
         f
@@ -191,7 +192,8 @@ impl Trial {
             i += 1;
         }
         if k == 0.0 {
-            k = (self.pos_damgd_stress[5] - self.pos_damgd_stress[4]) / (p.envlp_pos_strain[5] - p.envlp_pos_strain[4]);
+            k = (self.pos_damgd_stress[5] - self.pos_damgd_stress[4])
+                / (p.envlp_pos_strain[5] - p.envlp_pos_strain[4]);
         }
         k
     }
@@ -210,7 +212,8 @@ impl Trial {
             i += 1;
         }
         if k == 0.0 {
-            k = (self.neg_damgd_stress[4] - self.neg_damgd_stress[5]) / (p.envlp_neg_strain[4] - p.envlp_neg_strain[5]);
+            k = (self.neg_damgd_stress[4] - self.neg_damgd_stress[5])
+                / (p.envlp_neg_strain[4] - p.envlp_neg_strain[5]);
             f = self.neg_damgd_stress[5] + k * (u - p.envlp_neg_strain[5]);
         }
         f
@@ -228,7 +231,8 @@ impl Trial {
             i += 1;
         }
         if k == 0.0 {
-            k = (self.neg_damgd_stress[4] - self.neg_damgd_stress[5]) / (p.envlp_neg_strain[4] - p.envlp_neg_strain[5]);
+            k = (self.neg_damgd_stress[4] - self.neg_damgd_stress[5])
+                / (p.envlp_neg_strain[4] - p.envlp_neg_strain[5]);
         }
         k
     }
@@ -296,7 +300,11 @@ impl Material {
         let k_pos = stress1p / strain1p;
         let k_neg = stress1n / strain1n;
         let k = if k_pos > k_neg { k_pos } else { k_neg };
-        let u = if strain1p > -strain1n { 1e-4 * strain1p } else { -1e-4 * strain1n };
+        let u = if strain1p > -strain1n {
+            1e-4 * strain1p
+        } else {
+            -1e-4 * strain1n
+        };
 
         let mut envlp_pos_strain = [u, strain1p, strain2p, strain3p, strain4p, 0.0];
         let mut envlp_pos_stress = [u * k, stress1p, stress2p, stress3p, stress4p, 0.0];
@@ -324,15 +332,21 @@ impl Material {
 
         let mut energy_pos = 0.5 * envlp_pos_strain[0] * envlp_pos_stress[0];
         for jt in 0..4 {
-            energy_pos +=
-                0.5 * (envlp_pos_stress[jt] + envlp_pos_stress[jt + 1]) * (envlp_pos_strain[jt + 1] - envlp_pos_strain[jt]);
+            energy_pos += 0.5
+                * (envlp_pos_stress[jt] + envlp_pos_stress[jt + 1])
+                * (envlp_pos_strain[jt + 1] - envlp_pos_strain[jt]);
         }
         let mut energy_neg = 0.5 * envlp_neg_strain[0] * envlp_neg_stress[0];
         for jy in 0..4 {
-            energy_neg +=
-                0.5 * (envlp_neg_stress[jy] + envlp_neg_stress[jy + 1]) * (envlp_neg_strain[jy + 1] - envlp_neg_strain[jy]);
+            energy_neg += 0.5
+                * (envlp_neg_stress[jy] + envlp_neg_stress[jy + 1])
+                * (envlp_neg_strain[jy + 1] - envlp_neg_strain[jy]);
         }
-        let max_energy = if energy_pos > energy_neg { energy_pos } else { energy_neg };
+        let max_energy = if energy_pos > energy_neg {
+            energy_pos
+        } else {
+            energy_neg
+        };
         let energy_capacity = gamma_e * max_energy;
 
         // `Pinching4Material::revertToStart`.
@@ -431,8 +445,14 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
             let tangent = p.envlp_pos_stress[0] / p.envlp_pos_strain[0];
             (tangent * strain, tangent)
         }
-        Pinching4State::Positive => (t.pos_envlp_stress(&p, strain), t.pos_envlp_tangent(&p, strain)),
-        Pinching4State::Negative => (t.neg_envlp_stress(&p, strain), t.neg_envlp_tangent(&p, strain)),
+        Pinching4State::Positive => (
+            t.pos_envlp_stress(&p, strain),
+            t.pos_envlp_tangent(&p, strain),
+        ),
+        Pinching4State::Negative => (
+            t.neg_envlp_stress(&p, strain),
+            t.neg_envlp_tangent(&p, strain),
+        ),
         Pinching4State::Trilinear3 => {
             let kunload = if t.hgh_strain < 0.0 {
                 t.k_elastic_neg_damgd
@@ -471,11 +491,22 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     };
     t.energy = p.energy + denergy;
 
-    update_dmg(&mut t, &p, strain, dstrain, elastic_strain_energy, p.n_cycle);
+    update_dmg(
+        &mut t,
+        &p,
+        strain,
+        dstrain,
+        elastic_strain_energy,
+        p.n_cycle,
+    );
 
     // `commitState`: `CstrainRate` keeps its previous value across a
     // zero-increment step rather than latching zero.
-    let strain_rate = if dstrain > 1e-12 || dstrain < -1e-12 { dstrain } else { p.strain_rate };
+    let strain_rate = if dstrain > 1e-12 || dstrain < -1e-12 {
+        dstrain
+    } else {
+        p.strain_rate
+    };
 
     (
         stress,
@@ -519,7 +550,14 @@ fn scaled(v: &[f64; 6], factor: f64) -> [f64; 6] {
 /// the sign of `du`. Note that `du == 0.0` always sets `cid`, which is
 /// harmless: every inner branch that could fire requires a strictly signed
 /// `du`, except state 0's, which tests the bracket itself.
-fn getstate(t: &mut Trial, p: &Pinching4Fields, u: f64, du: f64, u_max_damgd: f64, u_min_damgd: f64) {
+fn getstate(
+    t: &mut Trial,
+    p: &Pinching4Fields,
+    u: f64,
+    du: f64,
+    u_max_damgd: f64,
+    u_min_damgd: f64,
+) {
     // `CstrainRate`/`CgammaF`/`CgammaK`/`Cstrain`/`Cstress` are read from
     // the committed state; `t.*` are the trial values being built.
     let c_strain = p.strain;
@@ -679,7 +717,13 @@ fn getstate(t: &mut Trial, p: &Pinching4Fields, u: f64, du: f64, u_max_damgd: f6
 /// several places where the "same" check is spelled differently between
 /// `getState3` and `getState4` — those asymmetries are in the source and
 /// are deliberately preserved rather than reconciled.
-fn get_state3(strain: &mut [f64; 4], stress: &mut [f64; 4], kunload: f64, t: &Trial, p: &Pinching4Fields) {
+fn get_state3(
+    strain: &mut [f64; 4],
+    stress: &mut [f64; 4],
+    kunload: f64,
+    t: &Trial,
+    p: &Pinching4Fields,
+) {
     let kmax = if kunload > t.k_elastic_neg_damgd {
         kunload
     } else {
@@ -739,7 +783,9 @@ fn get_state3(strain: &mut [f64; 4], stress: &mut [f64; 4], kunload: f64, t: &Tr
                 strain[2] = strain[0] + 0.67 * du;
                 stress[1] = stress[0] + 0.33 * df;
                 stress[2] = stress[0] + 0.67 * df;
-            } else if (strain[2] < strain[1]) || ((stress[2] - stress[1]) / (strain[2] - strain[1]) < 0.0) {
+            } else if (strain[2] < strain[1])
+                || ((stress[2] - stress[1]) / (strain[2] - strain[1]) < 0.0)
+            {
                 if strain[2] < 0.0 {
                     // Point 3 should be along a line between 2 and 4.
                     let du = strain[3] - strain[1];
@@ -754,7 +800,11 @@ fn get_state3(strain: &mut [f64; 4], stress: &mut [f64; 4], kunload: f64, t: &Tr
                     stress[1] = stress[0] + 0.5 * df;
                 } else {
                     let avgforce = 0.5 * (stress[2] + stress[1]);
-                    let dfr = if avgforce < 0.0 { -avgforce / 100.0 } else { avgforce / 100.0 };
+                    let dfr = if avgforce < 0.0 {
+                        -avgforce / 100.0
+                    } else {
+                        avgforce / 100.0
+                    };
                     let slope12 = (stress[1] - stress[0]) / (strain[1] - strain[0]);
                     let slope34 = (stress[3] - stress[2]) / (strain[3] - strain[2]);
                     stress[1] = avgforce - dfr;
@@ -789,7 +839,13 @@ fn get_state3(strain: &mut [f64; 4], stress: &mut [f64; 4], kunload: f64, t: &Tr
 /// and merging them would obscure the line-by-line correspondence this
 /// whole cascade depends on for reviewability.
 #[allow(clippy::if_same_then_else)]
-fn get_state4(strain: &mut [f64; 4], stress: &mut [f64; 4], kunload: f64, t: &Trial, p: &Pinching4Fields) {
+fn get_state4(
+    strain: &mut [f64; 4],
+    stress: &mut [f64; 4],
+    kunload: f64,
+    t: &Trial,
+    p: &Pinching4Fields,
+) {
     let kmax = if kunload > t.k_elastic_pos_damgd {
         kunload
     } else {
@@ -850,7 +906,9 @@ fn get_state4(strain: &mut [f64; 4], stress: &mut [f64; 4], kunload: f64, t: &Tr
                 strain[2] = strain[0] + 0.67 * du;
                 stress[1] = stress[0] + 0.33 * df;
                 stress[2] = stress[0] + 0.67 * df;
-            } else if (strain[2] < strain[1]) || ((stress[2] - stress[1]) / (strain[2] - strain[1]) < 0.0) {
+            } else if (strain[2] < strain[1])
+                || ((stress[2] - stress[1]) / (strain[2] - strain[1]) < 0.0)
+            {
                 if strain[1] > 0.0 {
                     // Point 2 should be along a line between 1 and 3.
                     let du = strain[2] - strain[0];
@@ -865,7 +923,11 @@ fn get_state4(strain: &mut [f64; 4], stress: &mut [f64; 4], kunload: f64, t: &Tr
                     stress[2] = stress[1] + 0.5 * df;
                 } else {
                     let avgforce = 0.5 * (stress[2] + stress[1]);
-                    let dfr = if avgforce < 0.0 { -avgforce / 100.0 } else { avgforce / 100.0 };
+                    let dfr = if avgforce < 0.0 {
+                        -avgforce / 100.0
+                    } else {
+                        avgforce / 100.0
+                    };
                     let slope12 = (stress[1] - stress[0]) / (strain[1] - strain[0]);
                     let slope34 = (stress[3] - stress[2]) / (strain[3] - strain[2]);
                     stress[1] = avgforce - dfr;
@@ -985,7 +1047,11 @@ fn update_dmg(
     elastic_strain_energy: f64,
     c_n_cycle: f64,
 ) {
-    let umax_abs = if t.max_dmnd > -t.min_dmnd { t.max_dmnd } else { -t.min_dmnd };
+    let umax_abs = if t.max_dmnd > -t.min_dmnd {
+        t.max_dmnd
+    } else {
+        -t.min_dmnd
+    };
     let uult_abs = if p.envlp_pos_strain[4] > -p.envlp_neg_strain[4] {
         p.envlp_pos_strain[4]
     } else {
@@ -1012,8 +1078,16 @@ fn update_dmg(
         }
 
         let gamma_k_lim_env = gamma_k_lim_env(t, p);
-        let k1 = if t.gamma_k < p.gamma_k_limit { t.gamma_k } else { p.gamma_k_limit };
-        t.gamma_k = if k1 < gamma_k_lim_env { k1 } else { gamma_k_lim_env };
+        let k1 = if t.gamma_k < p.gamma_k_limit {
+            t.gamma_k
+        } else {
+            p.gamma_k_limit
+        };
+        t.gamma_k = if k1 < gamma_k_lim_env {
+            k1
+        } else {
+            gamma_k_lim_env
+        };
         if t.gamma_d >= p.gamma_d_limit {
             t.gamma_d = p.gamma_d_limit;
         }
@@ -1047,7 +1121,11 @@ fn gamma_k_lim_env(t: &Trial, p: &Pinching4Fields) -> f64 {
     } else {
         kmin_n / p.k_elastic_neg
     };
-    if 0.0 > (1.0 - kmin) { 0.0 } else { 1.0 - kmin }
+    if 0.0 > (1.0 - kmin) {
+        0.0
+    } else {
+        1.0 - kmin
+    }
 }
 
 #[cfg(test)]
@@ -1068,8 +1146,35 @@ mod tests {
     /// these tests) hand-computable.
     fn pinching4_test_material(r_disp: f64, r_force: f64, u_force: f64) -> Material {
         Material::pinching4(
-            10.0, 0.01, 15.0, 0.02, 17.0, 0.03, 10.0, 0.04, -10.0, -0.01, -15.0, -0.02, -17.0, -0.03, -10.0, -0.04,
-            r_disp, r_force, u_force, r_disp, r_force, u_force, [0.0; 4], 0.0, [0.0; 4], 0.0, [0.0; 4], 0.0, 10.0,
+            10.0,
+            0.01,
+            15.0,
+            0.02,
+            17.0,
+            0.03,
+            10.0,
+            0.04,
+            -10.0,
+            -0.01,
+            -15.0,
+            -0.02,
+            -17.0,
+            -0.03,
+            -10.0,
+            -0.04,
+            r_disp,
+            r_force,
+            u_force,
+            r_disp,
+            r_force,
+            u_force,
+            [0.0; 4],
+            0.0,
+            [0.0; 4],
+            0.0,
+            [0.0; 4],
+            0.0,
+            10.0,
             Pinching4DmgCyc::EnergyBased,
         )
     }
@@ -1112,8 +1217,18 @@ mod tests {
         let m = pinching4_test_material(0.2, 0.4, 0.05).commit(0.005);
 
         let close = |got: (f64, f64), want: (f64, f64)| {
-            assert!((got.0 - want.0).abs() < 1e-9, "stress: got {}, want {}", got.0, want.0);
-            assert!((got.1 - want.1).abs() < 1e-9, "tangent: got {}, want {}", got.1, want.1);
+            assert!(
+                (got.0 - want.0).abs() < 1e-9,
+                "stress: got {}, want {}",
+                got.0,
+                want.0
+            );
+            assert!(
+                (got.1 - want.1).abs() < 1e-9,
+                "tangent: got {}, want {}",
+                got.1,
+                want.1
+            );
         };
 
         close(m.trial_stress_tangent(0.005), (5.0, 1000.0));
@@ -1154,7 +1269,9 @@ mod tests {
     /// `(-0.01,-10) -> (-0.002,-4) -> (0.00415,-0.85) -> (0.02,15)`.
     #[test]
     fn pinching4_reloads_along_a_clean_trilinear_path_after_a_reversal() {
-        let m = pinching4_test_material(0.2, 0.4, 0.05).commit(0.005).commit(0.02);
+        let m = pinching4_test_material(0.2, 0.4, 0.05)
+            .commit(0.005)
+            .commit(0.02);
 
         // On the first segment of the path: slope (-4+10)/(-0.002+0.01) =
         // 750, so stress = -10 + 0.005*750 = -6.25.
@@ -1190,7 +1307,9 @@ mod tests {
     /// `(-0.01,-10) -> (-0.0001,-1.75) -> (0.0101, 6.75) -> (0.02, 15)`.
     #[test]
     fn pinching4_falls_back_to_a_linear_path_when_the_reload_segment_is_too_stiff() {
-        let m = pinching4_test_material(0.05, 0.9, 0.05).commit(0.005).commit(0.02);
+        let m = pinching4_test_material(0.05, 0.9, 0.05)
+            .commit(0.005)
+            .commit(0.02);
 
         // First segment of the redrawn path: from (-0.01,-10) to
         // (-0.0001,-1.75), slope 8.25/0.0099 = 2500/3.
@@ -1231,11 +1350,19 @@ mod tests {
         assert!((f.hgh_state_strain - 0.02).abs() < 1e-12);
         // ...anchored at the stress the state-3 path had reached there
         // (-6.25, the value test 3 hand-derived).
-        assert!((f.low_state_stress - -6.25).abs() < 1e-9, "got {}", f.low_state_stress);
+        assert!(
+            (f.low_state_stress - -6.25).abs() < 1e-9,
+            "got {}",
+            f.low_state_stress
+        );
         // ...and at the *damaged* positive envelope stress at that peak
         // demand, 15 (undamaged here). Evaluating at the top of the
         // bracket walks the whole state-4 path and lands exactly there.
-        assert!((f.hgh_state_stress - 15.0).abs() < 1e-9, "got {}", f.hgh_state_stress);
+        assert!(
+            (f.hgh_state_stress - 15.0).abs() < 1e-9,
+            "got {}",
+            f.hgh_state_stress
+        );
         let (stress, _) = m.trial_stress_tangent(0.02);
         assert!((stress - 15.0).abs() < 1e-9, "got {stress}");
     }

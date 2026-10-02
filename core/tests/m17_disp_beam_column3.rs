@@ -1,6 +1,9 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{
-    BeamIntegration, Domain3, DispBeamColumn3, ElasticBeamColumn3, Element3, Fiber3, GeomTransf3, Material, Node3, SpatialDof,
+    BeamIntegration, DispBeamColumn3, Domain3, ElasticBeamColumn3, Element3, Fiber3, GeomTransf3,
+    Material, Node3, SpatialDof,
 };
 
 /// M17 acceptance (spatial-architecture plan): `DispBeamColumn3` (biaxial
@@ -17,7 +20,8 @@ use carapace_core::model::{
 /// integrates the (at most quadratic) integrand exactly.
 #[test]
 fn four_corner_fiber_section_matches_elastic_beam_column3_exactly_in_both_planes() {
-    let (e, g, area, iy, iz, j, length): (f64, f64, f64, f64, f64, f64, f64) = (30_000.0, 12_000.0, 4.0, 500.0, 2000.0, 50.0, 100.0);
+    let (e, g, area, iy, iz, j, length): (f64, f64, f64, f64, f64, f64, f64) =
+        (30_000.0, 12_000.0, 4.0, 500.0, 2000.0, 50.0, 100.0);
     let (fy, fz, torque, axial) = (-10.0, -6.0, 20.0, 500.0);
 
     let hz = (iy / area).sqrt();
@@ -62,9 +66,14 @@ fn four_corner_fiber_section_matches_elastic_beam_column3_exactly_in_both_planes
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
             .algorithm(Algorithm::Linear)
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            })
             .build(domain);
-        analysis.step().expect("cantilever DispBeamColumn3 should solve");
+        analysis
+            .step()
+            .expect("cantilever DispBeamColumn3 should solve");
         analysis.domain().node(node_j).displacement
     };
 
@@ -100,9 +109,14 @@ fn four_corner_fiber_section_matches_elastic_beam_column3_exactly_in_both_planes
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
             .algorithm(Algorithm::Linear)
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            })
             .build(domain);
-        analysis.step().expect("cantilever ElasticBeamColumn3 should solve");
+        analysis
+            .step()
+            .expect("cantilever ElasticBeamColumn3 should solve");
         analysis.domain().node(node_j).displacement
     };
 

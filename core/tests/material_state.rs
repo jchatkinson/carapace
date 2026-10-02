@@ -1,4 +1,7 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator,
+    TangentStrategy,
+};
 use carapace_core::model::{Domain, Element, Material, Node, Truss, ZeroLength};
 
 /// Pre-M7 foundational work: `Material`'s trial/commit split (see its doc
@@ -36,7 +39,12 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
     domain.load_node(node_j, 0, 1.0);
 
-    domain.add_element(Element::Truss(Truss::new(node_i, node_j, e_area, Material::Elastic { e: e_modulus })));
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        e_area,
+        Material::Elastic { e: e_modulus },
+    )));
     domain.add_element(Element::ZeroLength(
         ZeroLength::new(node_i, node_j).with_material(0, Material::elastic_pp(e_epp, eyp)),
     ));
@@ -44,7 +52,10 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 5.0 })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,
@@ -52,7 +63,9 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
         .build(domain);
 
     // Step 1: load 0 -> 5, past yield.
-    analysis.step().expect("step 1 (past yield) should converge");
+    analysis
+        .step()
+        .expect("step 1 (past yield) should converge");
     let u1 = analysis.domain().node(node_j).displacement[0];
     assert!((u1 - 0.08).abs() < 1e-9, "expected u1=0.08, got {u1}");
 
@@ -69,17 +82,25 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
     let mut analysis2 = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 3.0 })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,
         })
         .build(analysis.domain().clone());
 
-    analysis2.step().expect("step 2 (partial unload) should converge");
+    analysis2
+        .step()
+        .expect("step 2 (partial unload) should converge");
     let u2 = analysis2.domain().node(node_j).displacement[0];
     let expected = 1.0 / 15.0;
-    assert!((u2 - expected).abs() < 1e-9, "expected u2={expected} (real plasticity), got {u2}");
+    assert!(
+        (u2 - expected).abs() < 1e-9,
+        "expected u2={expected} (real plasticity), got {u2}"
+    );
 
     // The wrong (path-independent) answer a stateless model would give,
     // named here only to make the contrast explicit — not asserted against.
@@ -99,20 +120,37 @@ fn failed_step_leaves_domain_unchanged() {
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
     let node_j = domain.add_node(Node::new([100.0, 0.0]).fix(1).fix(2));
     domain.load_node(node_j, 0, 50.0);
-    domain.add_element(Element::Truss(Truss::new(node_i, node_j, 2.0, Material::Elastic { e: 30000.0 })));
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        2.0,
+        Material::Elastic { e: 30000.0 },
+    )));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 0 })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 0,
+        })
         .build(domain);
 
     let before = analysis.domain().node(node_j).displacement[0];
     let result = analysis.step();
 
-    assert!(matches!(result, Err(AnalysisError::FailedToConverge { step: 1 })));
+    assert!(matches!(
+        result,
+        Err(AnalysisError::FailedToConverge { step: 1 })
+    ));
     let after = analysis.domain().node(node_j).displacement[0];
-    assert_eq!(before, after, "a failed step must not leave displacement partially applied");
+    assert_eq!(
+        before, after,
+        "a failed step must not leave displacement partially applied"
+    );
     assert_eq!(before, 0.0);
 }

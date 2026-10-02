@@ -107,10 +107,7 @@ pub enum StageSpec {
     /// caller's step budget (`decode.rs`'s `compile_stages` hardcodes
     /// `steps: 1` for it). `modes` is the number of lowest-frequency modes
     /// to compute (`1..=free_dof_count`).
-    Modal {
-        id: String,
-        modes: u32,
-    },
+    Modal { id: String, modes: u32 },
     /// Newmark-beta time-history analysis (`core::TransientAnalysis`,
     /// fixed at the unconditionally-stable "average acceleration"
     /// parameters — see its own doc comment). `steps` fixed-size `dt`
@@ -248,16 +245,32 @@ pub struct SequenceSpec {
     rename_all_fields = "camelCase"
 )]
 pub enum RecorderSpec3 {
-    NodeDisp { node: u32, dof: u8 },
-    NodeVel { node: u32, dof: u8 },
-    NodeAccel { node: u32, dof: u8 },
+    NodeDisp {
+        node: u32,
+        dof: u8,
+    },
+    NodeVel {
+        node: u32,
+        dof: u8,
+    },
+    NodeAccel {
+        node: u32,
+        dof: u8,
+    },
     ElementForce {
         element_kind: ElementKind3,
         element_index: u32,
         component: u8,
     },
-    ModeShape { mode: u32, node: u32, dof: u8 },
-    Reaction { node: u32, dof: u8 },
+    ModeShape {
+        mode: u32,
+        node: u32,
+        dof: u8,
+    },
+    Reaction {
+        node: u32,
+        dof: u8,
+    },
     Fiber {
         element_kind: ElementKind3,
         element_index: u32,

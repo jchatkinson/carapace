@@ -28,7 +28,9 @@ impl SparseSolver {
     /// is a fully owned value (no lifetime tied back to `k`), so the result
     /// outlives the matrix it was formed from — see `SparseFactorization`.
     pub fn factor(&self, k: &SparseMatrix) -> Result<SparseFactorization, AnalysisError> {
-        Ok(SparseFactorization(k.sp_lu().map_err(|_| AnalysisError::SingularSystem)?))
+        Ok(SparseFactorization(
+            k.sp_lu().map_err(|_| AnalysisError::SingularSystem)?,
+        ))
     }
 
     /// Factor-then-solve in one call — for `Algorithm::Linear` and anywhere

@@ -332,7 +332,9 @@ impl Material {
             // slope, not `stress1p/strain1p` directly (they're equal only
             // when the positive side is the stiffer of the two).
             Material::Pinching4(p) => p.envlp_pos_stress[0] / p.envlp_pos_strain[0],
-            Material::Parallel(children) => children.iter().map(|(m, f)| f * m.initial_tangent()).sum(),
+            Material::Parallel(children) => {
+                children.iter().map(|(m, f)| f * m.initial_tangent()).sum()
+            }
             Material::Series { children, .. } => {
                 let total_flex: f64 = children.iter().map(|m| 1.0 / m.initial_tangent()).sum();
                 if total_flex.abs() > 1e-12 {
@@ -352,7 +354,9 @@ impl Material {
     pub(crate) fn evaluate(&self, strain: f64) -> (f64, f64, Material) {
         match self {
             Material::Elastic { e } => elastic_like::evaluate_elastic(*e, strain),
-            Material::ElasticPP { e, eyp, ep } => elastic_like::evaluate_elastic_pp(*e, *eyp, *ep, strain),
+            Material::ElasticPP { e, eyp, ep } => {
+                elastic_like::evaluate_elastic_pp(*e, *eyp, *ep, strain)
+            }
             Material::Gap { e, gap } => elastic_like::evaluate_gap(*e, *gap, strain),
             Material::Ent { e } => elastic_like::evaluate_ent(*e, strain),
             Material::Steel01 { .. } => steel01::evaluate(self, strain),

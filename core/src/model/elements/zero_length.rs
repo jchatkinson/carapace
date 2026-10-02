@@ -1,7 +1,8 @@
 use nalgebra::{SMatrix, SVector};
 
 use super::super::{
-    FiberSection, FiberSection3, Material, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, SPATIAL_NDF,
+    FiberSection, FiberSection3, Material, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF,
+    SPATIAL_NDF,
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
@@ -58,7 +59,14 @@ pub struct Friction {
 
 impl Friction {
     pub fn new(normal_dof: usize, shear_dof: usize, mu: f64, k0: f64, b: f64) -> Self {
-        Friction { normal_dof, shear_dof, mu, k0, b, slip: 0.0 }
+        Friction {
+            normal_dof,
+            shear_dof,
+            mu,
+            k0,
+            b,
+            slip: 0.0,
+        }
     }
 
     /// `(shear_force, d(force)/d(shear_relative), d(force)/d(normal_force),
@@ -105,12 +113,24 @@ pub struct Friction3 {
 
 impl Friction3 {
     pub fn new(normal_dof: usize, shear_dofs: [usize; 2], mu: f64, k0: f64, b: f64) -> Self {
-        Friction3 { normal_dof, shear_dofs, mu, k0, b, slip: [0.0, 0.0] }
+        Friction3 {
+            normal_dof,
+            shear_dofs,
+            mu,
+            k0,
+            b,
+            slip: [0.0, 0.0],
+        }
     }
 
     /// Runs `Friction::evaluate`'s return map independently for shear axis
     /// `i` (`0` or `1`) against the shared normal force.
-    fn evaluate(&self, axis: usize, normal_force: f64, shear_relative: f64) -> (f64, f64, f64, f64) {
+    fn evaluate(
+        &self,
+        axis: usize,
+        normal_force: f64,
+        shear_relative: f64,
+    ) -> (f64, f64, f64, f64) {
         let leg = Friction {
             normal_dof: self.normal_dof,
             shear_dof: self.shear_dofs[axis],
@@ -180,7 +200,10 @@ impl ZeroLength {
         &self,
         node_i: &Node,
         node_j: &Node,
-    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
+    ) -> (
+        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
+        SVector<f64, ELEMENT_DOF>,
+    ) {
         let mut k = SMatrix::<f64, ELEMENT_DOF, ELEMENT_DOF>::zeros();
         let mut resistance = SVector::<f64, ELEMENT_DOF>::zeros();
 
@@ -202,8 +225,11 @@ impl ZeroLength {
         }
 
         if let Some(fr) = &self.friction {
-            let normal_material = self.materials[fr.normal_dof].as_ref().expect("friction needs a normal-direction material");
-            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_material = self.materials[fr.normal_dof]
+                .as_ref()
+                .expect("friction needs a normal-direction material");
+            let normal_rel =
+                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
             let (normal_force, normal_tangent) = normal_material.trial_stress_tangent(normal_rel);
             let shear_rel = node_j.displacement[fr.shear_dof] - node_i.displacement[fr.shear_dof];
             let (force, dv_dshear, dv_dnormal, _) = fr.evaluate(normal_force, shear_rel);
@@ -218,7 +244,8 @@ impl ZeroLength {
             // Only a `b_v * b_nᵀ` block, not its transpose — `k` is not
             // symmetric in general. Fine here: the solver uses a general
             // sparse LU, not a symmetric-only factorization.
-            k += dv_dshear * (b_v * b_v.transpose()) + (dv_dnormal * normal_tangent) * (b_v * b_n.transpose());
+            k += dv_dshear * (b_v * b_v.transpose())
+                + (dv_dnormal * normal_tangent) * (b_v * b_n.transpose());
             resistance += force * b_v;
         }
 
@@ -239,8 +266,13 @@ impl ZeroLength {
             // reproduces the same force whether read just before or just
             // after its own `commit()`, so this ordering is safe, but
             // committing it a second time from here would not be.
-            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
-            let normal_force = self.materials[fr.normal_dof].as_ref().unwrap().trial_stress_tangent(normal_rel).0;
+            let normal_rel =
+                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_force = self.materials[fr.normal_dof]
+                .as_ref()
+                .unwrap()
+                .trial_stress_tangent(normal_rel)
+                .0;
             let shear_rel = node_j.displacement[fr.shear_dof] - node_i.displacement[fr.shear_dof];
             let (.., next_slip) = fr.evaluate(normal_force, shear_rel);
             fr.slip = next_slip;
@@ -306,7 +338,11 @@ impl ZeroLength3 {
         self
     }
 
-    pub(super) fn form_tangent_and_resistance(&self, node_i: &Node3, node_j: &Node3) -> (SpatialElementMatrix, SpatialElementVector) {
+    pub(super) fn form_tangent_and_resistance(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+    ) -> (SpatialElementMatrix, SpatialElementVector) {
         let mut k = SpatialElementMatrix::zeros();
         let mut resistance = SpatialElementVector::zeros();
 
@@ -325,8 +361,11 @@ impl ZeroLength3 {
         }
 
         if let Some(fr) = &self.friction {
-            let normal_material = self.materials[fr.normal_dof].as_ref().expect("friction needs a normal-direction material");
-            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_material = self.materials[fr.normal_dof]
+                .as_ref()
+                .expect("friction needs a normal-direction material");
+            let normal_rel =
+                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
             let (normal_force, normal_tangent) = normal_material.trial_stress_tangent(normal_rel);
 
             let mut b_n = SpatialElementVector::zeros();
@@ -341,7 +380,8 @@ impl ZeroLength3 {
                 b_v[shear_dof] = -1.0;
                 b_v[SPATIAL_NDF + shear_dof] = 1.0;
 
-                k += dv_dshear * (b_v * b_v.transpose()) + (dv_dnormal * normal_tangent) * (b_v * b_n.transpose());
+                k += dv_dshear * (b_v * b_v.transpose())
+                    + (dv_dnormal * normal_tangent) * (b_v * b_n.transpose());
                 resistance += force * b_v;
             }
         }
@@ -359,8 +399,13 @@ impl ZeroLength3 {
         if let Some(fr) = &mut self.friction {
             // See `ZeroLength::commit`'s doc comment for why reading (not
             // committing) the normal material here is correct.
-            let normal_rel = node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
-            let normal_force = self.materials[fr.normal_dof].as_ref().unwrap().trial_stress_tangent(normal_rel).0;
+            let normal_rel =
+                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_force = self.materials[fr.normal_dof]
+                .as_ref()
+                .unwrap()
+                .trial_stress_tangent(normal_rel)
+                .0;
 
             let mut next_slip = fr.slip;
             for (axis, &shear_dof) in fr.shear_dofs.iter().enumerate() {
@@ -426,13 +471,18 @@ impl ZeroLengthSection {
         &self,
         node_i: &Node,
         node_j: &Node,
-    ) -> (SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>, SVector<f64, ELEMENT_DOF>) {
+    ) -> (
+        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
+        SVector<f64, ELEMENT_DOF>,
+    ) {
         let eps0 = node_j.displacement[0] - node_i.displacement[0];
         let kappa = node_j.displacement[2] - node_i.displacement[2];
         let (n, m, k_section) = self.section.trial(eps0, kappa);
 
-        let b_eps0 = SVector::<f64, ELEMENT_DOF>::from_column_slice(&[-1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-        let b_kappa = SVector::<f64, ELEMENT_DOF>::from_column_slice(&[0.0, 0.0, -1.0, 0.0, 0.0, 1.0]);
+        let b_eps0 =
+            SVector::<f64, ELEMENT_DOF>::from_column_slice(&[-1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let b_kappa =
+            SVector::<f64, ELEMENT_DOF>::from_column_slice(&[0.0, 0.0, -1.0, 0.0, 0.0, 1.0]);
 
         let mut k = k_section[0][0] * (b_eps0 * b_eps0.transpose())
             + k_section[0][1] * (b_eps0 * b_kappa.transpose())
@@ -509,7 +559,11 @@ impl ZeroLengthSection3 {
         self
     }
 
-    pub(super) fn form_tangent_and_resistance(&self, node_i: &Node3, node_j: &Node3) -> (SpatialElementMatrix, SpatialElementVector) {
+    pub(super) fn form_tangent_and_resistance(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+    ) -> (SpatialElementMatrix, SpatialElementVector) {
         let eps0 = node_j.displacement[0] - node_i.displacement[0];
         let kappa_z = node_j.displacement[5] - node_i.displacement[5];
         let kappa_y = node_j.displacement[4] - node_i.displacement[4];
@@ -599,8 +653,13 @@ mod tests {
         let (_, r) = epp.form_tangent_and_resistance(&node_i, &node_j);
         assert_eq!(r[0], 100.0 * 0.01, "should be clamped to yield force");
 
-        let gap = ZeroLength::new(NodeId::default(), NodeId::default())
-            .with_material(0, Material::Gap { e: 100.0, gap: 0.01 });
+        let gap = ZeroLength::new(NodeId::default(), NodeId::default()).with_material(
+            0,
+            Material::Gap {
+                e: 100.0,
+                gap: 0.01,
+            },
+        );
         let (_, r) = gap.form_tangent_and_resistance(&node_i, &node_j);
         assert_eq!(r[0], 100.0 * (0.02 - 0.01), "gap engaged past closure");
 
@@ -636,7 +695,11 @@ mod tests {
         // `ZeroLength` test's doc comment).
         assert_eq!(r[0], -(100.0 * 0.01), "Ux: linear elastic");
         assert_eq!(r[SPATIAL_NDF], 100.0 * 0.01);
-        assert_eq!(r[3], 50.0 * 0.01, "Rx: clamped to yield force (sign follows relative disp)");
+        assert_eq!(
+            r[3],
+            50.0 * 0.01,
+            "Rx: clamped to yield force (sign follows relative disp)"
+        );
         assert_eq!(r[SPATIAL_NDF + 3], -(50.0 * 0.01));
         assert_eq!(k[(0, 0)], 100.0, "Ux tangent unaffected by Rx material");
         assert_eq!(k[(3, 3)], 0.0, "Rx tangent is zero past yield");
@@ -667,9 +730,20 @@ mod tests {
         let zl = ZeroLengthSection::new(NodeId::default(), NodeId::default(), section);
         let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
 
-        assert!((k[(0, 0)] - e * area).abs() < 1e-6, "EA mismatch: {}", k[(0, 0)]);
-        assert!((k[(2, 2)] - e * iz).abs() < 1e-6, "EI mismatch: {}", k[(2, 2)]);
-        assert!(k[(0, 2)].abs() < 1e-9, "no axial-moment coupling for a symmetric section");
+        assert!(
+            (k[(0, 0)] - e * area).abs() < 1e-6,
+            "EA mismatch: {}",
+            k[(0, 0)]
+        );
+        assert!(
+            (k[(2, 2)] - e * iz).abs() < 1e-6,
+            "EI mismatch: {}",
+            k[(2, 2)]
+        );
+        assert!(
+            k[(0, 2)].abs() < 1e-9,
+            "no axial-moment coupling for a symmetric section"
+        );
 
         let n = e * area * 0.001;
         let m = e * iz * 0.0002;
@@ -690,7 +764,10 @@ mod tests {
         let section = FiberSection::new(vec![Fiber::new(y, area, Material::Elastic { e })]);
 
         let (_n, _m, k_section) = section.trial(0.001, 0.0002);
-        assert!(k_section[0][1].abs() > 1e-9, "test setup: section must actually couple");
+        assert!(
+            k_section[0][1].abs() > 1e-9,
+            "test setup: section must actually couple"
+        );
 
         let node_i = Node::new([0.0, 0.0]);
         let mut node_j = Node::new([0.0, 0.0]);
@@ -780,7 +857,10 @@ mod tests {
         let (_k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
 
         let (expected_n, _tangent) = hand.trial_stress_tangent(0.0);
-        assert!(expected_n.abs() > 1e-6, "test setup: material should have residual stress after yield");
+        assert!(
+            expected_n.abs() > 1e-6,
+            "test setup: material should have residual stress after yield"
+        );
         assert!(
             (r[3] - expected_n).abs() < 1e-9,
             "committed plastic history should carry into subsequent trial"
@@ -817,8 +897,14 @@ mod tests {
         assert!((r[4] - shear_e * 0.002).abs() < 1e-9, "node_j shear force");
 
         // Section response unchanged by the added spring.
-        assert!((k[(0, 0)] - e * area).abs() < 1e-6, "EA unaffected by shear spring");
-        assert!((k[(2, 2)] - e * iz).abs() < 1e-6, "EI unaffected by shear spring");
+        assert!(
+            (k[(0, 0)] - e * area).abs() < 1e-6,
+            "EA unaffected by shear spring"
+        );
+        assert!(
+            (k[(2, 2)] - e * iz).abs() < 1e-6,
+            "EI unaffected by shear spring"
+        );
     }
 
     /// `ZeroLengthSection3` analogue: an `rx` torsion spring alongside the
@@ -850,11 +936,23 @@ mod tests {
 
         let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
 
-        assert!((k[(3, 3)] - torsion_e).abs() < 1e-9, "torsion spring stiffness");
+        assert!(
+            (k[(3, 3)] - torsion_e).abs() < 1e-9,
+            "torsion spring stiffness"
+        );
         assert!((r[9] - torsion_e * 0.004).abs() < 1e-9, "node_j torque");
-        assert!((k[(0, 0)] - e * area).abs() < 1e-6, "EA unaffected by torsion spring");
-        assert!((k[(5, 5)] - e * iz).abs() < 1e-6, "EIz unaffected by torsion spring");
-        assert!((k[(4, 4)] - e * iy).abs() < 1e-6, "EIy unaffected by torsion spring");
+        assert!(
+            (k[(0, 0)] - e * area).abs() < 1e-6,
+            "EA unaffected by torsion spring"
+        );
+        assert!(
+            (k[(5, 5)] - e * iz).abs() < 1e-6,
+            "EIz unaffected by torsion spring"
+        );
+        assert!(
+            (k[(4, 4)] - e * iy).abs() < 1e-6,
+            "EIy unaffected by torsion spring"
+        );
     }
 
     /// Common friction setup for the 2D tests below: dof 0 is the normal
@@ -878,8 +976,14 @@ mod tests {
         node_j.displacement[1] = 0.1; // trial = 500*0.1 = 50, well under 300
 
         let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
-        assert!((r[NDF + 1] - 50.0).abs() < 1e-9, "V == k0*shear_rel while sticking");
-        assert!((k[(1, 1)] - 500.0).abs() < 1e-9, "tangent == k0 while sticking");
+        assert!(
+            (r[NDF + 1] - 50.0).abs() < 1e-9,
+            "V == k0*shear_rel while sticking"
+        );
+        assert!(
+            (k[(1, 1)] - 500.0).abs() < 1e-9,
+            "tangent == k0 while sticking"
+        );
     }
 
     /// Past the yield surface, `V` follows the bilinear-kinematic-hardening
@@ -899,8 +1003,14 @@ mod tests {
         let trial = k0 * 5.0;
         let expected_v = b * trial + (1.0 - b) * yield_force;
 
-        assert!((r[NDF + 1] - expected_v).abs() < 1e-9, "V matches the hardening-branch return map");
-        assert!((k[(1, 1)] - b * k0).abs() < 1e-9, "tangent == b*k0 while sliding");
+        assert!(
+            (r[NDF + 1] - expected_v).abs() < 1e-9,
+            "V matches the hardening-branch return map"
+        );
+        assert!(
+            (k[(1, 1)] - b * k0).abs() < 1e-9,
+            "tangent == b*k0 while sliding"
+        );
     }
 
     /// The same shear displacement against two different normal-direction
@@ -925,8 +1035,14 @@ mod tests {
 
         let (mu, k0, b) = (0.3, 500.0, 0.01);
         let expected_v_light = b * (k0 * shear_rel) + (1.0 - b) * (mu * 500.0);
-        assert!((r_light[NDF + 1] - expected_v_light).abs() < 1e-9, "lighter normal force: sliding");
-        assert!((r_heavy[NDF + 1] - k0 * shear_rel).abs() < 1e-9, "heavier normal force: still sticking, V == trial");
+        assert!(
+            (r_light[NDF + 1] - expected_v_light).abs() < 1e-9,
+            "lighter normal force: sliding"
+        );
+        assert!(
+            (r_heavy[NDF + 1] - k0 * shear_rel).abs() < 1e-9,
+            "heavier normal force: still sticking, V == trial"
+        );
     }
 
     /// Mirrors `elastic_pp_remembers_permanent_set_after_commit`
@@ -952,8 +1068,14 @@ mod tests {
         node_j.displacement[1] = committed_slip + 0.05;
         let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
 
-        assert!((r[NDF + 1] - k0 * 0.05).abs() < 1e-9, "elastic unload from committed slip, not from zero");
-        assert!((k[(1, 1)] - k0).abs() < 1e-9, "tangent back to k0 (elastic) after unload");
+        assert!(
+            (r[NDF + 1] - k0 * 0.05).abs() < 1e-9,
+            "elastic unload from committed slip, not from zero"
+        );
+        assert!(
+            (k[(1, 1)] - k0).abs() < 1e-9,
+            "tangent back to k0 (elastic) after unload"
+        );
     }
 
     /// Out of compression (tension, per this codebase's sign convention),
@@ -970,8 +1092,14 @@ mod tests {
 
         let (k0, b) = (500.0, 0.01);
         let expected_v = b * (k0 * 0.001); // yield_force == 0, so only the hardening term survives
-        assert!((r[NDF + 1] - expected_v).abs() < 1e-9, "near-zero force: no normal-direction capacity");
-        assert!((k[(1, 1)] - b * k0).abs() < 1e-9, "post-slip tangent even at zero capacity");
+        assert!(
+            (r[NDF + 1] - expected_v).abs() < 1e-9,
+            "near-zero force: no normal-direction capacity"
+        );
+        assert!(
+            (k[(1, 1)] - b * k0).abs() < 1e-9,
+            "post-slip tangent even at zero capacity"
+        );
     }
 
     /// The most important test here, and the easiest place to get a sign or
@@ -1029,9 +1157,18 @@ mod tests {
         let expected_v_uy = b * (k0 * 5.0) + (1.0 - b) * yield_force;
         let expected_v_uz = k0 * 0.1;
 
-        assert!((r[SPATIAL_NDF + 1] - expected_v_uy).abs() < 1e-9, "Uy slides independently");
-        assert!((r[SPATIAL_NDF + 2] - expected_v_uz).abs() < 1e-9, "Uz sticks independently");
-        assert!((k[(1, 1)] - b * k0).abs() < 1e-9, "Uy tangent == b*k0 (sliding)");
+        assert!(
+            (r[SPATIAL_NDF + 1] - expected_v_uy).abs() < 1e-9,
+            "Uy slides independently"
+        );
+        assert!(
+            (r[SPATIAL_NDF + 2] - expected_v_uz).abs() < 1e-9,
+            "Uz sticks independently"
+        );
+        assert!(
+            (k[(1, 1)] - b * k0).abs() < 1e-9,
+            "Uy tangent == b*k0 (sliding)"
+        );
         assert!((k[(2, 2)] - k0).abs() < 1e-9, "Uz tangent == k0 (sticking)");
         assert_eq!(k[(1, 2)], 0.0, "no cross-talk between the two shear axes");
         assert_eq!(k[(2, 1)], 0.0, "no cross-talk between the two shear axes");

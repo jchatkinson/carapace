@@ -1,5 +1,7 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
-use carapace_core::model::{Domain3, Element3, ElasticBeamColumn3, GeomTransf3, Node3, SpatialDof};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
+use carapace_core::model::{Domain3, ElasticBeamColumn3, Element3, GeomTransf3, Node3, SpatialDof};
 
 /// M16 acceptance case: a spatial `ElasticBeamColumn3` cantilever, run
 /// through the real `Domain3`/`Analysis3` stack (not just the element-level
@@ -51,18 +53,38 @@ fn cantilever_elastic_beam3_matches_closed_form_under_combined_loading() {
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
-    let result = analysis.step().expect("linear elastic spatial beam should solve");
+    let result = analysis
+        .step()
+        .expect("linear elastic spatial beam should solve");
     assert_eq!(result.load_factor, 1.0);
 
     let node = analysis.domain().node(free);
     let tol = 1e-9;
-    assert!((node.displacement[SpatialDof::Ux as usize] - axial_force * length / (e * a)).abs() < tol);
-    assert!((node.displacement[SpatialDof::Uy as usize] - fy * length.powi(3) / (3.0 * e * iz)).abs() < tol);
-    assert!((node.displacement[SpatialDof::Rz as usize] - fy * length.powi(2) / (2.0 * e * iz)).abs() < tol);
-    assert!((node.displacement[SpatialDof::Uz as usize] - fz * length.powi(3) / (3.0 * e * iy)).abs() < tol);
-    assert!((node.displacement[SpatialDof::Ry as usize] - (-fz * length.powi(2) / (2.0 * e * iy))).abs() < tol);
+    assert!(
+        (node.displacement[SpatialDof::Ux as usize] - axial_force * length / (e * a)).abs() < tol
+    );
+    assert!(
+        (node.displacement[SpatialDof::Uy as usize] - fy * length.powi(3) / (3.0 * e * iz)).abs()
+            < tol
+    );
+    assert!(
+        (node.displacement[SpatialDof::Rz as usize] - fy * length.powi(2) / (2.0 * e * iz)).abs()
+            < tol
+    );
+    assert!(
+        (node.displacement[SpatialDof::Uz as usize] - fz * length.powi(3) / (3.0 * e * iy)).abs()
+            < tol
+    );
+    assert!(
+        (node.displacement[SpatialDof::Ry as usize] - (-fz * length.powi(2) / (2.0 * e * iy)))
+            .abs()
+            < tol
+    );
     assert!((node.displacement[SpatialDof::Rx as usize] - torque * length / (g * j)).abs() < tol);
 }

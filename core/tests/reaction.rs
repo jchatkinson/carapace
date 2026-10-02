@@ -1,5 +1,7 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
-use carapace_core::model::{Domain, Element, ElasticBeamColumn, GeomTransf, Material, Node, Truss};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
+use carapace_core::model::{Domain, ElasticBeamColumn, Element, GeomTransf, Material, Node, Truss};
 
 /// `Domain::reaction`'s simplest closed-form check: a fixed-free truss
 /// pulled at its free end (same case `m1_truss.rs` uses for displacement)
@@ -13,18 +15,30 @@ fn fixed_free_truss_reaction_exactly_opposes_the_applied_load() {
     let node_j = domain.add_node(Node::new([100.0, 100.0]).fix(1).fix(2));
     let load = 50.0;
     domain.load_node(node_j, 0, load);
-    domain.add_element(Element::Truss(Truss::new(node_i, node_j, 2.0, Material::Elastic { e: 30_000.0 })));
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        2.0,
+        Material::Elastic { e: 30_000.0 },
+    )));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("linear elastic truss should solve");
 
     let reaction = analysis.domain().reaction(node_i, 0, 1.0);
-    assert!((reaction + load).abs() < 1e-9, "expected reaction={}, got {reaction}", -load);
+    assert!(
+        (reaction + load).abs() < 1e-9,
+        "expected reaction={}, got {reaction}",
+        -load
+    );
 
     // Global equilibrium: this DOF's only load and only support must sum to zero.
     assert!((reaction + load).abs() < 1e-9);
@@ -48,20 +62,43 @@ fn a_shared_fixed_node_sums_every_touching_elements_contribution() {
     let mid = domain.add_node(Node::new([length / 2.0, 0.0]));
     let tip = domain.add_node(Node::new([length, 0.0]));
     domain.load_node(tip, 1, load);
-    domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(fixed, mid, e, a, iz, GeomTransf::Linear)));
-    domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(mid, tip, e, a, iz, GeomTransf::Linear)));
+    domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+        fixed,
+        mid,
+        e,
+        a,
+        iz,
+        GeomTransf::Linear,
+    )));
+    domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+        mid,
+        tip,
+        e,
+        a,
+        iz,
+        GeomTransf::Linear,
+    )));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
-    analysis.step().expect("linear elastic two-span cantilever should solve");
+    analysis
+        .step()
+        .expect("linear elastic two-span cantilever should solve");
 
     let shear = analysis.domain().reaction(fixed, 1, 1.0);
     let moment = analysis.domain().reaction(fixed, 2, 1.0);
-    assert!((shear - (-load)).abs() < 1e-6, "expected shear={}, got {shear}", -load);
+    assert!(
+        (shear - (-load)).abs() < 1e-6,
+        "expected shear={}, got {shear}",
+        -load
+    );
     assert!(
         (moment - (-load * length)).abs() < 1e-6,
         "expected moment={}, got {moment}",

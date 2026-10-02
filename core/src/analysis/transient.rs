@@ -1,11 +1,14 @@
 use nalgebra::DVector;
 use slotmap::Key;
 
-use crate::model::{Domain, Element, Element3, ElementOps, Node3Id, NodeId, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM, NDF};
+use crate::model::{
+    Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
+    SPATIAL_NDF, SPATIAL_NDIM,
+};
 
 use super::{
-    iterate_to_equilibrium, Algorithm, AnalysisError, ConvergenceTest, GroundMotion, RayleighDamping,
-    SparseFactorization, SparseSolver,
+    iterate_to_equilibrium, Algorithm, AnalysisError, ConvergenceTest, GroundMotion,
+    RayleighDamping, SparseFactorization, SparseSolver,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -135,7 +138,10 @@ where
             // that would be an obviously-wrong choice if `with_algorithm`
             // were accidentally skipped, rather than a plausible-looking
             // default silently doing the wrong thing.
-            test: ConvergenceTest::NormUnbalance { tol: f64::NAN, max_iter: 0 },
+            test: ConvergenceTest::NormUnbalance {
+                tol: f64::NAN,
+                max_iter: 0,
+            },
             cached_factorization: None,
         };
         analysis.recompute_initial_acceleration();
@@ -179,7 +185,8 @@ where
 
         let mut a0 = DVector::<f64>::zeros(n);
         for i in 0..n {
-            let c_v0_i = self.damping.alpha_m * self.mass[i] * v0[i] + self.damping.beta_k * k_v0[i];
+            let c_v0_i =
+                self.damping.alpha_m * self.mass[i] * v0[i] + self.damping.beta_k * k_v0[i];
             a0[i] = (load0[i] - resistance0[i] - c_v0_i + ground_force0[i]) / self.mass[i];
         }
         self.domain.scatter_state(&u0, &v0, &a0);
@@ -260,7 +267,8 @@ where
 
         let mass_coeff = a1 + a4 * self.damping.alpha_m;
         let stiffness_coeff = 1.0 + a4 * self.damping.beta_k;
-        let external = self.domain.assemble_reference_load(self.time) + self.ground_force(self.time);
+        let external =
+            self.domain.assemble_reference_load(self.time) + self.ground_force(self.time);
 
         let (iterations, factorizations) = match self.algorithm {
             // One effective-system solve at `u_n`, unconditionally
@@ -278,7 +286,9 @@ where
                 let mass_vec = &u_n * a1 + &v_n * a2 + &a_n * a3;
                 let damp_vec = &u_n * a4 + &v_n * a5 + &a_n * a6;
 
-                let (k_eff, _resistance) = self.domain.assemble_newmark_system(&self.mass, mass_coeff, stiffness_coeff);
+                let (k_eff, _resistance) =
+                    self.domain
+                        .assemble_newmark_system(&self.mass, mass_coeff, stiffness_coeff);
                 let k_damp_vec = self.domain.multiply_stiffness(&damp_vec);
 
                 let n = self.domain.num_free_dofs();
@@ -333,13 +343,17 @@ where
                     |domain, _scalar| {
                         let u_trial = domain.gather_displacement();
                         let (v_trial, a_trial) = newmark_state(&u_trial);
-                        let (k_eff, resistance) = domain.assemble_newmark_system(mass, mass_coeff, stiffness_coeff);
+                        let (k_eff, resistance) =
+                            domain.assemble_newmark_system(mass, mass_coeff, stiffness_coeff);
                         let k_v = domain.multiply_stiffness(&v_trial);
 
                         let n = resistance.len();
                         let mut residual = external.clone();
                         for i in 0..n {
-                            residual[i] -= resistance[i] + alpha_m * mass[i] * v_trial[i] + beta_k * k_v[i] + mass[i] * a_trial[i];
+                            residual[i] -= resistance[i]
+                                + alpha_m * mass[i] * v_trial[i]
+                                + beta_k * k_v[i]
+                                + mass[i] * a_trial[i];
                         }
                         (k_eff, residual)
                     },

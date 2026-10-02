@@ -6,7 +6,15 @@ impl Material {
     /// the ratio between the unloading slope at `epscu` and the initial
     /// slope; `ft`/`ets` are the tensile strength and tension-softening
     /// modulus.
-    pub fn concrete02(fc: f64, epsc0: f64, fcu: f64, epscu: f64, rat: f64, ft: f64, ets: f64) -> Self {
+    pub fn concrete02(
+        fc: f64,
+        epsc0: f64,
+        fcu: f64,
+        epscu: f64,
+        rat: f64,
+        ft: f64,
+        ets: f64,
+    ) -> Self {
         let fc = -fc.abs();
         let epsc0 = -epsc0.abs();
         let fcu = -fcu.abs();
@@ -92,7 +100,11 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
             let tension_peak_strain = zero_stress_strain + tension_strain;
             if strain <= tension_peak_strain {
                 let (peak_stress, _) = concrete02_tens_envlp(tension_strain, ft, ec0, ets);
-                let tangent = if tension_strain != 0.0 { peak_stress / tension_strain } else { ec0 };
+                let tangent = if tension_strain != 0.0 {
+                    peak_stress / tension_strain
+                } else {
+                    ec0
+                };
                 (tangent * (strain - zero_stress_strain), tangent)
             } else {
                 tension_strain = strain - zero_stress_strain;
@@ -166,7 +178,10 @@ mod tests {
         let (stress, tangent) = m.trial_stress_tangent(strain);
         let eta = strain / -0.002;
         let expected_stress = -4.0 * (2.0 * eta - eta * eta);
-        assert!((stress - expected_stress).abs() < 1e-9, "expected {expected_stress}, got {stress}");
+        assert!(
+            (stress - expected_stress).abs() < 1e-9,
+            "expected {expected_stress}, got {stress}"
+        );
         assert!((tangent - 2000.0).abs() < 1e-9, "got {tangent}");
     }
 
@@ -187,7 +202,10 @@ mod tests {
         // Past eps0=ft/Ec0=0.0001: linear softening at slope -Ets from ft.
         let (stress, tangent) = m.trial_stress_tangent(0.0005);
         let expected_stress = 0.4 - 50.0 * (0.0005 - 0.0001);
-        assert!((stress - expected_stress).abs() < 1e-9, "expected {expected_stress}, got {stress}");
+        assert!(
+            (stress - expected_stress).abs() < 1e-9,
+            "expected {expected_stress}, got {stress}"
+        );
         assert_eq!(tangent, -50.0);
     }
 

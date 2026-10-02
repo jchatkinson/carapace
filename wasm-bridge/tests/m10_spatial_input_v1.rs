@@ -110,7 +110,10 @@ fn decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -121,7 +124,10 @@ fn decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation() {
 
     let mut session = decode(input).expect("well-formed spatial input should decode");
     let outcome = session.advance(10);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected_elongation = force * length / (area * e);
     let (_, ux) = last_sample(&outcome, 0).expect("ux sample");
@@ -179,7 +185,10 @@ fn decodes_a_zero_length3_with_friction_coupling_on_two_shear_axes() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -190,15 +199,24 @@ fn decodes_a_zero_length3_with_friction_coupling_on_two_shear_axes() {
 
     let mut session = decode(input).expect("well-formed spatial friction input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     // normal_force = -1000 -> yield_force = 300. Shear axis 0 (uy): trial =
     // 500*5 = 2500, well past yield -> slides. Shear axis 1 (uz): trial =
     // 500*0.1 = 50, well under yield -> sticks (V == k0*shear_rel == 50).
     let (_, uy) = last_sample(&outcome, 0).expect("uy sample");
     let (_, uz) = last_sample(&outcome, 1).expect("uz sample");
-    assert!(uy.is_finite() && uy != 0.0, "sliding shear DOF should have displaced: {uy}");
-    assert!(uz.is_finite() && uz != 0.0, "sticking shear DOF should have displaced: {uz}");
+    assert!(
+        uy.is_finite() && uy != 0.0,
+        "sliding shear DOF should have displaced: {uy}"
+    );
+    assert!(
+        uz.is_finite() && uz != 0.0,
+        "sticking shear DOF should have displaced: {uz}"
+    );
 }
 
 /// `ZeroLengthSection3` (`core::ZeroLengthSection3`, wired via
@@ -249,7 +267,10 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![RecorderSpec3::NodeDisp { node: 1, dof: 0 }],
@@ -257,11 +278,17 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
 
     let mut session = decode(input).expect("well-formed zero-length-section3 input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected = load / (e * area);
     let (_, got) = last_sample(&outcome, 0).expect("one recorded sample");
-    assert!((got - expected).abs() < 1e-9, "expected {expected}, got {got}");
+    assert!(
+        (got - expected).abs() < 1e-9,
+        "expected {expected}, got {got}"
+    );
 }
 
 #[test]
@@ -306,7 +333,10 @@ fn decodes_an_elastic_beam_column3_element_force_recorder() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -321,13 +351,20 @@ fn decodes_an_elastic_beam_column3_element_force_recorder() {
         ],
     };
 
-    let mut session = decode(input).expect("well-formed spatial elastic beam column input should decode");
+    let mut session =
+        decode(input).expect("well-formed spatial elastic beam column input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected_tip_disp = fy * length.powi(3) / (3.0 * e * iz);
     let (_, tip_disp) = last_sample(&outcome, 0).expect("tip disp sample");
-    assert!((tip_disp - expected_tip_disp).abs() < 1e-6, "expected {expected_tip_disp}, got {tip_disp}");
+    assert!(
+        (tip_disp - expected_tip_disp).abs() < 1e-6,
+        "expected {expected_tip_disp}, got {tip_disp}"
+    );
 
     let expected_reaction_moment = -length * fy;
     let (_, reaction_moment) = last_sample(&outcome, 1).expect("reaction moment sample");
@@ -361,19 +398,32 @@ fn decodes_a_modal_stage3_and_matches_the_sdof_truss_closed_form() {
         density: vec![density],
     };
     input.sequence3 = SequenceSpec3 {
-        stages: vec![StageSpec::Modal { id: "modes".to_string(), modes: 1 }],
-        recorders: vec![RecorderSpec3::ModeShape { mode: 0, node: 1, dof: 0 }],
+        stages: vec![StageSpec::Modal {
+            id: "modes".to_string(),
+            modes: 1,
+        }],
+        recorders: vec![RecorderSpec3::ModeShape {
+            mode: 0,
+            node: 1,
+            dof: 0,
+        }],
     };
 
     let mut session = decode(input).expect("well-formed spatial modal input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let k = e * area / length;
     let m = density * area * length / 2.0;
     let expected = (k / m).sqrt();
     let (got_freq, _) = last_sample(&outcome, 0).expect("one recorded sample");
-    assert!((got_freq - expected).abs() < 1e-9, "expected omega={expected}, got {got_freq}");
+    assert!(
+        (got_freq - expected).abs() < 1e-9,
+        "expected omega={expected}, got {got_freq}"
+    );
 }
 
 /// `core::Domain::equal_dof` through the spatial path (`EqualDofTable3`) —
@@ -422,7 +472,10 @@ fn decodes_an_equal_dof3_constraint_tying_one_nodes_ux_to_another() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -433,12 +486,18 @@ fn decodes_an_equal_dof3_constraint_tying_one_nodes_ux_to_another() {
 
     let mut session = decode(input).expect("well-formed spatial equal_dof input should decode");
     let outcome = session.advance(10);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected = load * length / (area * e);
     let (_, retained_disp) = last_sample(&outcome, 0).expect("retained node sample");
     let (_, constrained_disp) = last_sample(&outcome, 1).expect("constrained node sample");
-    assert!((retained_disp - expected).abs() < 1e-9, "expected {expected}, got {retained_disp}");
+    assert!(
+        (retained_disp - expected).abs() < 1e-9,
+        "expected {expected}, got {retained_disp}"
+    );
     assert!(
         (constrained_disp - retained_disp).abs() < 1e-9,
         "equal_dof-tied node should exactly match the retained node's ux: {constrained_disp} vs {retained_disp}"
@@ -500,7 +559,10 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -511,9 +573,13 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
         ],
     };
 
-    let mut session = decode(input).expect("well-formed spatial rigid_diaphragm input should decode");
+    let mut session =
+        decode(input).expect("well-formed spatial rigid_diaphragm input should decode");
     let outcome = session.advance(10);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let (_, retained_ux) = last_sample(&outcome, 0).expect("retained ux sample");
     let (_, retained_uz) = last_sample(&outcome, 1).expect("retained uz sample");

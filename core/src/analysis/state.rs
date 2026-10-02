@@ -1,13 +1,13 @@
 use slotmap::Key;
 
 use crate::model::{
-    Domain, Element, Element3, ElementOps, Node3Id, NodeId, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF,
-    SPATIAL_NDIM, NDF,
+    Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
+    SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 use super::{
-    iterate_to_equilibrium, Algorithm, AnalysisError, ConstraintHandler, ConvergenceTest, Integrator,
-    SparseFactorization, SparseSolver,
+    iterate_to_equilibrium, Algorithm, AnalysisError, ConstraintHandler, ConvergenceTest,
+    Integrator, SparseFactorization, SparseSolver,
 };
 
 /// A fully-wired analysis (only buildable via `AnalysisBuilder<Ready>::build`).
@@ -63,7 +63,8 @@ pub struct StepResult {
     pub factorizations: usize,
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
+    Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
 where
     NId: Key,
     E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
@@ -139,7 +140,9 @@ where
 
     fn try_step(&mut self) -> Result<StepResult, AnalysisError> {
         self.step_count += 1;
-        self.load_factor = self.integrator.predict(&self.domain, &self.solver, self.load_factor)?;
+        self.load_factor = self
+            .integrator
+            .predict(&self.domain, &self.solver, self.load_factor)?;
 
         let (iterations, factorizations) = match self.algorithm {
             // A single tangent formation + solve, unconditionally accepted
@@ -178,7 +181,8 @@ where
                         if iteration == 0 {
                             Ok((du_bar, 0.0))
                         } else {
-                            let (delta_lambda, du) = integrator.correct(domain, solver, k, du_bar, load_factor)?;
+                            let (delta_lambda, du) =
+                                integrator.correct(domain, solver, k, du_bar, load_factor)?;
                             Ok((du, delta_lambda))
                         }
                     },

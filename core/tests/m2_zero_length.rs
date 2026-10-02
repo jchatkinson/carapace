@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{Domain, Element, Material, Node, ZeroLength};
 
 /// M2 acceptance (implementation-plan §6): prove `Element`/`Material` enum
@@ -35,9 +37,15 @@ fn zero_length_ent_matches_hand_calc_via_real_architecture() {
         })
         .build(domain);
 
-    analysis.step().expect("compressive Ent response should solve");
+    analysis
+        .step()
+        .expect("compressive Ent response should solve");
 
     let dx = analysis.domain().node(node_j).displacement[0];
     // Equilibrium: internal force (e * dx) balances applied load -> dx = load / e.
-    assert!((dx - load / e).abs() < 1e-9, "expected dx={}, got {dx}", load / e);
+    assert!(
+        (dx - load / e).abs() < 1e-9,
+        "expected dx={}, got {dx}",
+        load / e
+    );
 }

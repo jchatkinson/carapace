@@ -144,8 +144,12 @@ pub enum ElementLoad3 {
 /// doc comment). `NDOF` defaults to the planar profile so bare `LoadPattern`
 /// keeps working unchanged, the same trick `Node`'s defaults use.
 #[derive(Debug, Clone)]
-pub(crate) struct LoadPattern<const NDOF: usize = NDF, NId = NodeId, EId = ElementId, EL = ElementLoad>
-where
+pub(crate) struct LoadPattern<
+    const NDOF: usize = NDF,
+    NId = NodeId,
+    EId = ElementId,
+    EL = ElementLoad,
+> where
     NId: Eq + Hash + Copy,
     EId: Eq + Hash + Copy,
 {
@@ -183,7 +187,8 @@ where
     }
 
     pub(crate) fn factor(&self, pseudo_time: f64) -> f64 {
-        self.frozen_factor.unwrap_or_else(|| self.series.factor(pseudo_time) * self.scale_factor)
+        self.frozen_factor
+            .unwrap_or_else(|| self.series.factor(pseudo_time) * self.scale_factor)
     }
 
     /// Zero once frozen (§`LoadSeries::slope`'s doc comment) — a frozen

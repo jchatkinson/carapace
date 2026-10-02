@@ -1,7 +1,9 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
 use carapace_core::model::{
-    BeamIntegration, Domain, Domain3, ElasticBeamColumn, Element, Element3, Fiber, ForceBeamColumn, GeomTransf, Material, Node, Node3,
-    SpatialDof,
+    BeamIntegration, Domain, Domain3, ElasticBeamColumn, Element, Element3, Fiber, ForceBeamColumn,
+    GeomTransf, Material, Node, Node3, SpatialDof,
 };
 
 /// Every check here is derived from plain nodal-equilibrium statics (sum of
@@ -25,20 +27,33 @@ fn truss_local_force_matches_axial_nodal_equilibrium() {
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
     domain.load_node(node_j, 0, axial);
-    let truss = domain.add_element(Element::Truss(carapace_core::model::Truss::new(node_i, node_j, area, Material::Elastic { e })));
+    let truss = domain.add_element(Element::Truss(carapace_core::model::Truss::new(
+        node_i,
+        node_j,
+        area,
+        Material::Elastic { e },
+    )));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("axial truss should solve");
 
     let f = analysis.domain().element_local_force(truss);
     let expected = [-axial, 0.0, 0.0, axial, 0.0, 0.0];
     for i in 0..6 {
-        assert!((f[i] - expected[i]).abs() < 1e-9, "component {i}: got {}, expected {}", f[i], expected[i]);
+        assert!(
+            (f[i] - expected[i]).abs() < 1e-9,
+            "component {i}: got {}, expected {}",
+            f[i],
+            expected[i]
+        );
     }
 }
 
@@ -50,21 +65,30 @@ fn zero_length_local_force_matches_spring_nodal_equilibrium() {
     let node_j = domain.add_node(Node::new([0.0, 0.0]).fix(1).fix(2));
     domain.load_node(node_j, 0, load);
     let spring = domain.add_element(Element::ZeroLength(
-        carapace_core::model::ZeroLength::new(node_i, node_j).with_material(0, Material::Elastic { e: k }),
+        carapace_core::model::ZeroLength::new(node_i, node_j)
+            .with_material(0, Material::Elastic { e: k }),
     ));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("spring should solve");
 
     let f = analysis.domain().element_local_force(spring);
     let expected = [-load, 0.0, 0.0, load, 0.0, 0.0];
     for i in 0..6 {
-        assert!((f[i] - expected[i]).abs() < 1e-9, "component {i}: got {}, expected {}", f[i], expected[i]);
+        assert!(
+            (f[i] - expected[i]).abs() < 1e-9,
+            "component {i}: got {}, expected {}",
+            f[i],
+            expected[i]
+        );
     }
 }
 
@@ -80,7 +104,8 @@ fn cantilever_local_force_equilibrium(fy: f64, length: f64) -> [f64; 6] {
 
 #[test]
 fn elastic_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_member() {
-    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) = (30_000.0, 10.0, 1000.0, 100.0, -10.0);
+    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) =
+        (30_000.0, 10.0, 1000.0, 100.0, -10.0);
     let mut domain = Domain::new();
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
     let node_j = domain.add_node(Node::new([length, 0.0]));
@@ -98,20 +123,29 @@ fn elastic_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("cantilever should solve");
 
     let f = analysis.domain().element_local_force(beam);
     let expected = cantilever_local_force_equilibrium(fy, length);
     for i in 0..6 {
-        assert!((f[i] - expected[i]).abs() < 1e-6, "component {i}: got {}, expected {}", f[i], expected[i]);
+        assert!(
+            (f[i] - expected[i]).abs() < 1e-6,
+            "component {i}: got {}, expected {}",
+            f[i],
+            expected[i]
+        );
     }
 }
 
 #[test]
 fn disp_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_member() {
-    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) = (30_000.0, 10.0, 1000.0, 100.0, -10.0);
+    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) =
+        (30_000.0, 10.0, 1000.0, 100.0, -10.0);
     let h = (iz / area).sqrt();
     let fibers = vec![
         Fiber::new(h, area / 2.0, Material::Elastic { e }),
@@ -122,25 +156,35 @@ fn disp_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_me
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
     let node_j = domain.add_node(Node::new([length, 0.0]));
     domain.load_node(node_j, 1, fy);
-    let beam = domain.add_element(Element::DispBeamColumn(carapace_core::model::DispBeamColumn::new(
-        node_i,
-        node_j,
-        fibers,
-        BeamIntegration::Legendre { points: 3 },
-    )));
+    let beam = domain.add_element(Element::DispBeamColumn(
+        carapace_core::model::DispBeamColumn::new(
+            node_i,
+            node_j,
+            fibers,
+            BeamIntegration::Legendre { points: 3 },
+        ),
+    ));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("cantilever should solve");
 
     let f = analysis.domain().element_local_force(beam);
     let expected = cantilever_local_force_equilibrium(fy, length);
     for i in 0..6 {
-        assert!((f[i] - expected[i]).abs() < 1e-6, "component {i}: got {}, expected {}", f[i], expected[i]);
+        assert!(
+            (f[i] - expected[i]).abs() < 1e-6,
+            "component {i}: got {}, expected {}",
+            f[i],
+            expected[i]
+        );
     }
 }
 
@@ -151,7 +195,8 @@ fn disp_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_me
 /// be caught by anything that doesn't actually call `commit`.
 #[test]
 fn force_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_member() {
-    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) = (30_000.0, 10.0, 1000.0, 100.0, -10.0);
+    let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) =
+        (30_000.0, 10.0, 1000.0, 100.0, -10.0);
     let h = (iz / area).sqrt();
     let fibers = vec![
         Fiber::new(h, area / 2.0, Material::Elastic { e }),
@@ -173,14 +218,22 @@ fn force_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_m
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("cantilever should solve");
 
     let f = analysis.domain().element_local_force(beam);
     let expected = cantilever_local_force_equilibrium(fy, length);
     for i in 0..6 {
-        assert!((f[i] - expected[i]).abs() < 1e-6, "component {i}: got {}, expected {}", f[i], expected[i]);
+        assert!(
+            (f[i] - expected[i]).abs() < 1e-6,
+            "component {i}: got {}, expected {}",
+            f[i],
+            expected[i]
+        );
     }
 }
 
@@ -193,7 +246,8 @@ fn force_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_m
 /// shear/moment here means the rotation itself (not the element formula)
 /// has a sign or axis error.
 #[test]
-fn elastic_beam_column_local_force_decomposes_purely_axially_for_a_load_along_a_skew_members_own_axis() {
+fn elastic_beam_column_local_force_decomposes_purely_axially_for_a_load_along_a_skew_members_own_axis(
+) {
     let (e, area, iz) = (30_000.0, 10.0, 1000.0);
     let (dx, dy, length) = (3.0, 4.0, 5.0);
     let (cx, cy) = (dx / length, dy / length);
@@ -218,15 +272,32 @@ fn elastic_beam_column_local_force_decomposes_purely_axially_for_a_load_along_a_
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("skew cantilever should solve");
 
     let f = analysis.domain().element_local_force(beam);
-    assert!((f[0] - -axial).abs() < 1e-6, "local axial reaction: got {}, expected {}", f[0], -axial);
-    assert!((f[3] - axial).abs() < 1e-6, "local axial at tip: got {}, expected {}", f[3], axial);
+    assert!(
+        (f[0] - -axial).abs() < 1e-6,
+        "local axial reaction: got {}, expected {}",
+        f[0],
+        -axial
+    );
+    assert!(
+        (f[3] - axial).abs() < 1e-6,
+        "local axial at tip: got {}, expected {}",
+        f[3],
+        axial
+    );
     for i in [1, 2, 4, 5] {
-        assert!(f[i].abs() < 1e-6, "component {i} should be ~0 (pure axial), got {}", f[i]);
+        assert!(
+            f[i].abs() < 1e-6,
+            "component {i} should be ~0 (pure axial), got {}",
+            f[i]
+        );
     }
 }
 
@@ -240,7 +311,8 @@ fn elastic_beam_column_local_force_decomposes_purely_axially_for_a_load_along_a_
 /// reactions, not just internally self-consistent.
 #[test]
 fn force_beam_column3_local_force_matches_cantilever_equilibrium_for_horizontal_member() {
-    let (e, g, area, iy, iz, j, length): (f64, f64, f64, f64, f64, f64, f64) = (30_000.0, 12_000.0, 4.0, 500.0, 2000.0, 50.0, 100.0);
+    let (e, g, area, iy, iz, j, length): (f64, f64, f64, f64, f64, f64, f64) =
+        (30_000.0, 12_000.0, 4.0, 500.0, 2000.0, 50.0, 100.0);
     let (fy, fz, torque, axial) = (-10.0, -6.0, 20.0, 500.0);
 
     let hz = (iy / area).sqrt();
@@ -268,21 +340,26 @@ fn force_beam_column3_local_force_matches_cantilever_equilibrium_for_horizontal_
     domain.load_node(node_j, SpatialDof::Uy as usize, fy);
     domain.load_node(node_j, SpatialDof::Uz as usize, fz);
     domain.load_node(node_j, SpatialDof::Rx as usize, torque);
-    let beam = domain.add_element(Element3::ForceBeamColumn3(carapace_core::model::ForceBeamColumn3::new(
-        node_i,
-        node_j,
-        g,
-        j,
-        [0.0, 0.0, 1.0],
-        fibers,
-        BeamIntegration::Lobatto { points: 3 },
-    )));
+    let beam = domain.add_element(Element3::ForceBeamColumn3(
+        carapace_core::model::ForceBeamColumn3::new(
+            node_i,
+            node_j,
+            g,
+            j,
+            [0.0, 0.0, 1.0],
+            fibers,
+            BeamIntegration::Lobatto { points: 3 },
+        ),
+    ));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     analysis.step().expect("spatial cantilever should solve");
 
@@ -293,6 +370,11 @@ fn force_beam_column3_local_force_matches_cantilever_equilibrium_for_horizontal_
          axial,  fy,  fz,  torque, 0.0,          0.0,
     ];
     for i in 0..12 {
-        assert!((f[i] - expected[i]).abs() < 1e-6, "component {i}: got {}, expected {}", f[i], expected[i]);
+        assert!(
+            (f[i] - expected[i]).abs() < 1e-6,
+            "component {i}: got {}, expected {}",
+            f[i],
+            expected[i]
+        );
     }
 }

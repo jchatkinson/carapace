@@ -1,5 +1,9 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
-use carapace_core::model::{Domain, Element, ElasticBeamColumn, GeomTransf, LoadSeries, Node, NodeId};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
+use carapace_core::model::{
+    Domain, ElasticBeamColumn, Element, GeomTransf, LoadSeries, Node, NodeId,
+};
 
 /// A cantilever `ElasticBeamColumn` with two independent `LoadPattern`s: a
 /// compressive axial ("gravity") load on `default_pattern()`, and a
@@ -60,10 +64,18 @@ fn run_two_phase(
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 0.5 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
-    gravity_phase.step().expect("gravity increment 1/2 should solve");
-    let gravity_time = gravity_phase.step().expect("gravity increment 2/2 should solve").load_factor;
+    gravity_phase
+        .step()
+        .expect("gravity increment 1/2 should solve");
+    let gravity_time = gravity_phase
+        .step()
+        .expect("gravity increment 2/2 should solve")
+        .load_factor;
     let axial_after_gravity = gravity_phase.domain().node(node_j).displacement[0];
 
     let mut domain = gravity_phase.into_domain();
@@ -74,13 +86,20 @@ fn run_two_phase(
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     lateral_phase.step().expect("lateral phase should solve");
 
     let axial_after_lateral = lateral_phase.domain().node(node_j).displacement[0];
     let transverse_after_lateral = lateral_phase.domain().node(node_j).displacement[1];
-    (axial_after_gravity, axial_after_lateral, transverse_after_lateral)
+    (
+        axial_after_gravity,
+        axial_after_lateral,
+        transverse_after_lateral,
+    )
 }
 
 #[test]
@@ -91,7 +110,10 @@ fn frozen_gravity_pattern_survives_a_second_phase_untouched() {
     let (axial_after_gravity, axial_after_lateral, _) =
         run_two_phase(domain, gravity, lateral_pattern, -1.0, node_j.unwrap());
 
-    assert!(axial_after_gravity.abs() > 1e-9, "gravity phase should have produced nonzero axial displacement");
+    assert!(
+        axial_after_gravity.abs() > 1e-9,
+        "gravity phase should have produced nonzero axial displacement"
+    );
     assert!(
         (axial_after_gravity - axial_after_lateral).abs() < 1e-9,
         "frozen gravity pattern's axial contribution must be unchanged by the lateral phase: {axial_after_gravity} vs {axial_after_lateral}"

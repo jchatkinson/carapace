@@ -54,7 +54,10 @@ impl AnalysisBuilder<Unwired> {
         AnalysisBuilder { state: Unwired }
     }
 
-    pub fn constraint_handler(self, constraint_handler: ConstraintHandler) -> AnalysisBuilder<WithConstraintHandler> {
+    pub fn constraint_handler(
+        self,
+        constraint_handler: ConstraintHandler,
+    ) -> AnalysisBuilder<WithConstraintHandler> {
         AnalysisBuilder {
             state: WithConstraintHandler { constraint_handler },
         }
@@ -62,7 +65,10 @@ impl AnalysisBuilder<Unwired> {
 }
 
 impl AnalysisBuilder<WithConstraintHandler> {
-    pub fn integrator<NId>(self, integrator: Integrator<NId>) -> AnalysisBuilder<WithIntegrator<NId>> {
+    pub fn integrator<NId>(
+        self,
+        integrator: Integrator<NId>,
+    ) -> AnalysisBuilder<WithIntegrator<NId>> {
         AnalysisBuilder {
             state: WithIntegrator {
                 constraint_handler: self.state.constraint_handler,

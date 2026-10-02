@@ -1,5 +1,7 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator};
-use carapace_core::model::{Domain3, Element3, ElasticBeamColumn3, GeomTransf3, Node3, SpatialDof};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+};
+use carapace_core::model::{Domain3, ElasticBeamColumn3, Element3, GeomTransf3, Node3, SpatialDof};
 
 /// `GeomTransf3::PDelta3` sanity check, the spatial analogue of
 /// `m3_beam.rs`'s planar `pdelta_matches_linear_at_zero_axial_force_and_
@@ -41,11 +43,18 @@ fn pdelta3_matches_linear3_at_zero_axial_force_and_softens_under_compression_in_
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 0.5 })
             .algorithm(Algorithm::Linear)
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            })
             .build(domain);
 
-        analysis.step().expect("cantilever beam should solve (increment 1/2)");
-        analysis.step().expect("cantilever beam should solve (increment 2/2)");
+        analysis
+            .step()
+            .expect("cantilever beam should solve (increment 1/2)");
+        analysis
+            .step()
+            .expect("cantilever beam should solve (increment 2/2)");
         analysis.domain().node(free).displacement[transverse_dof]
     };
 
@@ -57,8 +66,16 @@ fn pdelta3_matches_linear3_at_zero_axial_force_and_softens_under_compression_in_
             "dof {transverse_dof}: PDelta3 with zero axial force should match Linear3 exactly"
         );
 
-        let v_linear_compression = build(GeomTransf3::linear([0.0, 0.0, 1.0]), -1000.0, transverse_dof);
-        let v_pdelta_compression = build(GeomTransf3::p_delta([0.0, 0.0, 1.0]), -1000.0, transverse_dof);
+        let v_linear_compression = build(
+            GeomTransf3::linear([0.0, 0.0, 1.0]),
+            -1000.0,
+            transverse_dof,
+        );
+        let v_pdelta_compression = build(
+            GeomTransf3::p_delta([0.0, 0.0, 1.0]),
+            -1000.0,
+            transverse_dof,
+        );
         assert!(
             v_pdelta_compression.abs() > v_linear_compression.abs(),
             "dof {transverse_dof}: compressive PDelta3 should soften the beam relative to Linear3: got {v_pdelta_compression} vs {v_linear_compression}"

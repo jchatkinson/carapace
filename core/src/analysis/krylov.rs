@@ -26,7 +26,12 @@ pub(crate) struct KrylovAccelerator {
 
 impl KrylovAccelerator {
     pub(crate) fn new(max_dimension: usize) -> Self {
-        KrylovAccelerator { max_dimension, v: Vec::new(), av: Vec::new(), last_residual: None }
+        KrylovAccelerator {
+            max_dimension,
+            v: Vec::new(),
+            av: Vec::new(),
+            last_residual: None,
+        }
     }
 
     /// Whether the subspace has grown past `max_dimension` — the caller's
@@ -44,7 +49,11 @@ impl KrylovAccelerator {
     /// Accelerate one raw correction. `residual` is the unbalance the raw
     /// solve (`Op^-1 * residual`, already computed by the caller as
     /// `v_raw`) was solved against.
-    pub(crate) fn accelerate(&mut self, v_raw: DVector<f64>, residual: &DVector<f64>) -> DVector<f64> {
+    pub(crate) fn accelerate(
+        &mut self,
+        v_raw: DVector<f64>,
+        residual: &DVector<f64>,
+    ) -> DVector<f64> {
         // This correction's contribution to the residual history is only
         // known once the *next* residual arrives — record the previous
         // (v, av) pair (`v` was already pushed by the previous call) now

@@ -243,8 +243,14 @@ impl Material {
         damfc2: f64,
         beta: f64,
     ) -> Self {
-        debug_assert!(rot1p > 0.0 && rot2p > rot1p && rot3p > rot2p, "positive backbone must be increasing");
-        debug_assert!(rot1n < 0.0 && rot2n < rot1n && rot3n < rot2n, "negative backbone must be decreasing");
+        debug_assert!(
+            rot1p > 0.0 && rot2p > rot1p && rot3p > rot2p,
+            "positive backbone must be increasing"
+        );
+        debug_assert!(
+            rot1n < 0.0 && rot2n < rot1n && rot3n < rot2n,
+            "negative backbone must be decreasing"
+        );
 
         let energy_a = 0.5
             * (rot1p * mom1p
@@ -382,7 +388,11 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     let dstrain = strain - cstrain;
 
     if load == HystereticLoad::None {
-        load = if dstrain < 0.0 { HystereticLoad::Negative } else { HystereticLoad::Positive };
+        load = if dstrain < 0.0 {
+            HystereticLoad::Negative
+        } else {
+            HystereticLoad::Positive
+        };
     }
 
     let (stress, tangent) = if strain >= rot_max {
@@ -395,8 +405,26 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         (envelope.neg_stress(strain), envelope.neg_tangent(strain))
     } else if dstrain < 0.0 {
         let (stress, tangent, new_rot_min, new_rot_pu, new_load) = hysteretic_negative_increment(
-            dstrain, strain, cstrain, cstress, rot_max, rot_min, rot_pu, load, rot1p, rot1n, beta, eup, eun,
-            pinch_x, pinch_y, damfc1, damfc2, energy_a, energy_d_committed, &envelope,
+            dstrain,
+            strain,
+            cstrain,
+            cstress,
+            rot_max,
+            rot_min,
+            rot_pu,
+            load,
+            rot1p,
+            rot1n,
+            beta,
+            eup,
+            eun,
+            pinch_x,
+            pinch_y,
+            damfc1,
+            damfc2,
+            energy_a,
+            energy_d_committed,
+            &envelope,
         );
         rot_min = new_rot_min;
         rot_pu = new_rot_pu;
@@ -414,8 +442,26 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         // `hysteretic_positive_increment` handles `dstrain == 0.0`
         // gracefully (`tmpmo1` reduces to `cstress` exactly).
         let (stress, tangent, new_rot_max, new_rot_nu, new_load) = hysteretic_positive_increment(
-            dstrain, strain, cstrain, cstress, rot_max, rot_min, rot_nu, load, rot1p, rot1n, beta, eup, eun,
-            pinch_x, pinch_y, damfc1, damfc2, energy_a, energy_d_committed, &envelope,
+            dstrain,
+            strain,
+            cstrain,
+            cstress,
+            rot_max,
+            rot_min,
+            rot_nu,
+            load,
+            rot1p,
+            rot1n,
+            beta,
+            eup,
+            eun,
+            pinch_x,
+            pinch_y,
+            damfc1,
+            damfc2,
+            energy_a,
+            energy_d_committed,
+            &envelope,
         );
         rot_max = new_rot_max;
         rot_nu = new_rot_nu;
@@ -676,7 +722,8 @@ mod tests {
     /// disables the deformation/energy damage factor for the same reason.
     fn hysteretic_test_material() -> Material {
         Material::hysteretic(
-            10.0, 0.01, 15.0, 0.02, 15.0, 0.03, -10.0, -0.01, -15.0, -0.02, -15.0, -0.03, 0.5, 0.5, 0.0, 0.0, 0.0,
+            10.0, 0.01, 15.0, 0.02, 15.0, 0.03, -10.0, -0.01, -15.0, -0.02, -15.0, -0.03, 0.5, 0.5,
+            0.0, 0.0, 0.0,
         )
     }
 
@@ -728,14 +775,19 @@ mod tests {
         let (stress, tangent) = m.trial_stress_tangent(0.0);
         assert!((stress - 4.285714285714286).abs() < 1e-9, "got {stress}");
         assert!((tangent - 857.1428571428571).abs() < 1e-9, "got {tangent}");
-        assert!(tangent < 1000.0, "pinched stiffness should be softer than the elastic Eun, got {tangent}");
+        assert!(
+            tangent < 1000.0,
+            "pinched stiffness should be softer than the elastic Eun, got {tangent}"
+        );
     }
 
     #[test]
     fn hysteretic_energy_accumulates_as_half_trapezoid_of_stress_over_strain() {
         let m = hysteretic_test_material();
         let m = m.commit(0.01); // exactly rot1p: stress=mom1p=10.
-        let Material::Hysteretic(fields) = m else { panic!() };
+        let Material::Hysteretic(fields) = m else {
+            panic!()
+        };
         let energy_d = fields.energy_d;
         // Triangular area under the elastic segment: 0.5*10*0.01 = 0.05.
         assert!((energy_d - 0.05).abs() < 1e-9, "got {energy_d}");

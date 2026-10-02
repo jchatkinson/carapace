@@ -1,4 +1,6 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
+};
 use carapace_core::model::{Domain, Element, Material, Node, Truss, ZeroLength};
 
 /// Builds a `Truss` (elastic, k_t = E*A/L = 50) and a `ZeroLength`+`ElasticPP`
@@ -14,7 +16,13 @@ use carapace_core::model::{Domain, Element, Material, Node, Truss, ZeroLength};
 /// Closed form for total applied force F > fy: once yielded, the EPP
 /// spring's force is pinned at fy and all further load is carried by the
 /// truss alone, so `u = (F - fy) / k_t`.
-fn build_elastic_plastic_parallel_system(force: f64) -> (Domain, carapace_core::model::NodeId, carapace_core::model::NodeId) {
+fn build_elastic_plastic_parallel_system(
+    force: f64,
+) -> (
+    Domain,
+    carapace_core::model::NodeId,
+    carapace_core::model::NodeId,
+) {
     let (k_t, length) = (50.0, 100.0);
     let (e_area, e_modulus) = (1.0, k_t * length); // E*A/L = k_t
     let (e_epp, eyp) = (100.0, 0.01);
@@ -45,19 +53,27 @@ fn newton_raphson_resolves_elastic_perfectly_plastic_regime_crossing() {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
         .test(ConvergenceTest::NormUnbalance {
             tol: 1e-9,
             max_iter: 20,
         })
         .build(domain);
 
-    analysis.step().expect("should converge across the EPP yield point");
+    analysis
+        .step()
+        .expect("should converge across the EPP yield point");
 
     let (k_t, fy) = (50.0, 1.0);
     let expected = (force - fy) / k_t;
     let u = analysis.domain().node(node_j).displacement[0];
-    assert!((u - expected).abs() < 1e-9, "expected u={expected}, got {u}");
+    assert!(
+        (u - expected).abs() < 1e-9,
+        "expected u={expected}, got {u}"
+    );
 }
 
 #[test]
@@ -66,21 +82,35 @@ fn norm_disp_incr_and_energy_incr_also_converge_to_the_same_result() {
     let expected = (force - fy) / k_t;
 
     for test in [
-        ConvergenceTest::NormDispIncr { tol: 1e-9, max_iter: 20 },
-        ConvergenceTest::EnergyIncr { tol: 1e-9, max_iter: 20 },
+        ConvergenceTest::NormDispIncr {
+            tol: 1e-9,
+            max_iter: 20,
+        },
+        ConvergenceTest::EnergyIncr {
+            tol: 1e-9,
+            max_iter: 20,
+        },
     ] {
         let (domain, _node_i, node_j) = build_elastic_plastic_parallel_system(force);
 
         let mut analysis = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
-            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
             .test(test)
             .build(domain);
 
-        analysis.step().expect("should converge under every ConvergenceTest variant");
+        analysis
+            .step()
+            .expect("should converge under every ConvergenceTest variant");
         let u = analysis.domain().node(node_j).displacement[0];
-        assert!((u - expected).abs() < 1e-6, "expected u={expected}, got {u} (test={test:?})");
+        assert!(
+            (u - expected).abs() < 1e-6,
+            "expected u={expected}, got {u} (test={test:?})"
+        );
     }
 }
 
@@ -96,7 +126,12 @@ fn displacement_control_recovers_the_load_that_produces_the_target_displacement(
     let node_j = domain.add_node(Node::new([100.0, 0.0]).fix(1).fix(2));
     domain.load_node(node_j, 0, 1.0);
 
-    domain.add_element(Element::Truss(Truss::new(node_i, node_j, 2.0, Material::Elastic { e: 30000.0 })));
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        2.0,
+        Material::Elastic { e: 30000.0 },
+    )));
 
     let target = 0.0833333333;
     let mut analysis = AnalysisBuilder::new()
@@ -113,7 +148,9 @@ fn displacement_control_recovers_the_load_that_produces_the_target_displacement(
         })
         .build(domain);
 
-    let result = analysis.step().expect("displacement-controlled truss should solve");
+    let result = analysis
+        .step()
+        .expect("displacement-controlled truss should solve");
 
     let dx = analysis.domain().node(node_j).displacement[0];
     assert!((dx - target).abs() < 1e-9, "expected dx={target}, got {dx}");

@@ -85,9 +85,8 @@ where
     let (k, _resistance) = domain.assemble_tangent_and_resistance();
     let solver = SparseSolver::new();
 
-    let m_dot = |x: &DVector<f64>, y: &DVector<f64>| -> f64 {
-        (0..n).map(|i| x[i] * mass[i] * y[i]).sum()
-    };
+    let m_dot =
+        |x: &DVector<f64>, y: &DVector<f64>| -> f64 { (0..n).map(|i| x[i] * mass[i] * y[i]).sum() };
     let m_norm = |x: &DVector<f64>| -> f64 { m_dot(x, x).sqrt() };
 
     // Lanczos subspace size: bigger than `num_modes` for accuracy (the

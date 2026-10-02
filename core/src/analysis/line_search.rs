@@ -10,16 +10,31 @@
 /// demands the extra speed (`docs/algorithms.md` §4).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineSearch {
-    Bisection { tol: f64, max_iter: usize, max_eta: f64 },
-    RegulaFalsi { tol: f64, max_iter: usize, max_eta: f64 },
+    Bisection {
+        tol: f64,
+        max_iter: usize,
+        max_eta: f64,
+    },
+    RegulaFalsi {
+        tol: f64,
+        max_iter: usize,
+        max_eta: f64,
+    },
 }
 
 impl LineSearch {
     fn params(&self) -> (f64, usize, f64) {
         match *self {
-            LineSearch::Bisection { tol, max_iter, max_eta } | LineSearch::RegulaFalsi { tol, max_iter, max_eta } => {
-                (tol, max_iter, max_eta)
+            LineSearch::Bisection {
+                tol,
+                max_iter,
+                max_eta,
             }
+            | LineSearch::RegulaFalsi {
+                tol,
+                max_iter,
+                max_eta,
+            } => (tol, max_iter, max_eta),
         }
     }
 
@@ -52,7 +67,11 @@ impl LineSearch {
             // Never bracketed (e.g. `s` monotonically one-signed out to
             // `max_eta`) — the best available point is whichever endpoint
             // has the smaller `|s|`, not a fabricated root.
-            return if s_lo.abs() < s_hi.abs() { eta_lo } else { eta_hi };
+            return if s_lo.abs() < s_hi.abs() {
+                eta_lo
+            } else {
+                eta_hi
+            };
         }
 
         for _ in 0..max_iter {
@@ -60,7 +79,9 @@ impl LineSearch {
                 LineSearch::Bisection { .. } => 0.5 * (eta_lo + eta_hi),
                 // False position: linear-interpolate the root between the
                 // bracket's two endpoints instead of always bisecting.
-                LineSearch::RegulaFalsi { .. } => eta_lo + (eta_hi - eta_lo) * (-s_lo) / (s_hi - s_lo),
+                LineSearch::RegulaFalsi { .. } => {
+                    eta_lo + (eta_hi - eta_lo) * (-s_lo) / (s_hi - s_lo)
+                }
             };
             let s_trial = eval(eta_trial);
             if s_trial.abs() < tol {

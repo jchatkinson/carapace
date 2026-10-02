@@ -14,9 +14,8 @@ use carapace_wasm::input_v1::tables::{
     TimeSeriesSpec, TransformSpec, TrussTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 use carapace_wasm::input_v1::tables3::{
-    ElasticBeamColumnTable3, ElementLoadTable3, EqualDofTable3, FiberBeamColumnTable3,
-    FiberTable3, NodeTable3, RigidDiaphragmTable3, TrussTable3, ZeroLengthSectionTable3,
-    ZeroLengthTable3,
+    ElasticBeamColumnTable3, ElementLoadTable3, EqualDofTable3, FiberBeamColumnTable3, FiberTable3,
+    NodeTable3, RigidDiaphragmTable3, TrussTable3, ZeroLengthSectionTable3, ZeroLengthTable3,
 };
 use carapace_wasm::input_v1::{decode, CarapaceInputV1, Header, StepOutcome};
 
@@ -186,7 +185,10 @@ fn decodes_an_element_force_recorder_alongside_a_node_disp_recorder() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -207,21 +209,32 @@ fn decodes_an_element_force_recorder_alongside_a_node_disp_recorder() {
 
     let mut session = decode(input).expect("well-formed planar input should decode");
     let outcome = session.advance(10);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected_tip_disp = fy * length.powi(3) / (3.0 * e * iz);
     let (_, tip_disp) = last_sample(&outcome, 0).expect("recorder 0 (node disp) sample");
-    assert!((tip_disp - expected_tip_disp).abs() < 1e-6, "expected {expected_tip_disp}, got {tip_disp}");
+    assert!(
+        (tip_disp - expected_tip_disp).abs() < 1e-6,
+        "expected {expected_tip_disp}, got {tip_disp}"
+    );
 
-    let (_, reaction_moment) = last_sample(&outcome, 1).expect("recorder 1 (element force, component 2) sample");
+    let (_, reaction_moment) =
+        last_sample(&outcome, 1).expect("recorder 1 (element force, component 2) sample");
     let expected_reaction_moment = -length * fy;
     assert!(
         (reaction_moment - expected_reaction_moment).abs() < 1e-6,
         "expected {expected_reaction_moment}, got {reaction_moment}"
     );
 
-    let (_, tip_shear) = last_sample(&outcome, 2).expect("recorder 2 (element force, component 4) sample");
-    assert!((tip_shear - fy).abs() < 1e-6, "expected {fy}, got {tip_shear}");
+    let (_, tip_shear) =
+        last_sample(&outcome, 2).expect("recorder 2 (element force, component 4) sample");
+    assert!(
+        (tip_shear - fy).abs() < 1e-6,
+        "expected {fy}, got {tip_shear}"
+    );
 }
 
 /// `ZeroLength`'s friction coupling (`ZeroLengthTable::friction`), driven
@@ -249,7 +262,10 @@ fn decodes_a_zero_length_with_friction_coupling() {
         friction: vec![(0, 0, 1, mu, k0, b)], // normal_dof=0, shear_dof=1
     };
     input.load_patterns = LoadPatternTable {
-        series: vec![TimeSeriesSpec::Constant, TimeSeriesSpec::Linear { slope: 1.0 }],
+        series: vec![
+            TimeSeriesSpec::Constant,
+            TimeSeriesSpec::Linear { slope: 1.0 },
+        ],
         scale_factor: vec![1.0, 1.0],
     };
     // Pattern 0: a sustained compressive normal displacement, held constant
@@ -268,7 +284,10 @@ fn decodes_a_zero_length_with_friction_coupling() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 1 }],
@@ -276,7 +295,10 @@ fn decodes_a_zero_length_with_friction_coupling() {
 
     let mut session = decode(input).expect("well-formed friction input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     // A `LoadControl` integrator with `increment: 1.0` reaches the full
     // nodal-load values directly, so this is a plain equilibrium check, not
@@ -284,7 +306,10 @@ fn decodes_a_zero_length_with_friction_coupling() {
     // yield_force = 300; trial = k0*5.0 = 2500, well past yield, so the
     // shear DOF displaces past its own reference load's linear response.
     let (_, shear_disp) = last_sample(&outcome, 0).expect("one recorded sample");
-    assert!(shear_disp.is_finite() && shear_disp != 0.0, "shear DOF should have displaced: {shear_disp}");
+    assert!(
+        shear_disp.is_finite() && shear_disp != 0.0,
+        "shear DOF should have displaced: {shear_disp}"
+    );
 }
 
 /// `ZeroLengthSection` (`core::ZeroLengthSection`, wired via
@@ -334,7 +359,10 @@ fn decodes_a_zero_length_section_and_matches_closed_form_axial_stiffness() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
@@ -342,11 +370,17 @@ fn decodes_a_zero_length_section_and_matches_closed_form_axial_stiffness() {
 
     let mut session = decode(input).expect("well-formed zero-length-section input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected = load / (e * area);
     let (_, got) = last_sample(&outcome, 0).expect("one recorded sample");
-    assert!((got - expected).abs() < 1e-9, "expected {expected}, got {got}");
+    assert!(
+        (got - expected).abs() < 1e-9,
+        "expected {expected}, got {got}"
+    );
 }
 
 /// `Material::Hysteretic`/`Material::Pinching4` (`materials.rs`'s newly
@@ -440,7 +474,10 @@ fn decodes_hysteretic_and_pinching4_materials_in_the_elastic_range() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::NewtonRaphson,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 20 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 20,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -451,12 +488,21 @@ fn decodes_hysteretic_and_pinching4_materials_in_the_elastic_range() {
 
     let mut session = decode(input).expect("well-formed Hysteretic/Pinching4 input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let (_, hysteretic_disp) = last_sample(&outcome, 0).expect("hysteretic sample");
     let (_, pinching4_disp) = last_sample(&outcome, 1).expect("pinching4 sample");
-    assert!(hysteretic_disp.is_finite() && hysteretic_disp > 0.0, "got {hysteretic_disp}");
-    assert!(pinching4_disp.is_finite() && pinching4_disp > 0.0, "got {pinching4_disp}");
+    assert!(
+        hysteretic_disp.is_finite() && hysteretic_disp > 0.0,
+        "got {hysteretic_disp}"
+    );
+    assert!(
+        pinching4_disp.is_finite() && pinching4_disp > 0.0,
+        "got {pinching4_disp}"
+    );
 }
 
 #[test]
@@ -495,20 +541,38 @@ fn decodes_a_modal_stage_and_matches_the_golden_ratio_closed_form() {
             modes: 2,
         }],
         recorders: vec![
-            RecorderSpec::ModeShape { mode: 0, node: 1, dof: 0 },
-            RecorderSpec::ModeShape { mode: 1, node: 1, dof: 0 },
+            RecorderSpec::ModeShape {
+                mode: 0,
+                node: 1,
+                dof: 0,
+            },
+            RecorderSpec::ModeShape {
+                mode: 1,
+                node: 1,
+                dof: 0,
+            },
         ],
     };
 
     let mut session = decode(input).expect("well-formed modal input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
     let (mode0_freq, _) = last_sample(&outcome, 0).expect("mode 0 sample");
     let (mode1_freq, _) = last_sample(&outcome, 1).expect("mode 1 sample");
-    assert!((mode0_freq - 1.0 / phi).abs() < 1e-9, "expected {}, got {mode0_freq}", 1.0 / phi);
-    assert!((mode1_freq - phi).abs() < 1e-9, "expected {phi}, got {mode1_freq}");
+    assert!(
+        (mode0_freq - 1.0 / phi).abs() < 1e-9,
+        "expected {}, got {mode0_freq}",
+        1.0 / phi
+    );
+    assert!(
+        (mode1_freq - phi).abs() < 1e-9,
+        "expected {phi}, got {mode1_freq}"
+    );
 }
 
 /// An out-of-range `ModeShape.mode` records nothing this call, rather than
@@ -532,14 +596,27 @@ fn a_mode_shape_recorder_past_the_computed_mode_count_records_nothing() {
         friction: vec![],
     };
     input.sequence = SequenceSpec {
-        stages: vec![StageSpec::Modal { id: "modes".to_string(), modes: 1 }],
-        recorders: vec![RecorderSpec::ModeShape { mode: 5, node: 1, dof: 0 }],
+        stages: vec![StageSpec::Modal {
+            id: "modes".to_string(),
+            modes: 1,
+        }],
+        recorders: vec![RecorderSpec::ModeShape {
+            mode: 5,
+            node: 1,
+            dof: 0,
+        }],
     };
 
     let mut session = decode(input).expect("well-formed modal input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
-    assert!(last_sample(&outcome, 0).is_none(), "out-of-range mode should record nothing");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
+    assert!(
+        last_sample(&outcome, 0).is_none(),
+        "out-of-range mode should record nothing"
+    );
 }
 
 /// Rayleigh-damped free vibration (core/tests/m6_dynamics.rs's SDOF case),
@@ -587,7 +664,10 @@ fn decodes_a_transient_stage_and_matches_damped_free_vibration_closed_form() {
             id: "dynamic".to_string(),
             steps,
             dt,
-            damping: carapace_wasm::input_v1::sequence::DampingSpec { alpha_m, beta_k: 0.0 },
+            damping: carapace_wasm::input_v1::sequence::DampingSpec {
+                alpha_m,
+                beta_k: 0.0,
+            },
             ground_motions: vec![],
         }],
         recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
@@ -595,7 +675,10 @@ fn decodes_a_transient_stage_and_matches_damped_free_vibration_closed_form() {
 
     let mut session = decode(input).expect("well-formed transient input should decode");
     let outcome = session.advance(steps);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     // Closed-form damped step response from rest (Chopra, "Dynamics of
     // Structures"): u(t) = u_static * (1 - e^{-zeta*omega*t} * (cos(omega_d
@@ -614,7 +697,10 @@ fn decodes_a_transient_stage_and_matches_damped_free_vibration_closed_form() {
     // Newmark discretization error, not exact — same tolerance
     // core/tests/m6_dynamics.rs's own closed-form comparison uses.
     let (_, got) = last_sample(&outcome, 0).expect("one recorded sample");
-    assert!((got - expected).abs() < 1e-4, "expected {expected}, got {got}");
+    assert!(
+        (got - expected).abs() < 1e-4,
+        "expected {expected}, got {got}"
+    );
 }
 
 /// The handoff's required first acceptance case: a 2D fiber-section
@@ -864,7 +950,10 @@ fn decodes_a_reaction_recorder_and_matches_the_closed_form_support_reaction() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![RecorderSpec::Reaction { node: 0, dof: 0 }],
@@ -872,10 +961,17 @@ fn decodes_a_reaction_recorder_and_matches_the_closed_form_support_reaction() {
 
     let mut session = decode(input).expect("well-formed reaction input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let (_, reaction) = last_sample(&outcome, 0).expect("one recorded sample");
-    assert!((reaction + load).abs() < 1e-9, "expected {}, got {reaction}", -load);
+    assert!(
+        (reaction + load).abs() < 1e-9,
+        "expected {}, got {reaction}",
+        -load
+    );
 }
 
 /// The `DispBeamColumn` pure-axial closed form (core/tests/
@@ -885,7 +981,8 @@ fn decodes_a_reaction_recorder_and_matches_the_closed_form_support_reaction() {
 /// identical strain/stress (pure axial extension, zero curvature).
 #[test]
 fn decodes_a_fiber_recorder_and_matches_hand_computed_strain_and_stress() {
-    let (e, area, iz, length, axial_load): (f64, f64, f64, f64, f64) = (30_000.0, 2.0, 1000.0, 100.0, 60.0);
+    let (e, area, iz, length, axial_load): (f64, f64, f64, f64, f64) =
+        (30_000.0, 2.0, 1000.0, 100.0, 60.0);
     let h = (iz / area).sqrt();
     let mut input = empty_input(2);
     input.nodes = NodeTable {
@@ -926,7 +1023,10 @@ fn decodes_a_fiber_recorder_and_matches_hand_computed_strain_and_stress() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -949,14 +1049,23 @@ fn decodes_a_fiber_recorder_and_matches_hand_computed_strain_and_stress() {
 
     let mut session = decode(input).expect("well-formed fiber recorder input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected_strain = axial_load / (e * area);
     let expected_stress = e * expected_strain;
     let (_, strain) = last_sample(&outcome, 0).expect("fiber 0 strain sample");
     let (_, stress) = last_sample(&outcome, 1).expect("fiber 1 stress sample");
-    assert!((strain - expected_strain).abs() < 1e-9, "expected {expected_strain}, got {strain}");
-    assert!((stress - expected_stress).abs() < 1e-6, "expected {expected_stress}, got {stress}");
+    assert!(
+        (strain - expected_strain).abs() < 1e-9,
+        "expected {expected_strain}, got {strain}"
+    );
+    assert!(
+        (stress - expected_stress).abs() < 1e-6,
+        "expected {expected_stress}, got {stress}"
+    );
 }
 
 /// An out-of-range `Fiber.point`/`fiber` records nothing this call, and a
@@ -998,7 +1107,10 @@ fn a_fiber_recorder_on_a_non_fiber_element_or_out_of_range_index_records_nothing
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![RecorderSpec::Fiber {
@@ -1012,8 +1124,14 @@ fn a_fiber_recorder_on_a_non_fiber_element_or_out_of_range_index_records_nothing
 
     let mut session = decode(input).expect("well-formed input should decode");
     let outcome = session.advance(1);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
-    assert!(last_sample(&outcome, 0).is_none(), "a non-fiber element's fiber recorder should record nothing");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
+    assert!(
+        last_sample(&outcome, 0).is_none(),
+        "a non-fiber element's fiber recorder should record nothing"
+    );
 }
 
 /// `core::Domain::equal_dof` (`EqualDofTable`, `ConstraintHandler::
@@ -1064,7 +1182,10 @@ fn decodes_an_equal_dof_constraint_tying_one_nodes_ux_to_another() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -1075,7 +1196,10 @@ fn decodes_an_equal_dof_constraint_tying_one_nodes_ux_to_another() {
 
     let mut session = decode(input).expect("well-formed equal_dof input should decode");
     let outcome = session.advance(10);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected = load * length / (area * e);
     let (_, retained_disp) = last_sample(&outcome, 0).expect("retained node sample");
@@ -1133,7 +1257,10 @@ fn decodes_a_rigid_diaphragm_tying_two_nodes_ux_to_the_retained_node() {
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
             algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
             hold_patterns_after: vec![],
         }],
         recorders: vec![
@@ -1145,11 +1272,17 @@ fn decodes_a_rigid_diaphragm_tying_two_nodes_ux_to_the_retained_node() {
 
     let mut session = decode(input).expect("well-formed rigid_diaphragm input should decode");
     let outcome = session.advance(10);
-    assert!(outcome.done && outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
 
     let expected = load * length / (area * e);
     let (_, retained_disp) = last_sample(&outcome, 0).expect("retained node sample");
-    assert!((retained_disp - expected).abs() < 1e-9, "expected {expected}, got {retained_disp}");
+    assert!(
+        (retained_disp - expected).abs() < 1e-9,
+        "expected {expected}, got {retained_disp}"
+    );
     for recorder_index in [1, 2] {
         let (_, disp) = last_sample(&outcome, recorder_index).expect("diaphragm-tied node sample");
         assert!(

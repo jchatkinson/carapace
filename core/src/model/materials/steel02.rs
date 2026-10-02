@@ -18,7 +18,18 @@ impl Material {
     /// `Steel02`'s actual OpenSees signature (minus `sigini`/`density`),
     /// not something to trim for its own sake.
     #[allow(clippy::too_many_arguments)]
-    pub fn steel02(fy: f64, e0: f64, b: f64, r0: f64, cr1: f64, cr2: f64, a1: f64, a2: f64, a3: f64, a4: f64) -> Self {
+    pub fn steel02(
+        fy: f64,
+        e0: f64,
+        b: f64,
+        r0: f64,
+        cr1: f64,
+        cr2: f64,
+        a1: f64,
+        a2: f64,
+        a3: f64,
+        a4: f64,
+    ) -> Self {
         let epsy = fy / e0;
         Material::Steel02 {
             fy,
@@ -81,7 +92,8 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     else {
         unreachable!()
     };
-    let (fy, e0, b, r0, cr1, cr2, a1, a2, a3, a4) = (*fy, *e0, *b, *r0, *cr1, *cr2, *a1, *a2, *a3, *a4);
+    let (fy, e0, b, r0, cr1, cr2, a1, a2, a3, a4) =
+        (*fy, *e0, *b, *r0, *cr1, *cr2, *a1, *a2, *a3, *a4);
     let (mut min_strain, mut max_strain, mut pl_strain) = (*min_strain, *max_strain, *pl_strain);
     let (mut asymptote_strain, mut asymptote_stress) = (*asymptote_strain, *asymptote_stress);
     let (mut reversal_strain, mut reversal_stress) = (*reversal_strain, *reversal_stress);
@@ -121,7 +133,8 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         }
         let d1 = (max_strain - min_strain) / (2.0 * (a4 * epsy));
         let shift = 1.0 + a3 * d1.powf(0.8);
-        asymptote_strain = (fy * shift - esh * epsy * shift - reversal_stress + e0 * reversal_strain) / (e0 - esh);
+        asymptote_strain =
+            (fy * shift - esh * epsy * shift - reversal_stress + e0 * reversal_strain) / (e0 - esh);
         asymptote_stress = fy * shift + esh * (asymptote_strain - epsy * shift);
         pl_strain = max_strain;
     } else if kon == Steel02Kon::Positive && dstrain < 0.0 {
@@ -133,7 +146,9 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         }
         let d1 = (max_strain - min_strain) / (2.0 * (a2 * epsy));
         let shift = 1.0 + a1 * d1.powf(0.8);
-        asymptote_strain = (-fy * shift + esh * epsy * shift - reversal_stress + e0 * reversal_strain) / (e0 - esh);
+        asymptote_strain = (-fy * shift + esh * epsy * shift - reversal_stress
+            + e0 * reversal_strain)
+            / (e0 - esh);
         asymptote_stress = -fy * shift + esh * (asymptote_strain + epsy * shift);
         pl_strain = min_strain;
     }
@@ -149,8 +164,11 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     let dum1 = 1.0 + eps_ratio.abs().powf(r);
     let dum2 = dum1.powf(1.0 / r);
 
-    let stress = (b * eps_ratio + (1.0 - b) * eps_ratio / dum2) * (asymptote_stress - reversal_stress) + reversal_stress;
-    let tangent = (b + (1.0 - b) / (dum1 * dum2)) * (asymptote_stress - reversal_stress) / (asymptote_strain - reversal_strain);
+    let stress = (b * eps_ratio + (1.0 - b) * eps_ratio / dum2)
+        * (asymptote_stress - reversal_stress)
+        + reversal_stress;
+    let tangent = (b + (1.0 - b) / (dum1 * dum2)) * (asymptote_stress - reversal_stress)
+        / (asymptote_strain - reversal_strain);
 
     (
         stress,
@@ -201,7 +219,10 @@ mod tests {
         // Menegotto-Pinto curve has converged onto the strain-hardening
         // line.
         let (_stress, tangent) = m.trial_stress_tangent(0.05);
-        assert!((tangent - esh).abs() < 1.0, "expected tangent near Esh={esh}, got {tangent}");
+        assert!(
+            (tangent - esh).abs() < 1.0,
+            "expected tangent near Esh={esh}, got {tangent}"
+        );
     }
 
     #[test]
@@ -213,7 +234,10 @@ mod tests {
         // hardening branch.
         let m = m.commit(0.02);
         let (_stress, tangent) = m.trial_stress_tangent(0.0199);
-        assert!(tangent > 0.9 * 29000.0, "expected near-elastic unloading tangent, got {tangent}");
+        assert!(
+            tangent > 0.9 * 29000.0,
+            "expected near-elastic unloading tangent, got {tangent}"
+        );
     }
 
     #[test]
@@ -221,7 +245,9 @@ mod tests {
         let m = Material::steel02(60.0, 29000.0, 0.01, 18.5, 0.925, 0.15, 0.9, 5.0, 0.9, 5.0);
         let m = m.commit(0.02);
         let m = m.commit(-0.01);
-        let Material::Steel02 { max_strain, .. } = m else { panic!() };
+        let Material::Steel02 { max_strain, .. } = m else {
+            panic!()
+        };
         // max_strain should have latched onto the 0.02 peak on reversal,
         // not stayed at the virgin epsy ≈ 0.00207.
         assert!((max_strain - 0.02).abs() < 1e-9, "got {max_strain}");

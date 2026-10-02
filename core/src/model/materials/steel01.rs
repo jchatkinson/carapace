@@ -72,7 +72,11 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     // says only exists split into two `if`s as an optimizer
     // workaround; the single-expression form is used here.
     let stress = (c1 - c2).max((c1 + c3).min(c));
-    let tangent = if (stress - c).abs() < f64::EPSILON { e0 } else { esh };
+    let tangent = if (stress - c).abs() < f64::EPSILON {
+        e0
+    } else {
+        esh
+    };
 
     if loading == Steel01Loading::None && dstrain != 0.0 {
         loading = if dstrain > 0.0 {
@@ -143,7 +147,10 @@ mod tests {
         // On first loading (shift_p=shift_n=1, min=max=0) the upper
         // bounding line is c1+c3 = Esh*strain + fy*(1-b).
         let expected = esh * 0.02 + 60.0 * (1.0 - 0.01);
-        assert!((stress - expected).abs() < 1e-6, "expected {expected}, got {stress}");
+        assert!(
+            (stress - expected).abs() < 1e-6,
+            "expected {expected}, got {stress}"
+        );
         assert!((tangent - esh).abs() < 1e-9);
     }
 
@@ -155,11 +162,21 @@ mod tests {
         // second (unloading -> loading) shifts shift_p.
         let m = m.commit(0.02);
         let m = m.commit(-0.02);
-        let Material::Steel01 { shift_n, .. } = m else { panic!() };
-        assert!(shift_n > 1.0, "shift_n should have grown after the first reversal: {shift_n}");
+        let Material::Steel01 { shift_n, .. } = m else {
+            panic!()
+        };
+        assert!(
+            shift_n > 1.0,
+            "shift_n should have grown after the first reversal: {shift_n}"
+        );
 
         let m = m.commit(0.02);
-        let Material::Steel01 { shift_p, .. } = m else { panic!() };
-        assert!(shift_p > 1.0, "shift_p should have grown after the second reversal: {shift_p}");
+        let Material::Steel01 { shift_p, .. } = m else {
+            panic!()
+        };
+        assert!(
+            shift_p > 1.0,
+            "shift_p should have grown after the second reversal: {shift_p}"
+        );
     }
 }

@@ -33,5 +33,8 @@ pub enum Algorithm {
     /// `max_dimension` corrections actually moved the residual to recover
     /// most of full Newton's convergence rate without paying for a fresh
     /// factorization every iteration.
-    KrylovNewton { tangent: TangentStrategy, max_dimension: usize },
+    KrylovNewton {
+        tangent: TangentStrategy,
+        max_dimension: usize,
+    },
 }

@@ -34,13 +34,18 @@ fn constant_ground_acceleration_matches_undamped_step_response_closed_form() {
 
     let steps = 100;
     for _ in 0..steps {
-        analysis.step().expect("forced undamped SDOF should solve every step");
+        analysis
+            .step()
+            .expect("forced undamped SDOF should solve every step");
     }
 
     let t = 0.01 * steps as f64;
     let expected = -(ag0 / (omega * omega)) * (1.0 - (omega * t).cos());
     let u = analysis.domain().node(mass_node).displacement[0];
-    assert!((u - expected).abs() < 1e-3, "expected u({t})={expected}, got {u}");
+    assert!(
+        (u - expected).abs() < 1e-3,
+        "expected u({t})={expected}, got {u}"
+    );
 }
 
 /// `GroundMotion`'s effective force (`-M*ι*ag(t)`, mass-proportional) must
@@ -69,11 +74,13 @@ fn ground_motion_matches_an_equivalent_mass_proportional_load_pattern() {
     let (mut domain_pattern, node_pattern) = build_sdof(m, k);
     let pattern = domain_pattern.add_load_pattern(ag_path);
     domain_pattern.add_nodal_load(pattern, node_pattern, 0, -m);
-    let mut analysis_pattern =
-        TransientAnalysis::new(domain_pattern, RayleighDamping::NONE, 0.01).expect("SDOF should be well-posed");
+    let mut analysis_pattern = TransientAnalysis::new(domain_pattern, RayleighDamping::NONE, 0.01)
+        .expect("SDOF should be well-posed");
 
     for _ in 0..60 {
-        let r_gm = analysis_gm.step().expect("ground-motion-driven SDOF should solve every step");
+        let r_gm = analysis_gm
+            .step()
+            .expect("ground-motion-driven SDOF should solve every step");
         let r_pattern = analysis_pattern
             .step()
             .expect("equivalent-load-pattern SDOF should solve every step");

@@ -114,7 +114,12 @@ pub struct Fiber3 {
 
 impl Fiber3 {
     pub fn new(y: f64, z: f64, area: f64, material: Material) -> Self {
-        Fiber3 { y, z, area, material }
+        Fiber3 {
+            y,
+            z,
+            area,
+            material,
+        }
     }
 }
 
@@ -155,7 +160,8 @@ impl FiberSection3 {
     /// why).
     pub fn trial(&self, eps0: f64, kappa_z: f64, kappa_y: f64) -> SectionResponse3 {
         let (mut n, mut mz, mut my) = (0.0, 0.0, 0.0);
-        let (mut ea, mut eqz, mut eqy, mut eizz, mut eiyy, mut eiyz) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let (mut ea, mut eqz, mut eqy, mut eizz, mut eiyy, mut eiyz) =
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         for fiber in &self.fibers {
             let strain = eps0 - fiber.y * kappa_z + fiber.z * kappa_y;
             let (stress, tangent) = fiber.material.trial_stress_tangent(strain);
@@ -172,7 +178,12 @@ impl FiberSection3 {
             eiyy += ta * fiber.z * fiber.z;
             eiyz += ta * fiber.y * fiber.z;
         }
-        (n, mz, my, [[ea, -eqz, eqy], [-eqz, eizz, -eiyz], [eqy, -eiyz, eiyy]])
+        (
+            n,
+            mz,
+            my,
+            [[ea, -eqz, eqy], [-eqz, eizz, -eiyz], [eqy, -eiyz, eiyy]],
+        )
     }
 
     /// Commit every fiber's material at `(eps0, kappa_z, kappa_y)` — called
@@ -216,9 +227,16 @@ mod tests {
         ]);
 
         let (n, m, k) = section.trial(0.001, 0.0002);
-        assert!((k[0][0] - e * area).abs() < 1e-6, "EA mismatch: {}", k[0][0]);
+        assert!(
+            (k[0][0] - e * area).abs() < 1e-6,
+            "EA mismatch: {}",
+            k[0][0]
+        );
         assert!((k[1][1] - e * iz).abs() < 1e-6, "EI mismatch: {}", k[1][1]);
-        assert!(k[0][1].abs() < 1e-9, "should be EQ=0 for a symmetric section");
+        assert!(
+            k[0][1].abs() < 1e-9,
+            "should be EQ=0 for a symmetric section"
+        );
 
         // N = EA*eps0 (kappa doesn't couple in for a symmetric section),
         // M = EI*kappa.
@@ -236,7 +254,8 @@ mod tests {
     /// `M = -sum(stress*area*y)` — the same definition `FiberSection::trial`
     /// uses, but computed independently, fiber by fiber, outside it.
     #[test]
-    fn steel_and_concrete_fiber_section_matches_hand_computed_n_m_through_yield_and_partial_unload() {
+    fn steel_and_concrete_fiber_section_matches_hand_computed_n_m_through_yield_and_partial_unload()
+    {
         let y_rebar = 5.0;
         let area_rebar = 0.4;
         let y_c1 = -2.0;
@@ -261,12 +280,12 @@ mod tests {
         let mut hand_c2 = concrete();
 
         let check = |section: &mut FiberSection,
-                          hand_rebar: &mut Material,
-                          hand_c1: &mut Material,
-                          hand_c2: &mut Material,
-                          eps0: f64,
-                          kappa: f64,
-                          label: &str| {
+                     hand_rebar: &mut Material,
+                     hand_c1: &mut Material,
+                     hand_c2: &mut Material,
+                     eps0: f64,
+                     kappa: f64,
+                     label: &str| {
             let strain_rebar = eps0 - y_rebar * kappa;
             let strain_c1 = eps0 - y_c1 * kappa;
             let strain_c2 = eps0 - y_c2 * kappa;
@@ -281,8 +300,14 @@ mod tests {
                 + stress_c2 * area_c2 * y_c2);
 
             let (n, m, _k) = section.trial(eps0, kappa);
-            assert!((n - expected_n).abs() < 1e-9, "{label}: N mismatch, expected {expected_n}, got {n}");
-            assert!((m - expected_m).abs() < 1e-9, "{label}: M mismatch, expected {expected_m}, got {m}");
+            assert!(
+                (n - expected_n).abs() < 1e-9,
+                "{label}: N mismatch, expected {expected_n}, got {n}"
+            );
+            assert!(
+                (m - expected_m).abs() < 1e-9,
+                "{label}: M mismatch, expected {expected_m}, got {m}"
+            );
 
             section.commit(eps0, kappa);
             *hand_rebar = hand_rebar.commit(strain_rebar);
@@ -294,17 +319,41 @@ mod tests {
         // strain +0.005 — well past yield (epsy = 60/29000 ≈ 0.00207) —
         // and the two concrete layers into -0.002 (right at the peak,
         // epsc0) and -0.004 (past the peak, on the descending branch).
-        check(&mut section, &mut hand_rebar, &mut hand_c1, &mut hand_c2, 0.0, -0.001, "state 1: first yield/cracking");
+        check(
+            &mut section,
+            &mut hand_rebar,
+            &mut hand_c1,
+            &mut hand_c2,
+            0.0,
+            -0.001,
+            "state 1: first yield/cracking",
+        );
 
         // State 2: push further — deeper into the steel hardening range and
         // the concrete's descending branch.
-        check(&mut section, &mut hand_rebar, &mut hand_c1, &mut hand_c2, 0.0, -0.002, "state 2: deeper into the nonlinear range");
+        check(
+            &mut section,
+            &mut hand_rebar,
+            &mut hand_c1,
+            &mut hand_c2,
+            0.0,
+            -0.002,
+            "state 2: deeper into the nonlinear range",
+        );
 
         // State 3: partial unload (smaller-magnitude curvature) — history
         // (steel's isotropic-hardening shift, concrete's degraded
         // unload-reload slope) must carry over correctly for the (N, M) to
         // still match the independently-committed hand computation.
-        check(&mut section, &mut hand_rebar, &mut hand_c1, &mut hand_c2, 0.0, -0.0008, "state 3: partial unload");
+        check(
+            &mut section,
+            &mut hand_rebar,
+            &mut hand_c1,
+            &mut hand_c2,
+            0.0,
+            -0.0008,
+            "state 3: partial unload",
+        );
     }
 
     /// `FiberSection3` biaxial analogue of `two_symmetric_elastic_fibers_
@@ -328,12 +377,25 @@ mod tests {
         ]);
 
         let (n, mz, my, k) = section.trial(0.001, 0.0002, 0.0003);
-        assert!((k[0][0] - e * area).abs() < 1e-6, "EA mismatch: {}", k[0][0]);
+        assert!(
+            (k[0][0] - e * area).abs() < 1e-6,
+            "EA mismatch: {}",
+            k[0][0]
+        );
         assert!((k[1][1] - e * iz).abs() < 1e-6, "EIz mismatch: {}", k[1][1]);
         assert!((k[2][2] - e * iy).abs() < 1e-6, "EIy mismatch: {}", k[2][2]);
-        assert!(k[0][1].abs() < 1e-9, "EQz should be 0 for a symmetric section");
-        assert!(k[0][2].abs() < 1e-9, "EQy should be 0 for a symmetric section");
-        assert!(k[1][2].abs() < 1e-9, "EIyz should be 0 for a symmetric section");
+        assert!(
+            k[0][1].abs() < 1e-9,
+            "EQz should be 0 for a symmetric section"
+        );
+        assert!(
+            k[0][2].abs() < 1e-9,
+            "EQy should be 0 for a symmetric section"
+        );
+        assert!(
+            k[1][2].abs() < 1e-9,
+            "EIyz should be 0 for a symmetric section"
+        );
 
         assert!((n - e * area * 0.001).abs() < 1e-6);
         assert!((mz - e * iz * 0.0002).abs() < 1e-6);

@@ -1,4 +1,7 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, RayleighDamping, TransientAnalysis};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, RayleighDamping,
+    TransientAnalysis,
+};
 use carapace_core::model::{Axis3, Domain3, Element3, Material, Node3, SpatialDof, ZeroLength3};
 
 /// The classical "asymmetric rigid diaphragm" acceptance case: two lateral
@@ -71,7 +74,8 @@ fn asymmetric_shear_walls_reproduce_the_standard_torsional_diaphragm_stiffness_m
                 .fix(SpatialDof::Rz as usize),
         );
         domain.add_element(Element3::ZeroLength3(
-            ZeroLength3::new(ground, node).with_material(SpatialDof::Ux as usize, Material::Elastic { e: k }),
+            ZeroLength3::new(ground, node)
+                .with_material(SpatialDof::Ux as usize, Material::Elastic { e: k }),
         ));
         node
     };
@@ -84,10 +88,15 @@ fn asymmetric_shear_walls_reproduce_the_standard_torsional_diaphragm_stiffness_m
         .constraint_handler(ConstraintHandler::Transformation)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
 
-    analysis.step().expect("linear elastic torsional rigid diaphragm should solve");
+    analysis
+        .step()
+        .expect("linear elastic torsional rigid diaphragm should solve");
 
     let k_uu = k_a + k_b;
     let k_ut = k_a * z_a + k_b * z_b;
@@ -98,7 +107,10 @@ fn asymmetric_shear_walls_reproduce_the_standard_torsional_diaphragm_stiffness_m
 
     let u = analysis.domain().node(master).displacement[SpatialDof::Ux as usize];
     let theta = analysis.domain().node(master).displacement[SpatialDof::Ry as usize];
-    assert!((u - expected_u).abs() < 1e-9, "expected U={expected_u}, got {u}");
+    assert!(
+        (u - expected_u).abs() < 1e-9,
+        "expected U={expected_u}, got {u}"
+    );
     assert!(
         (theta - expected_theta).abs() < 1e-9,
         "expected theta={expected_theta}, got {theta}"
@@ -181,10 +193,26 @@ fn rigid_diaphragm_never_couples_vertical_translation_or_any_rotation() {
         .expect("diaphragm-constrained system with mass on every free dof should be well-posed");
 
     let c = analysis.domain().node(constrained);
-    assert_eq!(c.displacement[SpatialDof::Uy as usize], 7.0, "out-of-plane translation must stay untouched");
-    assert_eq!(c.displacement[SpatialDof::Rx as usize], 1.0, "no rotational dof is ever tied");
-    assert_eq!(c.displacement[SpatialDof::Ry as usize], 2.0, "not even rotation about the diaphragm normal itself");
-    assert_eq!(c.displacement[SpatialDof::Rz as usize], 3.0, "no rotational dof is ever tied");
+    assert_eq!(
+        c.displacement[SpatialDof::Uy as usize],
+        7.0,
+        "out-of-plane translation must stay untouched"
+    );
+    assert_eq!(
+        c.displacement[SpatialDof::Rx as usize],
+        1.0,
+        "no rotational dof is ever tied"
+    );
+    assert_eq!(
+        c.displacement[SpatialDof::Ry as usize],
+        2.0,
+        "not even rotation about the diaphragm normal itself"
+    );
+    assert_eq!(
+        c.displacement[SpatialDof::Rz as usize],
+        3.0,
+        "no rotational dof is ever tied"
+    );
 
     // The two in-plane translations *do* respond to the lever arm:
     // `a = z`, `b = x` for `normal = Y` (see `Domain3::rigid_diaphragm`'s

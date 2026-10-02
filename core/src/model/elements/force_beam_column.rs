@@ -399,7 +399,11 @@ impl ForceBeamColumn {
     pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node) {
         let (length, d_local, corotational) = if self.transform == GeomTransf::Corotational {
             let state = Corotational2d::new(node_i, node_j);
-            (state.initial_length(), SVector::<f64, 6>::zeros(), Some(state))
+            (
+                state.initial_length(),
+                SVector::<f64, 6>::zeros(),
+                Some(state),
+            )
         } else {
             let (length, _t, d_local) = self.local_displacement(node_i, node_j);
             (length, d_local, None)
@@ -468,7 +472,11 @@ const NBD3: usize = 5;
 
 /// `(basic force, per-section (eps0, kappa_z, kappa_y), basic tangent
 /// stiffness)` — `ForceBeamColumn3`'s counterpart to `StateDeterminationResult`.
-type StateDeterminationResult3 = (SVector<f64, NBD3>, Vec<(f64, f64, f64)>, SMatrix<f64, NBD3, NBD3>);
+type StateDeterminationResult3 = (
+    SVector<f64, NBD3>,
+    Vec<(f64, f64, f64)>,
+    SMatrix<f64, NBD3, NBD3>,
+);
 
 /// `ForceBeamColumn`'s spatial (biaxial) counterpart: a 2-node, force-based
 /// 3D beam-column. Basic system, force interpolation, and state-
@@ -530,7 +538,9 @@ impl ForceBeamColumn3 {
         integration: BeamIntegration,
     ) -> Self {
         let n_points = integration.points().len();
-        let sections = (0..n_points).map(|_| FiberSection3::new(fibers.clone())).collect();
+        let sections = (0..n_points)
+            .map(|_| FiberSection3::new(fibers.clone()))
+            .collect();
         ForceBeamColumn3 {
             node_i,
             node_j,
@@ -554,11 +564,21 @@ impl ForceBeamColumn3 {
         self
     }
 
-    fn local_displacement(&self, node_i: &Node3, node_j: &Node3) -> (f64, SpatialElementMatrix, SpatialElementVector) {
+    fn local_displacement(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+    ) -> (f64, SpatialElementMatrix, SpatialElementVector) {
         let transform = GeomTransf3::linear(self.vec_xz);
         let (length, r) = transform.local_axes(node_i, node_j);
         let t = GeomTransf3::rotation_matrix(&r);
-        let d_global = SpatialElementVector::from_iterator(node_i.displacement.iter().chain(node_j.displacement.iter()).copied());
+        let d_global = SpatialElementVector::from_iterator(
+            node_i
+                .displacement
+                .iter()
+                .chain(node_j.displacement.iter())
+                .copied(),
+        );
         (length, t, t * d_global)
     }
 
@@ -675,7 +695,14 @@ impl ForceBeamColumn3 {
 
                 let (n0, mz0, my0, k_sec0) = self.sections[i].trial(e[i].0, e[i].1, e[i].2);
                 let f_sec0 = Matrix3::from_row_slice(&[
-                    k_sec0[0][0], k_sec0[0][1], k_sec0[0][2], k_sec0[1][0], k_sec0[1][1], k_sec0[1][2], k_sec0[2][0], k_sec0[2][1],
+                    k_sec0[0][0],
+                    k_sec0[0][1],
+                    k_sec0[0][2],
+                    k_sec0[1][0],
+                    k_sec0[1][1],
+                    k_sec0[1][2],
+                    k_sec0[2][0],
+                    k_sec0[2][1],
                     k_sec0[2][2],
                 ])
                 .try_inverse()
@@ -687,7 +714,14 @@ impl ForceBeamColumn3 {
 
                 let (n1, mz1, my1, k_sec1) = self.sections[i].trial(e[i].0, e[i].1, e[i].2);
                 let f_sec1 = Matrix3::from_row_slice(&[
-                    k_sec1[0][0], k_sec1[0][1], k_sec1[0][2], k_sec1[1][0], k_sec1[1][1], k_sec1[1][2], k_sec1[2][0], k_sec1[2][1],
+                    k_sec1[0][0],
+                    k_sec1[0][1],
+                    k_sec1[0][2],
+                    k_sec1[1][0],
+                    k_sec1[1][1],
+                    k_sec1[1][2],
+                    k_sec1[2][0],
+                    k_sec1[2][1],
                     k_sec1[2][2],
                 ])
                 .try_inverse()
@@ -720,7 +754,11 @@ impl ForceBeamColumn3 {
         ((q, e, k_basic), converged)
     }
 
-    pub(super) fn form_tangent_and_resistance(&self, node_i: &Node3, node_j: &Node3) -> (SpatialElementMatrix, SpatialElementVector) {
+    pub(super) fn form_tangent_and_resistance(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+    ) -> (SpatialElementMatrix, SpatialElementVector) {
         let (length, t, d_local) = self.local_displacement(node_i, node_j);
         let a = Self::basic_deformation_matrix(length);
         let v = a * d_local;
@@ -761,7 +799,9 @@ impl ForceBeamColumn3 {
         self.e_commit
             .iter()
             .zip(&self.sections)
-            .map(|(&(eps0, kappa_z, kappa_y), section)| section.fiber_responses(eps0, kappa_z, kappa_y))
+            .map(|(&(eps0, kappa_z, kappa_y), section)| {
+                section.fiber_responses(eps0, kappa_z, kappa_y)
+            })
             .collect()
     }
 

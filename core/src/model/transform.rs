@@ -99,8 +99,12 @@ impl Corotational2d {
             0.0, 0.0, 1.0,
         );
         let mut global_to_local = SMatrix::<f64, 6, 6>::zeros();
-        global_to_local.fixed_view_mut::<3, 3>(0, 0).copy_from(&block);
-        global_to_local.fixed_view_mut::<3, 3>(3, 3).copy_from(&block);
+        global_to_local
+            .fixed_view_mut::<3, 3>(0, 0)
+            .copy_from(&block);
+        global_to_local
+            .fixed_view_mut::<3, 3>(3, 3)
+            .copy_from(&block);
 
         Self {
             initial_length,
@@ -252,13 +256,19 @@ impl GeomTransf3 {
         let p_j = Vector3::from(node_j.coords);
         let d = p_j - p_i;
         let length = d.norm();
-        assert!(length > 0.0, "GeomTransf3: element endpoints must not coincide");
+        assert!(
+            length > 0.0,
+            "GeomTransf3: element endpoints must not coincide"
+        );
         let x_axis = d / length;
 
         let v = Vector3::from(*vec_xz);
         let y_unnormalized = v.cross(&x_axis);
         let y_norm = y_unnormalized.norm();
-        assert!(y_norm > 1e-12, "GeomTransf3: vec_xz must not be parallel to the member axis");
+        assert!(
+            y_norm > 1e-12,
+            "GeomTransf3: vec_xz must not be parallel to the member axis"
+        );
         let y_axis = y_unnormalized / y_norm;
         let z_axis = x_axis.cross(&y_axis);
 

@@ -1,6 +1,9 @@
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
+};
 use carapace_core::model::{
-    BeamIntegration, Domain3, ElasticBeamColumn3, Element3, Fiber3, ForceBeamColumn3, GeomTransf3, Material, Node3, SpatialDof,
+    BeamIntegration, Domain3, ElasticBeamColumn3, Element3, Fiber3, ForceBeamColumn3, GeomTransf3,
+    Material, Node3, SpatialDof,
 };
 
 /// M17 acceptance (spatial-architecture plan): for a prismatic elastic
@@ -12,7 +15,8 @@ use carapace_core::model::{
 /// doc comment for why this test, not inspection, is the source of truth.
 #[test]
 fn four_corner_fiber_section_matches_elastic_beam_column3_exactly_in_both_planes() {
-    let (e, g, area, iy, iz, j, length): (f64, f64, f64, f64, f64, f64, f64) = (30_000.0, 12_000.0, 4.0, 500.0, 2000.0, 50.0, 100.0);
+    let (e, g, area, iy, iz, j, length): (f64, f64, f64, f64, f64, f64, f64) =
+        (30_000.0, 12_000.0, 4.0, 500.0, 2000.0, 50.0, 100.0);
     let (fy, fz, torque, axial) = (-10.0, -6.0, 20.0, 500.0);
 
     let hz = (iy / area).sqrt();
@@ -57,9 +61,14 @@ fn four_corner_fiber_section_matches_elastic_beam_column3_exactly_in_both_planes
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
             .algorithm(Algorithm::Linear)
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            })
             .build(domain);
-        analysis.step().expect("cantilever ForceBeamColumn3 should solve");
+        analysis
+            .step()
+            .expect("cantilever ForceBeamColumn3 should solve");
         analysis.domain().node(node_j).displacement
     };
 
@@ -95,9 +104,14 @@ fn four_corner_fiber_section_matches_elastic_beam_column3_exactly_in_both_planes
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
             .algorithm(Algorithm::Linear)
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            })
             .build(domain);
-        analysis.step().expect("cantilever ElasticBeamColumn3 should solve");
+        analysis
+            .step()
+            .expect("cantilever ElasticBeamColumn3 should solve");
         analysis.domain().node(node_j).displacement
     };
 
@@ -170,17 +184,28 @@ fn elastic_pp_section_softens_past_yield_in_both_planes_and_shows_permanent_set_
         (domain, node_j)
     };
 
-    for (tip_load_dof, disp_dof, ei) in [(SpatialDof::Uy as usize, SpatialDof::Uy as usize, iz), (SpatialDof::Uz as usize, SpatialDof::Uz as usize, iy)] {
+    for (tip_load_dof, disp_dof, ei) in [
+        (SpatialDof::Uy as usize, SpatialDof::Uy as usize, iz),
+        (SpatialDof::Uz as usize, SpatialDof::Uz as usize, iy),
+    ] {
         // Elastic range: must match the closed form exactly.
         let elastic_tip_load = -0.5 * p_yield;
         let (domain1, node_j1) = build(tip_load_dof, elastic_tip_load);
         let mut analysis1 = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
-            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-10,
+                max_iter: 30,
+            })
             .build(domain1);
-        analysis1.step().expect("elastic-range step should converge");
+        analysis1
+            .step()
+            .expect("elastic-range step should converge");
         let u1 = analysis1.domain().node(node_j1).displacement[disp_dof];
         let expected_elastic = elastic_tip_load * length.powi(3) / (3.0 * e * ei);
         assert!(
@@ -194,8 +219,14 @@ fn elastic_pp_section_softens_past_yield_in_both_planes_and_shows_permanent_set_
         let mut analysis2 = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 1.0 })
-            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-10,
+                max_iter: 30,
+            })
             .build(domain2);
         analysis2.step().expect("past-yield step should converge");
         let u2 = analysis2.domain().node(node_j2).displacement[disp_dof];
@@ -209,12 +240,23 @@ fn elastic_pp_section_softens_past_yield_in_both_planes_and_shows_permanent_set_
         let mut analysis3 = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Plain)
             .integrator(Integrator::LoadControl { increment: 0.0 })
-            .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-            .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-10,
+                max_iter: 30,
+            })
             .build(analysis2.domain().clone());
-        analysis3.step().expect("unload-to-zero step should converge");
+        analysis3
+            .step()
+            .expect("unload-to-zero step should converge");
         let u3 = analysis3.domain().node(node_j2).displacement[disp_dof];
-        assert!(u3.abs() > 1e-6, "dof {disp_dof}: unloading to zero load should leave a permanent set, got {u3}");
+        assert!(
+            u3.abs() > 1e-6,
+            "dof {disp_dof}: unloading to zero load should leave a permanent set, got {u3}"
+        );
         assert!(u3.abs() < u2.abs(), "dof {disp_dof}: unloaded displacement should be smaller in magnitude than at peak load");
     }
 }
@@ -291,9 +333,14 @@ fn asymmetric_biaxial_section_matches_hand_derived_closed_form() {
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
         .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-9, max_iter: 10 })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
-    analysis.step().expect("cantilever ForceBeamColumn3 should solve");
+    analysis
+        .step()
+        .expect("cantilever ForceBeamColumn3 should solve");
     let d = analysis.domain().node(node_j).displacement;
 
     // Section stiffness sums (EA, EQz, EQy, EIzz, EIyy, EIyz), matching

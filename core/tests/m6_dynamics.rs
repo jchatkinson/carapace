@@ -20,7 +20,8 @@ fn truss_element_mass_matches_sdof_closed_form_frequency() {
         Truss::new(node_i, node_j, area, Material::Elastic { e }).with_density(density),
     ));
 
-    let modes = modal_analysis(&mut domain, 1).expect("SDOF truss should have a well-posed eigenproblem");
+    let modes =
+        modal_analysis(&mut domain, 1).expect("SDOF truss should have a well-posed eigenproblem");
 
     let k = e * area / length;
     let m = density * area * length / 2.0;
@@ -43,11 +44,19 @@ fn beam_element_mass_matches_sdof_closed_form_frequency() {
     let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
     let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
     domain.add_element(Element::ElasticBeamColumn(
-        carapace_core::model::ElasticBeamColumn::new(node_i, node_j, e, area, iz, GeomTransf::Linear)
-            .with_density(density),
+        carapace_core::model::ElasticBeamColumn::new(
+            node_i,
+            node_j,
+            e,
+            area,
+            iz,
+            GeomTransf::Linear,
+        )
+        .with_density(density),
     ));
 
-    let modes = modal_analysis(&mut domain, 1).expect("SDOF beam should have a well-posed eigenproblem");
+    let modes =
+        modal_analysis(&mut domain, 1).expect("SDOF beam should have a well-posed eigenproblem");
 
     let k = e * area / length;
     let m = density * area * length / 2.0;
@@ -98,7 +107,9 @@ fn newmark_rayleigh_damped_sdof_matches_closed_form_free_vibration() {
 
     let steps = 100;
     for _ in 0..steps {
-        analysis.step().expect("linear damped SDOF should solve every step");
+        analysis
+            .step()
+            .expect("linear damped SDOF should solve every step");
     }
 
     let t = dt * steps as f64;
@@ -136,17 +147,21 @@ fn newmark_undamped_sdof_matches_closed_form_free_vibration() {
     ));
 
     let dt = 0.01;
-    let mut analysis =
-        TransientAnalysis::new(domain, RayleighDamping::NONE, dt).expect("undamped SDOF should be well-posed");
+    let mut analysis = TransientAnalysis::new(domain, RayleighDamping::NONE, dt)
+        .expect("undamped SDOF should be well-posed");
 
     let steps = 100;
     for _ in 0..steps {
-        analysis.step().expect("undamped SDOF should solve every step");
+        analysis
+            .step()
+            .expect("undamped SDOF should solve every step");
     }
 
     let t = dt * steps as f64;
     let expected = (omega * t).cos();
     let u = analysis.domain().node(mass_node).displacement[0];
-    assert!((u - expected).abs() < 1e-4, "expected u({t})={expected}, got {u}");
+    assert!(
+        (u - expected).abs() < 1e-4,
+        "expected u({t})={expected}, got {u}"
+    );
 }
-

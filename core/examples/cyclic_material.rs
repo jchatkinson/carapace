@@ -12,7 +12,9 @@ use std::env;
 use std::fs;
 use std::io::Write;
 
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, TangentStrategy,
+};
 use carapace_core::model::{Domain, Element, Material, Node, Pinching4DmgCyc, ZeroLength};
 use carapace_core::testkit::run_cyclic_protocol;
 
@@ -54,13 +56,36 @@ fn material(name: &str) -> Material {
             0.5, 0.3, 0.0, 0.0, 0.0,
         ),
         "pinching4" => Material::pinching4(
-            1.0, 0.005, 1.8, 0.015, 2.0, 0.025, 1.0, 0.04, //
-            -1.0, -0.005, -1.8, -0.015, -2.0, -0.025, -1.0, -0.04, //
-            0.5, 0.25, 0.05, 0.5, 0.25, 0.05, //
-            [0.0, 0.0, 0.0, 0.0], 0.0, //
-            [0.0, 0.0, 0.0, 0.0], 0.0, //
-            [0.0, 0.0, 0.0, 0.0], 0.0, //
-            10.0, Pinching4DmgCyc::EnergyBased,
+            1.0,
+            0.005,
+            1.8,
+            0.015,
+            2.0,
+            0.025,
+            1.0,
+            0.04, //
+            -1.0,
+            -0.005,
+            -1.8,
+            -0.015,
+            -2.0,
+            -0.025,
+            -1.0,
+            -0.04, //
+            0.5,
+            0.25,
+            0.05,
+            0.5,
+            0.25,
+            0.05, //
+            [0.0, 0.0, 0.0, 0.0],
+            0.0, //
+            [0.0, 0.0, 0.0, 0.0],
+            0.0, //
+            [0.0, 0.0, 0.0, 0.0],
+            0.0, //
+            10.0,
+            Pinching4DmgCyc::EnergyBased,
         ),
         "parallel" => Material::parallel(vec![
             Material::steel01(1.0, 150.0, 0.02, 0.0, 1.0, 0.0, 1.0),
@@ -96,13 +121,20 @@ const SAFETY_FRACTION: f64 = 0.005;
 fn material_with_safety(name: &str) -> (Material, f64) {
     let inner = material(name);
     let safety_k = SAFETY_FRACTION * inner.initial_tangent();
-    (Material::parallel(vec![inner, Material::Elastic { e: safety_k }]), safety_k)
+    (
+        Material::parallel(vec![inner, Material::Elastic { e: safety_k }]),
+        safety_k,
+    )
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let name = args.get(1).expect("usage: cyclic_material <material> <out.csv>");
-    let out_path = args.get(2).expect("usage: cyclic_material <material> <out.csv>");
+    let name = args
+        .get(1)
+        .expect("usage: cyclic_material <material> <out.csv>");
+    let out_path = args
+        .get(2)
+        .expect("usage: cyclic_material <material> <out.csv>");
 
     let (combined_material, safety_k) = material_with_safety(name);
 
@@ -122,21 +154,35 @@ fn main() {
             dof: 0,
             increment: 0.0, // placeholder — run_cyclic_protocol calls set_integrator before every step
         })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-        .test(ConvergenceTest::NormUnbalance { tol: 1e-10, max_iter: 30 })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-10,
+            max_iter: 30,
+        })
         .build(domain);
 
     let protocol_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../comparison/protocol.txt");
     let (tiers, step) = load_protocol(protocol_path);
 
-    let mut file = fs::File::create(out_path).unwrap_or_else(|e| panic!("failed to create {out_path}: {e}"));
+    let mut file =
+        fs::File::create(out_path).unwrap_or_else(|e| panic!("failed to create {out_path}: {e}"));
     writeln!(file, "strain,stress").unwrap();
     writeln!(file, "0,0").unwrap(); // starting point, before any leg
 
-    run_cyclic_protocol(&mut analysis, node_j, 0, &tiers, step, |strain, total_stress| {
-        let stress = total_stress - safety_k * strain; // subtract out the safety spring's contribution
-        writeln!(file, "{strain},{stress}").unwrap();
-    });
+    run_cyclic_protocol(
+        &mut analysis,
+        node_j,
+        0,
+        &tiers,
+        step,
+        |strain, total_stress| {
+            let stress = total_stress - safety_k * strain; // subtract out the safety spring's contribution
+            writeln!(file, "{strain},{stress}").unwrap();
+        },
+    );
 
     eprintln!("wrote {out_path}");
 }

@@ -22,7 +22,8 @@ fn mass_spring_chain_matches_golden_ratio_closed_form() {
         ZeroLength::new(m1, m2).with_material(0, Material::Elastic { e: 1.0 }),
     ));
 
-    let modes = modal_analysis(&mut domain, 2).expect("2-DOF chain should have a well-posed eigenproblem");
+    let modes =
+        modal_analysis(&mut domain, 2).expect("2-DOF chain should have a well-posed eigenproblem");
     assert_eq!(modes.len(), 2);
 
     let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
@@ -50,9 +51,7 @@ fn requesting_fewer_modes_than_free_dofs_returns_the_lowest_ones() {
         let mut domain = Domain::new();
         let mut prev = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
         for i in 1..=5 {
-            let node = domain.add_node(
-                Node::new([i as f64, 0.0]).fix(1).fix(2).with_mass(0, 1.0),
-            );
+            let node = domain.add_node(Node::new([i as f64, 0.0]).fix(1).fix(2).with_mass(0, 1.0));
             domain.add_element(Element::ZeroLength(
                 ZeroLength::new(prev, node).with_material(0, Material::Elastic { e: 1.0 }),
             ));
@@ -93,5 +92,8 @@ fn massless_free_dof_is_reported_as_a_singular_system() {
     ));
 
     let result = modal_analysis(&mut domain, 1);
-    assert!(result.is_err(), "a massless free DOF should be reported as an error");
+    assert!(
+        result.is_err(),
+        "a massless free DOF should be reported as an error"
+    );
 }
