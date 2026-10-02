@@ -1,4 +1,6 @@
 mod algorithm;
+mod arclength;
+mod bordered;
 mod builder;
 mod constraint;
 mod convergence;
@@ -16,11 +18,15 @@ mod tangent_strategy;
 mod transient;
 
 pub use algorithm::Algorithm;
+pub use arclength::{
+    ArcDirection, ArcLength, ArcPredictor, ArcScales, ArcSeed, ArcStepInfo, ArcStop,
+    ArcStopCriteria, Backtracking, DisplacementTarget, LoadFactorTarget, StopReason,
+};
 pub use builder::AnalysisBuilder;
 pub use constraint::ConstraintHandler;
 pub use convergence::ConvergenceTest;
 pub use damping::RayleighDamping;
-pub use error::AnalysisError;
+pub use error::{AnalysisError, ArcFailure};
 pub use ground_motion::GroundMotion;
 pub use integrator::Integrator;
 pub(crate) use krylov::KrylovAccelerator;

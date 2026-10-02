@@ -7,7 +7,8 @@ use crate::model::{
 };
 
 use super::{
-    iterate_to_equilibrium, Algorithm, AnalysisError, ConvergenceTest, GroundMotion,
+    convergence::ForceTolerance, iterate_to_equilibrium, Algorithm, AnalysisError,
+    ConvergenceTest, GroundMotion,
     RayleighDamping, SparseFactorization, SparseSolver,
 };
 
@@ -332,6 +333,19 @@ where
                     (v_trial, a_trial)
                 };
 
+                // `Combined`'s per-equation reference: this step's external
+                // force and the committed internal force.
+                let force_tolerance = matches!(self.test, ConvergenceTest::Combined { .. })
+                    .then(|| {
+                        let (_k, resistance) = self.domain.assemble_tangent_and_resistance();
+                        ForceTolerance::for_test(
+                            &self.test,
+                            &self.domain.rotational_equations(),
+                            &[&external, &resistance],
+                        )
+                    })
+                    .flatten();
+
                 let (outcome, _) = iterate_to_equilibrium(
                     self.step_count,
                     &algorithm,
@@ -367,6 +381,7 @@ where
                         let (v_trial, a_trial) = newmark_state(&u_trial);
                         domain.scatter_state(&u_trial, &v_trial, &a_trial);
                     },
+                    force_tolerance.as_ref(),
                 )?;
                 (outcome.iterations, outcome.factorizations)
             }

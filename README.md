@@ -58,6 +58,14 @@ see each element/section entry below for which profile(s) it covers.
 **Analysis**
 - [x] Static analysis: load control, displacement control; `Linear` and
   `Newton` (full/modified/initial-tangent, optional line search) algorithms
+- [x] Arc-length continuation (`Integrator::ArcLength`): scaled spherical
+  constraint, coupled displacement/load-factor Newton through load limits,
+  softening and snap-back, adaptive radius with transactional cutbacks, stop
+  criteria with exact landing, bifurcation diagnostics (design and
+  verification in [`docs/arclength.md`](docs/arclength.md))
+- [x] `ConvergenceTest::Combined`: per-equation force/moment equilibrium,
+  with every Newton convergence check made at the accepted (post-update)
+  state
 - [x] Multi-phase/staged analysis with frozen (held-constant) load patterns
 - [x] Modal analysis (Lanczos eigensolver)
 - [x] Transient analysis (Newmark-β, Rayleigh damping, ground motion),
@@ -96,6 +104,9 @@ see each element/section entry below for which profile(s) it covers.
   `"newtonRaphson"` strings remain valid; object forms carry richer settings.
   Transient stages default to linear analysis when `algorithm` is omitted.
   See [the JS solver configuration guide](docs/algorithms.md).
+- [x] Arc-length stages (`integrator: { kind: "arcLength", ... }`) and
+  `combined` convergence through `CarapaceInputV1`, with per-step
+  continuation diagnostics in `StepOutcome.continuation`
 
 **Results / persistence** — see
 [`docs/results-storage-indexeddb.md`](docs/results-storage-indexeddb.md) for
@@ -135,6 +146,7 @@ carapace/
 │   └── src/verification.rs # milestone examples for wasm/Node verification
 └── docs/
     ├── algorithms.md               # current solver API and JS configuration
+    ├── arclength.md                # arc-length continuation design record
     ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
     ├── xara-feasibility.md          # why this is a from-scratch reimplementation, not a port
     └── obsolete/                    # superseded planning docs, kept for history

@@ -24,7 +24,10 @@ mod session;
 pub use decode::decode;
 pub use error::DecodeError;
 pub use materials::MaterialSpec;
-pub use session::{AnalysisErrorDetail, RecorderBatch, Session, StepOutcome};
+pub use session::{
+    AnalysisErrorDetail, ArcFailureDetail, ContinuationDetail, ContinuationStopDetail,
+    RecorderBatch, Session, StepOutcome, StopReasonDetail,
+};
 
 use sequence::{SequenceSpec, SequenceSpec3};
 use serde::{Deserialize, Serialize};

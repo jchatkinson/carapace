@@ -110,10 +110,12 @@ fn multi_step_analysis_shows_real_permanent_set_on_partial_unload() {
 
 /// `Domain`'s snapshot-and-restore: a step that fails to converge must
 /// leave the domain exactly as it was before the attempt, not partway
-/// through a discarded Newton iteration. A `ConvergenceTest` with
-/// `max_iter: 0` can never converge (the loop body never runs), forcing
-/// `FailedToConverge` deterministically without needing a contrived
-/// numerically-hard system.
+/// through a discarded Newton iteration. `NormDispIncr` with a single
+/// permitted iteration can never converge here (the one correction is the
+/// full elastic displacement, far above `tol`), forcing `FailedToConverge`
+/// deterministically — after a correction *was* applied to the domain —
+/// without needing a contrived numerically-hard system. (A zero iteration
+/// budget is rejected outright as `AnalysisError::InvalidOption`.)
 #[test]
 fn failed_step_leaves_domain_unchanged() {
     let mut domain = Domain::new();
@@ -134,9 +136,9 @@ fn failed_step_leaves_domain_unchanged() {
             tangent: TangentStrategy::Current,
             line_search: None,
         })
-        .test(ConvergenceTest::NormUnbalance {
+        .test(ConvergenceTest::NormDispIncr {
             tol: 1e-9,
-            max_iter: 0,
+            max_iter: 1,
         })
         .build(domain);
 

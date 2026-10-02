@@ -5,9 +5,12 @@ use crate::model::{
     SPATIAL_NDF, SPATIAL_NDIM,
 };
 
+use super::arclength::{integrator_change_invalidates, ArcState};
+use super::bordered::BorderedSolver;
+use super::convergence::ForceTolerance;
 use super::{
-    iterate_to_equilibrium, Algorithm, AnalysisError, ConstraintHandler, ConvergenceTest,
-    Integrator, SparseFactorization, SparseSolver,
+    iterate_to_equilibrium, Algorithm, AnalysisError, ArcStepInfo, ConstraintHandler,
+    ConvergenceTest, Integrator, SparseFactorization, SparseSolver,
 };
 
 /// A fully-wired analysis (only buildable via `AnalysisBuilder<Ready>::build`).
@@ -47,6 +50,15 @@ pub struct Analysis<
     /// within one step — `iterate_to_equilibrium` is the only thing that
     /// reads/writes this.
     pub(crate) cached_factorization: Option<SparseFactorization>,
+    /// Accepted arc-length continuation history (`Integrator::ArcLength`
+    /// only): the metric, last accepted direction, next radius, chord
+    /// length and stop state. `None` until the first arc step, and cleared
+    /// whenever the path definition may have changed (`set_integrator`,
+    /// `domain_mut`) so the next step re-validates from scratch.
+    pub(crate) arc: Option<Box<ArcState>>,
+    /// The bordered system's ordering cache — separate from `solver`'s
+    /// `n`-DOF cache so neither evicts the other.
+    pub(crate) bordered: BorderedSolver,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,6 +73,11 @@ pub struct StepResult {
     /// `Initial` actually save factorizations, not just "also converges"
     /// (`docs/algorithms.md` §8).
     pub factorizations: usize,
+    /// Continuation diagnostics, for `Integrator::ArcLength` steps only.
+    /// For those, `iterations` counts corrector solves in the accepted
+    /// attempt and `factorizations` counts bordered factorizations across
+    /// every attempt, predictor included.
+    pub arc: Option<ArcStepInfo>,
 }
 
 impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
@@ -91,7 +108,13 @@ where
     /// `Domain::hold_pattern_constant` right before `into_domain()` (the
     /// pattern must be frozen while `self.load_factor`, the pseudo-time to
     /// freeze at, is still known).
+    ///
+    /// Granting mutable access discards arc-length continuation history and
+    /// cached factorizations: the caller may change loads or the model, so
+    /// the next arc step re-validates equilibrium and load sensitivity.
     pub fn domain_mut(&mut self) -> &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
+        self.arc = None;
+        self.cached_factorization = None;
         &mut self.domain
     }
 
@@ -107,7 +130,20 @@ where
     /// (e.g. gravity → pushover, where `Algorithm`/`ConvergenceTest` also
     /// typically change and a pattern needs freezing), use
     /// `into_domain()` + a fresh `AnalysisBuilder` instead.
-    pub fn set_integrator(&mut self, integrator: Integrator<NId>) {
+    ///
+    /// Arc-length continuation history survives only a switch between two
+    /// `ArcLength` configurations with the same path definition (scales,
+    /// direction, seed, predictor) — e.g. new radius bounds or stop
+    /// criteria. Anything else starts the next arc step afresh.
+    pub fn set_integrator(&mut self, integrator: Integrator<NId>)
+    where
+        NId: PartialEq,
+    {
+        if integrator_change_invalidates(&self.integrator, &integrator) {
+            self.arc = None;
+        } else if let Some(state) = &mut self.arc {
+            state.reopen();
+        }
         self.integrator = integrator;
     }
 
@@ -122,6 +158,10 @@ where
     /// see `Material`'s doc comment for why they're never mutated until
     /// `Domain::commit`, which only runs on the success path below.
     pub fn step(&mut self) -> Result<StepResult, AnalysisError> {
+        if let Integrator::ArcLength(config) = &self.integrator {
+            let config = config.clone();
+            return self.arc_step(&config);
+        }
         let snapshot = self.domain.clone();
         let (snapshot_step_count, snapshot_load_factor) = (self.step_count, self.load_factor);
 
@@ -140,9 +180,23 @@ where
 
     fn try_step(&mut self) -> Result<StepResult, AnalysisError> {
         self.step_count += 1;
+        // `Combined`'s per-equation reference (committed and predicted
+        // external force, committed internal force), frozen for the step.
+        let committed_forces = matches!(self.test, ConvergenceTest::Combined { .. }).then(|| {
+            let (_k, internal) = self.domain.assemble_tangent_and_resistance();
+            (self.domain.assemble_reference_load(self.load_factor), internal)
+        });
         self.load_factor = self
             .integrator
             .predict(&self.domain, &self.solver, self.load_factor)?;
+        let force_tolerance = committed_forces.and_then(|(external, internal)| {
+            let predicted = self.domain.assemble_reference_load(self.load_factor);
+            ForceTolerance::for_test(
+                &self.test,
+                &self.domain.rotational_equations(),
+                &[&external, &predicted, &internal],
+            )
+        });
 
         let (iterations, factorizations) = match self.algorithm {
             // A single tangent formation + solve, unconditionally accepted
@@ -158,7 +212,7 @@ where
                 (1, 1)
             }
             Algorithm::Newton { .. } | Algorithm::KrylovNewton { .. } => {
-                let integrator = self.integrator;
+                let integrator = &self.integrator;
                 let solver = &self.solver;
                 let (outcome, load_factor) = iterate_to_equilibrium(
                     self.step_count,
@@ -188,6 +242,7 @@ where
                         }
                     },
                     |_domain| {},
+                    force_tolerance.as_ref(),
                 )?;
                 self.load_factor = load_factor;
                 (outcome.iterations, outcome.factorizations)
@@ -199,6 +254,7 @@ where
             load_factor: self.load_factor,
             iterations,
             factorizations,
+            arc: None,
         })
     }
 }

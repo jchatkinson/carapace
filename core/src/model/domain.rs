@@ -412,6 +412,33 @@ where
         self.nodes[node].equation[dof]
     }
 
+    /// `true` for every free-DOF equation that is a rotation (local DOF
+    /// index `>= NDIM` — `rz` in the planar profile, `rx`/`ry`/`rz` in the
+    /// spatial one). Identity-tied DOFs share their retained equation and
+    /// DOF index, and a rigid diaphragm's retained rotation keeps its own,
+    /// so the classification is per independent coordinate. Used to pick
+    /// moment rather than force tolerances and rotation rather than
+    /// translation scales.
+    pub(crate) fn rotational_equations(&self) -> Vec<bool> {
+        let mut rotational = vec![false; self.num_free_dofs];
+        for (_, node) in self.nodes.iter() {
+            for dof in NDIM..NDOF {
+                if let Some(eq) = node.equation[dof] {
+                    rotational[eq] = true;
+                }
+            }
+        }
+        rotational
+    }
+
+    /// Whether any load pattern still follows an unfrozen
+    /// `LoadSeries::Path` (see `LoadPattern::is_unfrozen_path`).
+    pub(crate) fn has_unfrozen_path_series(&self) -> bool {
+        self.load_patterns
+            .iter()
+            .any(|(_, pattern)| pattern.is_unfrozen_path())
+    }
+
     /// Assign a sequential equation number to every free, unconstrained
     /// DOF, in node insertion order, then alias every multi-point-
     /// constrained DOF to its retained node's equation number for that DOF

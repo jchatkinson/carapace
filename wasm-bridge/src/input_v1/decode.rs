@@ -10,8 +10,9 @@
 use std::collections::HashMap;
 
 use carapace_core::analysis::{
-    Algorithm, ConvergenceTest, GroundMotion, Integrator, LineSearch, RayleighDamping,
-    TangentStrategy,
+    Algorithm, AnalysisError, ArcDirection, ArcLength, ArcPredictor, ArcScales, ArcSeed,
+    Backtracking, ConvergenceTest, DisplacementTarget, GroundMotion, Integrator, LineSearch,
+    LoadFactorTarget, RayleighDamping, TangentStrategy,
 };
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
@@ -22,8 +23,9 @@ use carapace_core::model::{
 use super::error::DecodeError;
 use super::materials::resolve_materials;
 use super::sequence::{
-    AlgorithmConfigSpec, AlgorithmSpec, ConvergenceSpec, IntegratorSpec, LegacyAlgorithmSpec,
-    LineSearchSpec, RecorderSpec, StageSpec, TangentStrategySpec,
+    AlgorithmConfigSpec, AlgorithmSpec, ArcDirectionSpec, ArcLengthSpec, ArcPredictorSpec,
+    ArcScalesSpec, ConvergenceSpec, IntegratorSpec, LegacyAlgorithmSpec, LineSearchSpec,
+    RecorderSpec, StageSpec, TangentStrategySpec,
 };
 use super::session::{CompiledStage, CompiledStageKind, PlanarSession, ResolvedRecorder, Session};
 use super::tables::{ElementKind, ElementLoadSpec, IntegrationSpec, TimeSeriesSpec, TransformSpec};
@@ -601,25 +603,33 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                     hold_patterns_after,
                     ..
                 } => {
-                    let integrator = match *integrator {
-                        IntegratorSpec::LoadControl { increment } => {
-                            Integrator::LoadControl { increment }
-                        }
+                    let is_arc_length = matches!(integrator, IntegratorSpec::ArcLength(_));
+                    let algorithm = algorithm_of(*algorithm, stage.id())?;
+                    let convergence = convergence_of(*convergence, stage.id(), is_arc_length)?;
+                    let integrator = match integrator {
+                        IntegratorSpec::LoadControl { increment } => Integrator::LoadControl {
+                            increment: *increment,
+                        },
                         IntegratorSpec::DisplacementControl {
                             node,
                             dof,
                             increment,
                         } => {
-                            check_dof_within("sequence.integrator", node, dof, ndof)?;
+                            check_dof_within("sequence.integrator", *node, *dof, ndof)?;
                             Integrator::DisplacementControl {
-                                node: node_at(node, "sequence.integrator")?,
-                                dof: dof as usize,
-                                increment,
+                                node: node_at(*node, "sequence.integrator")?,
+                                dof: *dof as usize,
+                                increment: *increment,
                             }
                         }
+                        IntegratorSpec::ArcLength(spec) => {
+                            let config = arc_length_of(spec, node_at, ndof)?;
+                            config
+                                .validate_with(&algorithm, &convergence)
+                                .map_err(|error| analysis_option(stage.id(), error))?;
+                            Integrator::ArcLength(config)
+                        }
                     };
-                    let algorithm = algorithm_of(*algorithm, stage.id())?;
-                    let convergence = convergence_of(*convergence, stage.id())?;
                     let hold_patterns_after = hold_patterns_after
                         .iter()
                         .map(|&row| pattern_at(row))
@@ -679,7 +689,7 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                         CompiledStageKind::Transient {
                             damping,
                             algorithm: algorithm_of(*algorithm, stage.id())?,
-                            convergence: convergence_of(*convergence, stage.id())?,
+                            convergence: convergence_of(*convergence, stage.id(), false)?,
                             dt: *dt,
                             ground_motions,
                         },
@@ -786,31 +796,135 @@ fn algorithm_of(spec: AlgorithmSpec, stage: &str) -> Result<Algorithm, DecodeErr
 fn convergence_of(
     spec: Option<ConvergenceSpec>,
     stage: &str,
+    arc_length: bool,
 ) -> Result<ConvergenceTest, DecodeError> {
-    let spec = spec.unwrap_or(ConvergenceSpec::DEFAULT);
-    let (tol, max_iter) = match spec {
-        ConvergenceSpec::NormUnbalance { tol, max_iter }
-        | ConvergenceSpec::NormDispIncr { tol, max_iter }
-        | ConvergenceSpec::EnergyIncr { tol, max_iter } => (tol, max_iter),
+    let spec = spec.unwrap_or(if arc_length {
+        ConvergenceSpec::ARC_LENGTH_DEFAULT
+    } else {
+        ConvergenceSpec::DEFAULT
+    });
+    let test = match spec {
+        ConvergenceSpec::NormUnbalance { tol, max_iter } => ConvergenceTest::NormUnbalance {
+            tol,
+            max_iter: max_iter as usize,
+        },
+        ConvergenceSpec::NormDispIncr { tol, max_iter } => ConvergenceTest::NormDispIncr {
+            tol,
+            max_iter: max_iter as usize,
+        },
+        ConvergenceSpec::EnergyIncr { tol, max_iter } => ConvergenceTest::EnergyIncr {
+            tol,
+            max_iter: max_iter as usize,
+        },
+        ConvergenceSpec::Combined {
+            force_tol,
+            moment_tol,
+            relative_tol,
+            displacement_tol,
+            max_iter,
+        } => ConvergenceTest::Combined {
+            force_tol,
+            moment_tol: moment_tol.unwrap_or(force_tol),
+            relative_tol: relative_tol.unwrap_or(1e-6),
+            displacement_tol,
+            max_iter: max_iter as usize,
+        },
     };
-    if !tol.is_finite() || tol <= 0.0 {
-        return Err(invalid_option(stage, "convergence.tol"));
+    test.validate()
+        .map_err(|error| analysis_option(stage, error))?;
+    Ok(test)
+}
+
+/// `core`'s own validation reports `AnalysisError::InvalidOption` with the
+/// wire field name; restate it as this decoder's error for `stage`.
+fn analysis_option(stage: &str, error: AnalysisError) -> DecodeError {
+    match error {
+        AnalysisError::InvalidOption { field } => invalid_option(stage, field),
+        _ => invalid_option(stage, "integrator"),
     }
-    if max_iter == 0 {
-        return Err(invalid_option(stage, "convergence.maxIter"));
+}
+
+/// `ArcLengthSpec` -> `core::ArcLength`, resolving node indices. Numeric
+/// ranges are checked afterwards by `ArcLength::validate_with`.
+fn arc_length_of<NId: Copy>(
+    spec: &ArcLengthSpec,
+    node_at: &impl Fn(u32, &'static str) -> Result<NId, DecodeError>,
+    ndof: u8,
+) -> Result<ArcLength<NId>, DecodeError> {
+    let scales = match spec.scales {
+        ArcScalesSpec::Explicit {
+            displacement,
+            rotation,
+            load,
+        } => ArcScales::Explicit {
+            displacement,
+            rotation,
+            load,
+        },
+        ArcScalesSpec::Auto { load } => ArcScales::Auto { load },
+    };
+    let mut config = ArcLength::adaptive(
+        spec.initial_radius,
+        spec.min_radius.unwrap_or(spec.initial_radius),
+        spec.max_radius.unwrap_or(spec.initial_radius),
+        scales,
+    );
+    if let Some(target) = spec.target_iterations {
+        config.target_iterations = target as usize;
     }
-    Ok(match spec {
-        ConvergenceSpec::NormUnbalance { .. } => ConvergenceTest::NormUnbalance {
-            tol,
-            max_iter: max_iter as usize,
-        },
-        ConvergenceSpec::NormDispIncr { .. } => ConvergenceTest::NormDispIncr {
-            tol,
-            max_iter: max_iter as usize,
-        },
-        ConvergenceSpec::EnergyIncr { .. } => ConvergenceTest::EnergyIncr {
-            tol,
-            max_iter: max_iter as usize,
-        },
-    })
+    if let Some(retries) = spec.max_retries {
+        config.max_retries = retries as usize;
+    }
+    config.direction = match spec.direction {
+        ArcDirectionSpec::Increasing => ArcDirection::Increasing,
+        ArcDirectionSpec::Decreasing => ArcDirection::Decreasing,
+    };
+    config.predictor = match spec.predictor {
+        ArcPredictorSpec::Secant => ArcPredictor::Secant,
+        ArcPredictorSpec::Tangent => ArcPredictor::Tangent,
+    };
+    if let Some(seed) = &spec.seed {
+        let table = "sequence.integrator.seed";
+        let components = seed
+            .components
+            .iter()
+            .map(|c| {
+                check_dof_within(table, c.node, c.dof, ndof)?;
+                Ok((node_at(c.node, table)?, c.dof as usize, c.value))
+            })
+            .collect::<Result<Vec<_>, DecodeError>>()?;
+        config.seed = Some(ArcSeed {
+            components,
+            load: seed.load,
+        });
+    }
+    if let Some(tolerance) = spec.arc_tolerance {
+        config.arc_tolerance = tolerance;
+    }
+    config.correction_tolerance = spec.correction_tolerance;
+    if let Some(backtracking) = spec.backtracking {
+        config.backtracking = Backtracking {
+            armijo: backtracking.armijo,
+            min_step: backtracking.min_step,
+        };
+    }
+    if let Some(stop) = spec.stop {
+        if let Some(target) = stop.displacement {
+            let table = "sequence.integrator.stop";
+            check_dof_within(table, target.node, target.dof, ndof)?;
+            config.stop.displacement = Some(DisplacementTarget {
+                node: node_at(target.node, table)?,
+                dof: target.dof as usize,
+                value: target.value,
+                exact: target.exact,
+            });
+        }
+        config.stop.load_factor = stop.load_factor.map(|target| LoadFactorTarget {
+            value: target.value,
+            exact: target.exact,
+        });
+        config.stop.load_factor_zero_crossing = stop.load_factor_zero_crossing;
+        config.stop.max_chord_length = stop.max_chord_length;
+    }
+    Ok(config)
 }

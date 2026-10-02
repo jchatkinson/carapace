@@ -79,13 +79,15 @@ fn newton_corrector_matches_algorithm_linear_bit_for_bit_on_a_linear_system() {
             .step()
             .expect("Newton corrector should solve every step");
 
+        // Convergence is checked at the accepted (post-update) state, so the
+        // one "real" solve is also the confirming one: no second iteration.
         assert_eq!(
-            result.iterations, 2,
-            "a linear system should need exactly the one \"real\" solve plus one confirming iteration (step {step})"
+            result.iterations, 1,
+            "a linear system should converge on its one real solve (step {step})"
         );
         assert_eq!(
             result.factorizations, 1,
-            "TangentStrategy::ReuseAtStepStart must factor only once even though this takes 2 iterations (step {step})"
+            "one iteration needs exactly one factorization (step {step})"
         );
 
         let (u_lin, u_new) = (

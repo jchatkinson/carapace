@@ -3,12 +3,16 @@ use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, NodeId, SparseMatrix};
 
-use super::{AnalysisError, SparseFactorization, SparseSolver};
+use super::{AnalysisError, ArcLength, SparseFactorization, SparseSolver};
 
-/// Static/pseudo-static integration strategy. Closed enum (§2.1). Both
-/// variants only ever change how this *step's* load factor is chosen (the
-/// "predictor") — the iteration that follows (§ `Algorithm`) proceeds
-/// identically regardless of which one picked it.
+/// Static/pseudo-static integration strategy. Closed enum (§2.1).
+/// `LoadControl`/`DisplacementControl` only change how this *step's* load
+/// factor is chosen (the "predictor") — the iteration that follows
+/// (§ `Algorithm`) proceeds identically regardless of which one picked it.
+/// `ArcLength` is different in kind: it predicts displacement *and* load
+/// factor and corrects both together through a bordered system, so
+/// `Analysis::step` hands it to its own continuation driver instead of
+/// `predict`/`correct` (see `arclength.rs` and `docs/arclength.md`).
 ///
 /// Generic over `NId` (the controlled node's ID type — `NodeId` or
 /// `Node3Id`), defaulted to the planar profile so bare `Integrator` keeps
@@ -17,7 +21,7 @@ use super::{AnalysisError, SparseFactorization, SparseSolver};
 /// generic parameters instead of `Integrator`'s, since an integrator's
 /// identity only depends on which node/DOF it controls, not which `Domain`
 /// it's later used with.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Integrator<NId = NodeId> {
     LoadControl {
         increment: f64,
@@ -37,6 +41,9 @@ pub enum Integrator<NId = NodeId> {
         dof: usize,
         increment: f64,
     },
+    /// Arc-length continuation along the equilibrium path, through load
+    /// limits and snap-back — see `ArcLength`.
+    ArcLength(ArcLength<NId>),
 }
 
 impl<NId: Copy> Integrator<NId> {
@@ -67,6 +74,9 @@ impl<NId: Copy> Integrator<NId> {
                 let unit_response = solver.solve(&k, &sensitivity)?;
                 let delta_lambda = increment / unit_response[eq];
                 Ok(current_pseudo_time + delta_lambda)
+            }
+            Integrator::ArcLength(_) => {
+                unreachable!("Analysis::step routes ArcLength to its continuation driver")
             }
         }
     }
@@ -130,6 +140,9 @@ impl<NId: Copy> Integrator<NId> {
                 let delta_lambda = -du_bar[eq] / unit_response[eq];
                 let du = du_bar + unit_response * delta_lambda;
                 Ok((delta_lambda, du))
+            }
+            Integrator::ArcLength(_) => {
+                unreachable!("Analysis::step routes ArcLength to its continuation driver")
             }
         }
     }

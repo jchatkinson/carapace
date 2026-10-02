@@ -1,6 +1,8 @@
 // Run with Node 22.18+ after wasm-pack build; also type-check against generated .d.ts.
 import { decodeInput, axial_displacement } from "../../pkg/carapace_wasm.js";
-import type { AlgorithmSpec, CarapaceInputV1, DecodeError, StepOutcome } from "../../pkg/carapace_wasm.js";
+import type {
+  AlgorithmSpec, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, StepOutcome,
+} from "../../pkg/carapace_wasm.js";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -192,4 +194,84 @@ try {
   assert(failureSession.advance(1).error?.kind === "failedToConverge", "sticky failure");
 } finally { failureSession.free(); }
 
-console.log("Wasm boundary smoke passed: both profiles, configurable static/transient solvers, legacy inputs, errors.");
+// Arc-length continuation past a degrading-strength peak in both profiles:
+// load factors fall after the peak while sample indices keep increasing,
+// the stop criterion ends the stage before its step cap, and continuation
+// diagnostics cross the boundary.
+function softeningInput(space: number, integrator: IntegratorSpec): CarapaceInputV1 {
+  const input = emptyInput(space);
+  const nodes = {
+    coords: space === 2 ? [0, 0, 0, 0] : [0, 0, 0, 0, 0, 0],
+    fixed: space === 2 ? [0b111, 0b110] : [0b111111, 0b111110],
+    massNodeIndex: [], mass: [],
+  };
+  const springs = { nodeI: [0], nodeJ: [1], materials: [[0, 0, 0]] as [number, number, number][], friction: [] };
+  const loads = { pattern: [0], node: [1], dof: [0], value: [1], stage: [0] };
+  input.materials = [{
+    kind: "hysteretic", mom1p: 10, rot1p: 0.01, mom2p: 6, rot2p: 0.02, mom3p: 2, rot3p: 0.03,
+    mom1n: -10, rot1n: -0.01, mom2n: -6, rot2n: -0.02, mom3n: -2, rot3n: -0.03,
+    pinchX: 1, pinchY: 1, damfc1: 0, damfc2: 0, beta: 0,
+  }];
+  input.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
+  const sequence: CarapaceInputV1["sequence"] = {
+    stages: [{
+      kind: "static", id: "push", steps: 200, integrator,
+      algorithm: "newtonRaphson", convergence: undefined, holdPatternsAfter: [],
+    }],
+    recorders: [{ response: "nodeDisp", node: 1, dof: 0 }],
+  };
+  if (space === 2) {
+    input.nodes = nodes; input.zeroLengths = springs; input.nodalLoads = loads; input.sequence = sequence;
+  } else {
+    input.nodes3 = nodes; input.zeroLengths3 = springs; input.nodalLoads3 = loads; input.sequence3 = sequence;
+  }
+  return input;
+}
+
+const arcLength: IntegratorSpec = {
+  kind: "arcLength", initialRadius: 0.05,
+  scales: { kind: "explicit", displacement: 0.01, load: 10 },
+  arcTolerance: 1e-9,
+  stop: { displacement: { node: 1, dof: 0, value: 0.02, exact: true } },
+};
+for (const space of [2, 3]) {
+  const session = decodeInput(softeningInput(space, arcLength));
+  try {
+    const result: StepOutcome = session.advance(1000);
+    assert(result.done && result.stageComplete && result.error === undefined, "arc length completes");
+    assert(result.stepsTaken < 200, "stop criterion ends the stage early");
+    const continuation: ContinuationDetail | undefined = result.continuation;
+    assert(continuation !== undefined && continuation.stop?.reason === "displacementTarget", "stop reported");
+    assert(continuation.stop.landedExactly && continuation.arcError <= 1e-9, "exact landing");
+    const batch = result.recorderBatches[0];
+    assert(batch.firstSample === 0 && batch.samples.length === result.stepsTaken, "one sample per step");
+    const lambdas = batch.samples.map(([lambda]) => lambda);
+    const peak = lambdas.indexOf(Math.max(...lambdas));
+    assert(peak > 0 && peak < lambdas.length - 5, "interior peak");
+    assert(lambdas.slice(peak).every((l, i, tail) => i === 0 || l < tail[i - 1]), "load falls after the peak");
+    const [lambda, u] = batch.samples[batch.samples.length - 1];
+    assert(Math.abs(u - 0.02) < 1e-9 && Math.abs(lambda - 6) < 1e-6, "lands on the backbone target");
+  } finally { session.free(); }
+}
+
+const arcErrors: [IntegratorSpec, AlgorithmSpec, string][] = [
+  [{ ...arcLength, minRadius: 0.1 }, "newtonRaphson", "integrator.initialRadius"],
+  [arcLength, "linear", "algorithm"],
+  [arcLength, { kind: "newton", tangent: "initial" }, "algorithm"],
+];
+for (const [integrator, algorithm, field] of arcErrors) {
+  const input = softeningInput(2, integrator);
+  const stage = input.sequence.stages[0];
+  assert(stage.kind === "static", "static stage");
+  stage.algorithm = algorithm;
+  const error = expectThrow(() => decodeInput(input)) as DecodeError;
+  assert(error.kind === "invalidAnalysisOption" && error.field === field, `arc length rejects ${field}`);
+}
+const typo = expectThrow(() => decodeInput(softeningInput(2, {
+  ...arcLength,
+  // @ts-expect-error Unknown arc-length fields must be rejected by TypeScript and at runtime.
+  initialRadus: 0.05,
+})));
+assert(String(typo).includes("malformed CarapaceInputV1"), "unknown arc-length field");
+
+console.log("Wasm boundary smoke passed: both profiles, configurable static/transient solvers, arc length, legacy inputs, errors.");

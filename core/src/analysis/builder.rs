@@ -2,6 +2,7 @@ use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, NodeId};
 
+use super::bordered::BorderedSolver;
 use super::{Algorithm, Analysis, ConstraintHandler, ConvergenceTest, Integrator, SparseSolver};
 
 /// Typestate analysis composition (§2.5): each stage exposes only the next
@@ -140,6 +141,8 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
             step_count: 0,
             load_factor: 0.0,
             cached_factorization: None,
+            arc: None,
+            bordered: BorderedSolver::default(),
         }
     }
 }

@@ -9,6 +9,11 @@ TypeScript definitions, in both the planar and spatial profiles.
 Modal analysis is an eigenvalue solve; it does not use these iteration settings.
 Event-to-event stepping is still unimplemented.
 
+Static stages can also use arc-length continuation
+(`integrator: { kind: "arcLength", ... }`, see [below](#arc-length-continuation)
+and the [design record](arclength.md)) to trace equilibrium paths through
+load limits, softening and snap-back.
+
 ## Input compatibility and defaults
 
 The `algorithm` field accepts the original strings and configurable objects:
@@ -54,6 +59,26 @@ the input format are `u32`. Absolute residual tolerances should account for
 the force scale and floating-point cancellation in the effective dynamic
 system. A tighter tolerance is not necessarily achievable for every model.
 
+`{ kind: "combined", forceTol, momentTol?, relativeTol?, displacementTol?,
+maxIter }` checks force equilibrium on every equation, and every configured
+criterion must pass:
+`|r_i| <= forceTol (momentTol on rotational equations) + relativeTol * F_ref_i`,
+where `F_ref_i` is the largest of the committed external force, the
+predicted external force, and the committed internal force on that
+equation. `momentTol` defaults to `forceTol` and `relativeTol` to `1e-6`.
+The optional `displacementTol` additionally bounds the largest component of
+the last correction. Unlike a single norm, the per-equation check can't be
+diluted by many quiet DOFs, and unlike `normDispIncr`/`energyIncr` it
+certifies equilibrium.
+
+Every test is evaluated at the **accepted state** of an iteration: the
+residual is reassembled after the correction (and any line-search
+rescaling) is applied. Earlier versions checked the residual the
+correction was solved against. A linear system therefore converges on its
+single solve, with no second confirming iteration, and a step whose
+predictor is already balanced takes no solve at all under the force tests.
+A zero `maxIter` is rejected.
+
 ## Examples
 
 These objects go in `sequence.stages` or `sequence3.stages` of an otherwise
@@ -88,6 +113,62 @@ const transientStage = {
 } satisfies StageSpec;
 ```
 
+## Arc-length continuation
+
+`{ kind: "arcLength", initialRadius, scales, ... }` follows the equilibrium
+path with a scaled spherical constraint, correcting displacement and load
+factor together, so load limits, negative stiffness, snap-through and
+snap-back pass without special handling. A stage's `steps` is its step
+cap; the optional `stop` criteria can end it earlier. The full design,
+derivations and verification are in [arclength.md](arclength.md).
+
+| Field | Meaning |
+| --- | --- |
+| `initialRadius`, `minRadius?`, `maxRadius?` | Dimensionless radius; omitted bounds default to `initialRadius` (fixed radius) |
+| `scales` | `{ kind: "explicit", displacement, rotation?, load }` (rotation required when the model has rotational DOFs) or `{ kind: "auto", load }` (translation/rotation scales from the first elastic tangent) |
+| `direction?` | `"increasing"` (default) or `"decreasing"` initial load direction |
+| `predictor?` | `"secant"` (default; the tangent is still used after a cutback or sharp turn) or `"tangent"` |
+| `seed?` | `{ components: [{ node, dof, value }], load }` orienting a singular first tangent |
+| `targetIterations?`, `maxRetries?` | Radius adaptation target (default 6) and cutbacks per step (default 8) |
+| `arcTolerance?`, `correctionTolerance?` | Constraint tolerance `|g|/s^2` (default `1e-8`); optional bound on the last coupled correction relative to the radius |
+| `backtracking?` | `{ armijo, minStep }` (defaults `1e-4`, `1/128`) |
+| `stop?` | `{ displacement?: { node, dof, value, exact? }, loadFactor?: { value, exact? }, loadFactorZeroCrossing?, maxChordLength? }` |
+
+Arc length requires `"newtonRaphson"` or `{ kind: "newton" }` with the
+current tangent and no line search (its own coupled backtracking replaces
+line search), and a `normUnbalance` or `combined` test. When `convergence`
+is omitted it defaults to `{ kind: "combined", forceTol: 1e-6, maxIter: 30 }`.
+The stage must start in equilibrium, and active load patterns must be
+`linear`, `constant` or held constant (an active `path` series is
+rejected). Each step reports `StepOutcome.continuation`: radius, retries,
+corrector solves, factorizations, force and constraint measures,
+accumulated chord length, the sign of `det K`, `bifurcationSuspected` when
+that sign changed without a load reversal, and which stop criterion ended
+the stage. The load factor can fall and repeat during continuation, so
+recorder samples are ordered by their sample index, never by load factor.
+
+```typescript
+const pushover = {
+  kind: "static",
+  id: "softening pushover",
+  steps: 500,
+  integrator: {
+    kind: "arcLength",
+    initialRadius: 0.05, minRadius: 0.005, maxRadius: 0.2,
+    scales: { kind: "explicit", displacement: 0.01, rotation: 0.01, load: 100 },
+    stop: { displacement: { node: 12, dof: 0, value: 0.5, exact: true } },
+  },
+  algorithm: "newtonRaphson",
+  holdPatternsAfter: [],
+} satisfies StageSpec;
+```
+
+Runtime arc-length failures are structured too: `initialStateNotInEquilibrium`,
+`unsupportedLoadSeries`, `zeroLoadSensitivity`, `missingSeedDirection`,
+`cutbacksExhausted { step, attempts, radius, lastFailure }`.
+
+## Errors
+
 Malformed shapes throw during input deserialization. Invalid numeric solver
 settings throw a structured `DecodeError` with
 `{ kind: "invalidAnalysisOption", stage, field }`. Failure to converge while
@@ -101,11 +182,14 @@ Native tests in `core/tests/m_algorithm_richness.rs` and
 `wasm-bridge/tests/m10_carapace_input_v1.rs` verifies configurable algorithms
 against nonlinear static and transient equilibrium. The generated-package
 test `wasm-bridge/tests/boundary-smoke.ts` covers both profiles, legacy inputs,
-object forms, validation, and transient convergence failure.
+object forms, validation, transient convergence failure, and arc length.
+Arc-length continuation is verified by `core/tests/arclength_softening.rs`,
+`core/tests/arclength_continuation.rs` and
+`wasm-bridge/tests/arclength_session.rs`.
 
 The JS interface still lacks initial nodal displacement/velocity input,
-iteration/factorization diagnostics, and custom Series-material tolerance
-settings. The pysees compiler currently emits only the legacy static
+iteration/factorization diagnostics for the non-arc-length integrators,
+and custom Series-material tolerance settings. The pysees compiler currently emits only the legacy static
 algorithm strings; exposing these settings in its UI is separate work.
 
 The [archived algorithm design](obsolete/algorithm-design.md) preserves the

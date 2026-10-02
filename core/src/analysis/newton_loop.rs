@@ -3,6 +3,7 @@ use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, SparseMatrix};
 
+use super::convergence::{ForceTolerance, IterationContext};
 use super::{
     Algorithm, AnalysisError, ConvergenceTest, KrylovAccelerator, SparseFactorization,
     SparseSolver, TangentStrategy,
@@ -39,6 +40,13 @@ pub(crate) struct IterationOutcome {
 /// without smuggling `Analysis`-specific concepts into this otherwise
 /// fully shared loop — `form_system`/`correct_du` are the only two hooks
 /// that see `scalar`, and the driver itself never interprets it.
+///
+/// Convergence is checked at the accepted state of each iteration — after
+/// the correction (and any line-search rescaling) is applied and the
+/// system reassembled — and that assembly doubles as the next iteration's
+/// system. Force-based tests also check the predictor before any solve.
+/// `force_tolerance` must be supplied for `ConvergenceTest::Combined`
+/// (built once per step by the caller, see `ForceTolerance::for_test`).
 ///
 /// `form_system` reforms `(Op, r)` at the domain's *current* trial state —
 /// called every iteration regardless of `TangentStrategy` (assembly cost
@@ -85,11 +93,13 @@ pub(crate) fn iterate_to_equilibrium<
         usize,
     ) -> Result<(DVector<f64>, f64), AnalysisError>,
     mut after_increment: impl FnMut(&mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>),
+    force_tolerance: Option<&ForceTolerance>,
 ) -> Result<(IterationOutcome, f64), AnalysisError>
 where
     NId: Key,
     E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
 {
+    test.validate()?;
     let (tangent, line_search, krylov_max_dimension) = match algorithm {
         Algorithm::Newton {
             tangent,
@@ -117,9 +127,24 @@ where
     let mut scalar = scalar0;
     let mut converged = false;
 
-    for iteration in 0..test.max_iter() {
-        let (k, residual) = form_system(domain, scalar);
+    // Every convergence check below sees the residual reassembled at the
+    // state the iteration actually accepted (after its correction and any
+    // line-search rescaling), and that same assembly is reused as the
+    // next iteration's system. The predictor itself is checked first by
+    // the force-based tests, so an already-balanced state costs no solve.
+    after_increment(domain);
+    let (mut k, mut residual) = form_system(domain, scalar);
+    if test.accepts_predictor() {
+        let zero = DVector::zeros(residual.len());
+        converged = test.check(&IterationContext {
+            residual: &residual,
+            du: &zero,
+            force_tolerance,
+        });
+    }
 
+    let mut iteration = 0;
+    while !converged && iteration < test.max_iter() {
         let force_refactor = tangent == TangentStrategy::Current
             || cached_factorization.is_none()
             || krylov
@@ -150,38 +175,56 @@ where
             iteration,
         )?;
         scalar += delta_scalar;
+        let residual_before = residual;
 
         domain.apply_displacement_increment(&du);
         after_increment(domain);
         outcome.iterations += 1;
+        iteration += 1;
+        (k, residual) = form_system(domain, scalar);
 
-        if test.check(&residual, &du) {
+        if test.check(&IterationContext {
+            residual: &residual,
+            du: &du,
+            force_tolerance,
+        }) {
             converged = true;
             break;
         }
 
         if let Some(ls) = line_search {
-            let s0 = du.dot(&residual);
-            let (_, residual_at_1) = form_system(domain, scalar);
-            let s1 = du.dot(&residual_at_1);
-            if test.check(&residual_at_1, &du) {
-                converged = true;
-                break;
-            }
+            let s0 = du.dot(&residual_before);
+            let s1 = du.dot(&residual);
             let mut applied_eta = 1.0_f64;
-            let mut final_residual = residual_at_1;
+            let mut last = None;
             let eta = ls.resolve(s0, s1, |eta| {
                 let delta = (eta - applied_eta) * &du;
                 domain.apply_displacement_increment(&delta);
                 after_increment(domain);
                 applied_eta = eta;
-                let (_, r) = form_system(domain, scalar);
-                let s = du.dot(&r);
-                final_residual = r;
+                let system = form_system(domain, scalar);
+                let s = du.dot(&system.1);
+                last = Some(system);
                 s
             });
+            if let Some(system) = last {
+                (k, residual) = system;
+            }
+            // `resolve` can return a bracket midpoint or endpoint it never
+            // evaluated last; move the domain there so the accepted state,
+            // its residual and the next iteration's system all agree.
+            if eta != applied_eta {
+                let delta = (eta - applied_eta) * &du;
+                domain.apply_displacement_increment(&delta);
+                after_increment(domain);
+                (k, residual) = form_system(domain, scalar);
+            }
             let final_du = eta * &du;
-            if test.check(&final_residual, &final_du) {
+            if test.check(&IterationContext {
+                residual: &residual,
+                du: &final_du,
+                force_tolerance,
+            }) {
                 converged = true;
                 break;
             }

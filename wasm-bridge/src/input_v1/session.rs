@@ -15,8 +15,9 @@
 //! ones.
 
 use carapace_core::analysis::{
-    modal_analysis, Algorithm, Analysis, AnalysisBuilder, AnalysisError, ConstraintHandler,
-    ConvergenceTest, GroundMotion, Integrator, Mode, RayleighDamping, TransientAnalysis,
+    modal_analysis, Algorithm, Analysis, AnalysisBuilder, AnalysisError, ArcFailure,
+    ArcStepInfo, ConstraintHandler, ConvergenceTest, GroundMotion, Integrator, Mode,
+    RayleighDamping, StopReason, TransientAnalysis,
 };
 use carapace_core::model::{
     Domain, Element, Element3, ElementOps, LoadPatternId, Node3Id, NodeId, ELEMENT_DOF, NDF,
@@ -63,10 +64,139 @@ where
     rename_all_fields = "camelCase"
 )]
 pub enum AnalysisErrorDetail {
-    FailedToConverge { step: usize },
+    FailedToConverge {
+        step: usize,
+    },
     SingularSystem,
     InvalidConstraint,
-    InvalidModeCount { requested: usize, free_dofs: usize },
+    InvalidModeCount {
+        requested: usize,
+        free_dofs: usize,
+    },
+    /// A configuration value is out of range or unsupported in combination
+    /// (`field` is its wire spelling). Decode rejects these up front; this
+    /// covers anything only detectable once the model is known (e.g. a
+    /// missing rotation scale for a model with rotational DOFs).
+    InvalidOption {
+        field: &'static str,
+    },
+    /// Arc length found an unfrozen `path` load series.
+    UnsupportedLoadSeries,
+    /// Arc length has no reference load to continue.
+    ZeroLoadSensitivity,
+    /// Arc length must start from equilibrium; `measure` is the force-test
+    /// measure at entry.
+    InitialStateNotInEquilibrium {
+        measure: f64,
+    },
+    /// The first arc-length tangent is singular and no seed was given.
+    MissingSeedDirection,
+    /// Every arc-length attempt for `step` failed.
+    CutbacksExhausted {
+        step: usize,
+        attempts: usize,
+        radius: f64,
+        last_failure: ArcFailureDetail,
+    },
+    /// An arc-length stop criterion already ended the stage.
+    ContinuationComplete,
+}
+
+/// `core::ArcFailure`, restated for the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum ArcFailureDetail {
+    NotConverged,
+    Stagnated,
+    NoDescent,
+    NonFinite,
+    SingularSystem,
+    InaccurateSolve,
+    BranchOrientation,
+    DegenerateConstraint,
+}
+
+impl From<ArcFailure> for ArcFailureDetail {
+    fn from(failure: ArcFailure) -> Self {
+        match failure {
+            ArcFailure::NotConverged => Self::NotConverged,
+            ArcFailure::Stagnated => Self::Stagnated,
+            ArcFailure::NoDescent => Self::NoDescent,
+            ArcFailure::NonFinite => Self::NonFinite,
+            ArcFailure::SingularSystem => Self::SingularSystem,
+            ArcFailure::InaccurateSolve => Self::InaccurateSolve,
+            ArcFailure::BranchOrientation => Self::BranchOrientation,
+            ArcFailure::DegenerateConstraint => Self::DegenerateConstraint,
+        }
+    }
+}
+
+/// `core::ArcStepInfo` for the last accepted arc-length step of an
+/// `advance()` call (`StepOutcome::continuation`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuationDetail {
+    pub radius: f64,
+    pub next_radius: f64,
+    pub retries: usize,
+    pub corrector_solves: usize,
+    pub factorizations: usize,
+    pub force_measure: f64,
+    pub arc_error: f64,
+    pub chord_length: f64,
+    pub det_sign: Option<i8>,
+    pub bifurcation_suspected: bool,
+    pub displacement_scale: f64,
+    pub rotation_scale: Option<f64>,
+    pub stop: Option<ContinuationStopDetail>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuationStopDetail {
+    pub reason: StopReasonDetail,
+    pub landed_exactly: bool,
+    pub overshoot: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum StopReasonDetail {
+    DisplacementTarget,
+    LoadFactorTarget,
+    LoadFactorZeroCrossing,
+    ChordLength,
+    StepCount,
+}
+
+impl From<ArcStepInfo> for ContinuationDetail {
+    fn from(info: ArcStepInfo) -> Self {
+        Self {
+            radius: info.radius,
+            next_radius: info.next_radius,
+            retries: info.retries,
+            corrector_solves: info.corrector_solves,
+            factorizations: info.factorizations,
+            force_measure: info.force_measure,
+            arc_error: info.arc_error,
+            chord_length: info.chord_length,
+            det_sign: info.det_sign,
+            bifurcation_suspected: info.bifurcation_suspected,
+            displacement_scale: info.displacement_scale,
+            rotation_scale: info.rotation_scale,
+            stop: info.stop.map(|stop| ContinuationStopDetail {
+                reason: match stop.reason {
+                    StopReason::DisplacementTarget => StopReasonDetail::DisplacementTarget,
+                    StopReason::LoadFactorTarget => StopReasonDetail::LoadFactorTarget,
+                    StopReason::LoadFactorZeroCrossing => StopReasonDetail::LoadFactorZeroCrossing,
+                    StopReason::ChordLength => StopReasonDetail::ChordLength,
+                    StopReason::StepCount => StopReasonDetail::StepCount,
+                },
+                landed_exactly: stop.landed_exactly,
+                overshoot: stop.overshoot,
+            }),
+        }
+    }
 }
 
 impl From<AnalysisError> for AnalysisErrorDetail {
@@ -84,6 +214,25 @@ impl From<AnalysisError> for AnalysisErrorDetail {
                 requested,
                 free_dofs,
             },
+            AnalysisError::InvalidOption { field } => AnalysisErrorDetail::InvalidOption { field },
+            AnalysisError::UnsupportedLoadSeries => AnalysisErrorDetail::UnsupportedLoadSeries,
+            AnalysisError::ZeroLoadSensitivity => AnalysisErrorDetail::ZeroLoadSensitivity,
+            AnalysisError::InitialStateNotInEquilibrium { measure } => {
+                AnalysisErrorDetail::InitialStateNotInEquilibrium { measure }
+            }
+            AnalysisError::MissingSeedDirection => AnalysisErrorDetail::MissingSeedDirection,
+            AnalysisError::CutbacksExhausted {
+                step,
+                attempts,
+                radius,
+                last_failure,
+            } => AnalysisErrorDetail::CutbacksExhausted {
+                step,
+                attempts,
+                radius,
+                last_failure: last_failure.into(),
+            },
+            AnalysisError::ContinuationComplete => AnalysisErrorDetail::ContinuationComplete,
         }
     }
 }
@@ -211,6 +360,12 @@ pub struct StepOutcome {
     pub steps_taken: u32,
     pub load_factor: f64,
     pub error: Option<AnalysisErrorDetail>,
+    /// Diagnostics of the last accepted arc-length step this call took
+    /// (radius, retries, solves, chord length, determinant sign, stop
+    /// criterion), or `None` when it took none. With arc length the load
+    /// factor can decrease and repeat, so samples are ordered by their
+    /// sample index, never by load factor.
+    pub continuation: Option<ContinuationDetail>,
     /// Only the samples *this* `advance()` call produced, one entry per recorder that recorded
     /// at least one sample this call (every recorder samples every step today, so in practice
     /// this is either empty — no step taken — or has one entry per recorder). This is the
@@ -281,6 +436,8 @@ where
     load_factor: f64,
     error: Option<AnalysisErrorDetail>,
     recorders: Vec<ResolvedRecorder<NId, E::Id>>,
+    // Per-advance only: the last arc-length step's diagnostics.
+    continuation: Option<ContinuationDetail>,
     // Per-advance only: cleared at the top of every `advance()` call, drained into that call's
     // `StepOutcome::recorder_batches` at the end. Nothing here survives across calls except the
     // running counts below — this is results-storage-indexeddb.md's "Bound memory" step:
@@ -332,6 +489,7 @@ where
             load_factor: 0.0,
             error: None,
             recorders,
+            continuation: None,
             current_batch,
             recorder_sample_counts,
         }
@@ -352,6 +510,7 @@ where
         for batch in &mut self.current_batch {
             batch.clear();
         }
+        self.continuation = None;
 
         if self.error.is_none() && self.runner.is_none() && self.current_stage < self.stages.len() {
             self.start_current_stage();
@@ -363,6 +522,7 @@ where
                 steps_taken: 0,
                 load_factor: self.load_factor,
                 error: self.error,
+                continuation: None,
                 recorder_batches: Vec::new(),
             };
         }
@@ -424,6 +584,7 @@ where
             steps_taken,
             load_factor: self.load_factor,
             error: self.error,
+            continuation: self.continuation,
             recorder_batches,
         }
     }
@@ -457,7 +618,7 @@ where
             } => {
                 let analysis = AnalysisBuilder::new()
                     .constraint_handler(constraint_handler)
-                    .integrator(*integrator)
+                    .integrator(integrator.clone())
                     .algorithm(*algorithm)
                     .test(*convergence)
                     .build(domain);
@@ -532,6 +693,13 @@ where
                 let result = analysis.step()?;
                 self.load_factor = result.load_factor;
                 *steps_remaining -= 1;
+                if let Some(info) = result.arc {
+                    self.continuation = Some(info.into());
+                    // A met stop criterion ends the stage early.
+                    if info.stop.is_some() {
+                        *steps_remaining = 0;
+                    }
+                }
             }
             StageRunner::Transient {
                 analysis,

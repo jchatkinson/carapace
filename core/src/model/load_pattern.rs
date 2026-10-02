@@ -201,6 +201,13 @@ where
         }
     }
 
+    /// Whether this pattern still follows a `LoadSeries::Path` — arc-length
+    /// continuation rejects these, since a path's slope isn't valid across
+    /// a load reversal or a breakpoint.
+    pub(crate) fn is_unfrozen_path(&self) -> bool {
+        self.frozen_factor.is_none() && matches!(self.series, LoadSeries::Path { .. })
+    }
+
     pub(crate) fn hold_constant(&mut self, pseudo_time: f64) {
         self.frozen_factor = Some(self.factor(pseudo_time));
     }

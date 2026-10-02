@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use super::tables::{ElementKind, TimeSeriesSpec};
 use super::tables3::ElementKind3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+// `ArcLength` is much larger than the other variants; these are decoded a
+// handful of times per input, so boxing would only complicate the wire type.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -27,6 +30,144 @@ pub enum IntegratorSpec {
         dof: u8,
         increment: f64,
     },
+    /// Arc-length continuation (`core::ArcLength`, docs/arclength.md):
+    /// traces the equilibrium path through load limits and snap-back. The
+    /// stage's `steps` is the step cap; `stop` can end the stage earlier.
+    /// Requires a Newton algorithm with the current tangent and no line
+    /// search, and a `normUnbalance` or `combined` convergence test (a
+    /// `combined` test is the default when `convergence` is omitted).
+    ArcLength(ArcLengthSpec),
+}
+
+/// Wire form of `core::ArcLength`. Omitted `minRadius`/`maxRadius` default
+/// to `initialRadius` (a fixed-radius run).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArcLengthSpec {
+    pub initial_radius: f64,
+    #[tsify(optional)]
+    pub min_radius: Option<f64>,
+    #[tsify(optional)]
+    pub max_radius: Option<f64>,
+    #[tsify(optional)]
+    pub target_iterations: Option<u32>,
+    #[tsify(optional)]
+    pub max_retries: Option<u32>,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub direction: ArcDirectionSpec,
+    pub scales: ArcScalesSpec,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub predictor: ArcPredictorSpec,
+    #[tsify(optional)]
+    pub seed: Option<ArcSeedSpec>,
+    #[tsify(optional)]
+    pub arc_tolerance: Option<f64>,
+    #[tsify(optional)]
+    pub correction_tolerance: Option<f64>,
+    #[tsify(optional)]
+    pub backtracking: Option<BacktrackingSpec>,
+    #[tsify(optional)]
+    pub stop: Option<ArcStopSpec>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum ArcDirectionSpec {
+    #[default]
+    Increasing,
+    Decreasing,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum ArcPredictorSpec {
+    #[default]
+    Secant,
+    Tangent,
+}
+
+/// The continuation metric's scales (`core::ArcScales`): explicit
+/// characteristic translation/rotation/load-factor sizes, or `auto`
+/// (translation/rotation scales derived from the first elastic tangent).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ArcScalesSpec {
+    Explicit {
+        displacement: f64,
+        #[tsify(optional)]
+        rotation: Option<f64>,
+        load: f64,
+    },
+    Auto {
+        load: f64,
+    },
+}
+
+/// One component of a seed direction: `node`/`dof` index into `NodeTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArcSeedComponentSpec {
+    pub node: u32,
+    pub dof: u8,
+    pub value: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArcSeedSpec {
+    pub components: Vec<ArcSeedComponentSpec>,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub load: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BacktrackingSpec {
+    pub armijo: f64,
+    pub min_step: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DisplacementTargetSpec {
+    pub node: u32,
+    pub dof: u8,
+    pub value: f64,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub exact: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoadFactorTargetSpec {
+    pub value: f64,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub exact: bool,
+}
+
+/// Optional criteria that end an arc-length stage before its step cap.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArcStopSpec {
+    #[tsify(optional)]
+    pub displacement: Option<DisplacementTargetSpec>,
+    #[tsify(optional)]
+    pub load_factor: Option<LoadFactorTargetSpec>,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub load_factor_zero_crossing: bool,
+    #[tsify(optional)]
+    pub max_chord_length: Option<f64>,
 }
 
 /// Accepts the original bare strings and configurable algorithm objects.
@@ -114,9 +255,32 @@ pub enum AlgorithmConfigSpec {
     rename_all_fields = "camelCase"
 )]
 pub enum ConvergenceSpec {
-    NormUnbalance { tol: f64, max_iter: u32 },
-    NormDispIncr { tol: f64, max_iter: u32 },
-    EnergyIncr { tol: f64, max_iter: u32 },
+    NormUnbalance {
+        tol: f64,
+        max_iter: u32,
+    },
+    NormDispIncr {
+        tol: f64,
+        max_iter: u32,
+    },
+    EnergyIncr {
+        tol: f64,
+        max_iter: u32,
+    },
+    /// `core::ConvergenceTest::Combined`: per-equation force equilibrium
+    /// (`|r_i| <= forceTol|momentTol + relativeTol * F_ref_i`), plus an
+    /// optional displacement-correction bound; all must pass. `momentTol`
+    /// defaults to `forceTol`, `relativeTol` to `1e-6`.
+    Combined {
+        force_tol: f64,
+        #[tsify(optional)]
+        moment_tol: Option<f64>,
+        #[tsify(optional)]
+        relative_tol: Option<f64>,
+        #[tsify(optional)]
+        displacement_tol: Option<f64>,
+        max_iter: u32,
+    },
 }
 
 impl ConvergenceSpec {
@@ -126,6 +290,17 @@ impl ConvergenceSpec {
     pub const DEFAULT: ConvergenceSpec = ConvergenceSpec::NormUnbalance {
         tol: 1e-6,
         max_iter: 20,
+    };
+
+    /// The default for an arc-length stage that omits `convergence`: force
+    /// equilibrium per equation (an arc-length step always also has to meet
+    /// its constraint tolerance).
+    pub const ARC_LENGTH_DEFAULT: ConvergenceSpec = ConvergenceSpec::Combined {
+        force_tol: 1e-6,
+        moment_tol: None,
+        relative_tol: None,
+        displacement_tol: None,
+        max_iter: 30,
     };
 }
 
@@ -160,6 +335,7 @@ pub struct GroundMotionSpec {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
+#[allow(clippy::large_enum_variant)] // see `IntegratorSpec`
 pub enum StageSpec {
     Static {
         id: String,
