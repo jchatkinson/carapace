@@ -34,8 +34,9 @@ pub struct Mode {
 ///   the proportionate amount of work.
 ///
 /// This isn't "roll our own ARPACK": the hard numerical pieces are both
-/// already library code — `SparseSolver`'s sparse LU for each shift-invert
-/// solve `K*w = M*v`, and `nalgebra::SymmetricEigen` for the small
+/// already library code — `SparseSolver`'s sparse LU, factored once and
+/// reused for each shift-invert solve `K*w = M*v`, and
+/// `nalgebra::SymmetricEigen` for the small
 /// `m*m` (`m` = Lanczos subspace size, not `n`) projected tridiagonal
 /// eigenproblem. What's ours is the well-understood outer Lanczos
 /// recurrence and (full, since `m` is always small) M-orthogonal
@@ -84,6 +85,8 @@ where
 
     let (k, _resistance) = domain.assemble_tangent_and_resistance();
     let solver = SparseSolver::new();
+    // K is unchanged throughout Lanczos; only the right-hand side varies.
+    let factorization = solver.factor(&k)?;
 
     let m_dot =
         |x: &DVector<f64>, y: &DVector<f64>| -> f64 { (0..n).map(|i| x[i] * mass[i] * y[i]).sum() };
@@ -109,7 +112,7 @@ where
     let mut built = 0;
     for j in 1..=subspace_size {
         let mv = mass.component_mul(&vectors[j]);
-        let mut w = solver.solve(&k, &mv)?;
+        let mut w = factorization.solve(&mv);
         w -= beta[j - 1] * &vectors[j - 1];
 
         let alpha_j = m_dot(&w, &vectors[j]);
