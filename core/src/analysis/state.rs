@@ -158,11 +158,51 @@ where
     /// see `Material`'s doc comment for why they're never mutated until
     /// `Domain::commit`, which only runs on the success path below.
     pub fn step(&mut self) -> Result<StepResult, AnalysisError> {
+        self.step_prescribed(&[])
+    }
+
+    /// `step`, after first imposing `(node, dof, value)` displacements on
+    /// fixed DOFs (non-homogeneous single-point constraints, see
+    /// `Domain::prescribe_displacement`): the free DOFs then equilibrate
+    /// against the displaced supports at this step's load factor. Pair it
+    /// with `Integrator::LoadControl { increment: 0.0 }` for a pure
+    /// prescribed-displacement step that needs no reference load and no
+    /// tangent at the imposed DOF — unlike `DisplacementControl`, it is
+    /// well-defined on a zero-tangent branch. Read the force back with
+    /// `Domain::reaction`.
+    ///
+    /// Targets are validated before anything changes: an unfixed DOF or
+    /// nonfinite value is `InvalidConstraint` and leaves the analysis
+    /// untouched. Once validated, the update is atomic with the step — on
+    /// failure the imposed displacements are rolled back along with the
+    /// rest of the domain, so the last committed state stays intact for a
+    /// retry. Arc-length continuation has no meaningful prescribed-value
+    /// step and rejects any targets.
+    pub fn step_prescribed(
+        &mut self,
+        targets: &[(NId, usize, f64)],
+    ) -> Result<StepResult, AnalysisError> {
+        if !targets
+            .iter()
+            .all(|&(node, dof, value)| self.domain.can_prescribe(node, dof, value))
+        {
+            return Err(AnalysisError::InvalidConstraint);
+        }
         if let Integrator::ArcLength(config) = &self.integrator {
+            if !targets.is_empty() {
+                return Err(AnalysisError::InvalidConstraint);
+            }
             let config = config.clone();
             return self.arc_step(&config);
         }
         let snapshot = self.domain.clone();
+        for &(node, dof, value) in targets {
+            self.domain.prescribe_displacement(node, dof, value);
+        }
+        if !targets.is_empty() {
+            // The tangent at the displaced state is not the cached one.
+            self.cached_factorization = None;
+        }
         let (snapshot_step_count, snapshot_load_factor) = (self.step_count, self.load_factor);
 
         let result = self.try_step();

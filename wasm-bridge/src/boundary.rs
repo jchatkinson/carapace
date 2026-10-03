@@ -14,6 +14,7 @@ use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use crate::input_v1::{self, CarapaceInputV1};
+use crate::material_probe::{MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse};
 
 /// Opaque handle to a decoded, steppable analysis session — the `Session`
 /// enum itself can't cross the boundary directly, since `wasm_bindgen`
@@ -64,4 +65,44 @@ fn to_js_error(error: input_v1::DecodeError) -> JsValue {
     serde_wasm_bindgen::to_value(&error).unwrap_or_else(|_| {
         JsValue::from_str("decode error (failed to serialize DecodeError itself)")
     })
+}
+
+/// Opaque handle to a persistent uniaxial material probe (`material_probe`).
+/// Material state persists across `applyStrain` calls; cancel between points
+/// by simply not calling it again.
+#[wasm_bindgen]
+pub struct WasmMaterialProbe(MaterialProbe);
+
+#[wasm_bindgen(js_name = createMaterialProbe)]
+pub fn create_material_probe(
+    config: Ts<MaterialProbeConfig>,
+) -> Result<WasmMaterialProbe, JsValue> {
+    let config: MaterialProbeConfig = config
+        .to_rust()
+        .map_err(|error| JsValue::from_str(&format!("malformed MaterialProbeConfig: {error}")))?;
+    MaterialProbe::new(&config)
+        .map(WasmMaterialProbe)
+        .map_err(probe_error)
+}
+
+#[wasm_bindgen]
+impl WasmMaterialProbe {
+    /// Imposes the strain and returns `{ strain, stress }`; rejects with a
+    /// `{ kind, ... }` `MaterialProbeError`.
+    #[wasm_bindgen(js_name = applyStrain)]
+    pub fn apply_strain(&mut self, target: f64) -> Result<Ts<MaterialProbeResponse>, JsValue> {
+        let response = self.0.apply_strain(target).map_err(probe_error)?;
+        response
+            .into_ts()
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    pub fn reset(&mut self) -> Result<(), JsValue> {
+        self.0.reset().map_err(probe_error)
+    }
+}
+
+fn probe_error(error: MaterialProbeError) -> JsValue {
+    serde_wasm_bindgen::to_value(&error)
+        .unwrap_or_else(|_| JsValue::from_str("material probe error"))
 }

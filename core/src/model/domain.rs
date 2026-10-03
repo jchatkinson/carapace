@@ -372,6 +372,30 @@ where
         resistance - applied
     }
 
+    /// Imposes `value` as the displacement of a *fixed* (single-point
+    /// constrained) DOF — a non-homogeneous SP constraint. A fixed DOF has
+    /// no equation number, so the imposed value simply lives in the node's
+    /// displacement and every element reads it like any other nodal
+    /// displacement; the free DOFs then respond to it on the next
+    /// `Analysis::step` (see `Analysis::step_prescribed`, which also makes
+    /// the update atomic with respect to a failed step). `reaction` reads
+    /// the force needed to hold it there. Returns `false`, changing
+    /// nothing, if the DOF isn't fixed or `value` is nonfinite.
+    pub fn prescribe_displacement(&mut self, node: NId, dof: usize, value: f64) -> bool {
+        if !self.can_prescribe(node, dof, value) {
+            return false;
+        }
+        self.nodes[node].displacement[dof] = value;
+        true
+    }
+
+    /// Whether `prescribe_displacement` would accept these arguments.
+    pub fn can_prescribe(&self, node: NId, dof: usize, value: f64) -> bool {
+        value.is_finite()
+            && dof < NDOF
+            && self.nodes.get(node).is_some_and(|n| n.fixed[dof])
+    }
+
     /// `Domain::new()`'s always-present pattern — see its doc comment.
     pub fn default_pattern(&self) -> LoadPatternId {
         self.default_pattern
