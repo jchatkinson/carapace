@@ -199,8 +199,32 @@ fn exp_tangent(k: f64, a: f64, u: f64) -> f64 {
     k * (-u / a).exp() * (1.0 - u / a)
 }
 
+/// This test catalog has no element loads.
+#[derive(Clone, Copy)]
+struct NoLoad;
+
+impl std::ops::Add for NoLoad {
+    type Output = NoLoad;
+    fn add(self, _: NoLoad) -> NoLoad {
+        NoLoad
+    }
+}
+
+impl carapace_core::model::ElementLoadComponents for NoLoad {
+    fn component(&self, _: usize) -> f64 {
+        0.0
+    }
+}
+
+impl std::ops::Mul<f64> for NoLoad {
+    type Output = NoLoad;
+    fn mul(self, _: f64) -> NoLoad {
+        NoLoad
+    }
+}
+
 impl ElementOps<2, 3, 6, NodeId> for TestElement {
-    type Load = ();
+    type Load = NoLoad;
     type Id = ExpId;
 
     fn nodes(&self) -> [NodeId; 2] {
@@ -213,6 +237,7 @@ impl ElementOps<2, 3, 6, NodeId> for TestElement {
         &self,
         node_i: &Node,
         node_j: &Node,
+        _: Option<&NoLoad>,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
         let u = node_j.displacement[0] - node_i.displacement[0];
         let (force, tangent) = match *self {
@@ -230,7 +255,7 @@ impl ElementOps<2, 3, 6, NodeId> for TestElement {
         (kmat, r)
     }
 
-    fn form_load_vector(&self, _: &Node, _: &Node, _: Option<&()>) -> SVector<f64, 6> {
+    fn form_load_vector(&self, _: &Node, _: &Node, _: Option<&NoLoad>) -> SVector<f64, 6> {
         SVector::zeros()
     }
 
@@ -238,10 +263,10 @@ impl ElementOps<2, 3, 6, NodeId> for TestElement {
         SVector::zeros()
     }
 
-    fn commit(&mut self, _: &Node, _: &Node) {}
+    fn commit(&mut self, _: &Node, _: &Node, _: Option<&NoLoad>) {}
 
     fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
-        self.form_tangent_and_resistance(node_i, node_j).1
+        self.form_tangent_and_resistance(node_i, node_j, None).1
     }
 
     fn fiber_responses(&self, _: &Node, _: &Node) -> Option<Vec<Vec<(f64, f64)>>> {

@@ -104,30 +104,116 @@ fn path_slope(times: &[f64], factors: &[f64], pseudo_time: f64) -> f64 {
     (factors[i + 1] - factors[i]) / (t1 - t0)
 }
 
-/// An element load kind — currently just `ElasticBeamColumn`'s uniform
-/// transverse load, the one element-load case that exists (§3.4). Closed
-/// enum (§2.1); grow it only when a second element-load type is actually
-/// needed.
-#[derive(Debug, Clone, Copy)]
+/// An element load kind — currently just a uniform distributed load on
+/// `ElasticBeamColumn` (§3.4). Closed enum (§2.1); grow it only when a
+/// second element-load type is actually needed.
+///
+/// Components are always in the element's *local* axes (local `x` is the
+/// member axis), as in OpenSees's `-beamUniform` — never global.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ElementLoad {
-    /// Uniform transverse load (force/length) in the element's local +y
-    /// direction.
-    UniformTransverse(f64),
+    /// Uniform load (force/length): `wx` along the member axis, `wy`
+    /// transverse in local +y.
+    Uniform { wx: f64, wy: f64 },
 }
 
-/// `ElementLoad`'s spatial counterpart — `ElasticBeamColumn3`'s uniform
-/// transverse load, biaxial (local `y` and `z` both carry bending in a
-/// spatial member, unlike planar's single transverse direction).
-/// Xara/OpenSees's `Beam3dUniformLoad`'s `wy`/`wz` components; its axial
-/// `wx` component isn't included yet — add when a model actually needs it,
-/// same "not built until needed" reasoning as everywhere else in this
-/// catalog. `ElementOps::Load` for the spatial profile — see that trait's
-/// doc comment for why it used to be the uninhabited `Infallible`.
-#[derive(Debug, Clone, Copy)]
+impl std::ops::Add for ElementLoad {
+    type Output = ElementLoad;
+
+    /// Loads of the same kind sum component-wise — several `eleLoad`s on
+    /// one element in one pattern accumulate, as in OpenSees.
+    fn add(self, other: ElementLoad) -> ElementLoad {
+        let (ElementLoad::Uniform { wx: ax, wy: ay }, ElementLoad::Uniform { wx: bx, wy: by }) =
+            (self, other);
+        ElementLoad::Uniform {
+            wx: ax + bx,
+            wy: ay + by,
+        }
+    }
+}
+
+/// Scalar view of an element load's components (local axes), for recording
+/// the load an element actually carries at some pseudo-time.
+pub trait ElementLoadComponents {
+    /// Component `index` (`ElementLoad`: `0` = `wx`, `1` = `wy`;
+    /// `ElementLoad3`: `0..3` = `wx`, `wy`, `wz`); `0.0` past the last.
+    fn component(&self, index: usize) -> f64;
+}
+
+impl ElementLoadComponents for ElementLoad {
+    fn component(&self, index: usize) -> f64 {
+        let ElementLoad::Uniform { wx, wy } = *self;
+        [wx, wy].get(index).copied().unwrap_or(0.0)
+    }
+}
+
+impl ElementLoadComponents for ElementLoad3 {
+    fn component(&self, index: usize) -> f64 {
+        let ElementLoad3::Uniform { wx, wy, wz } = *self;
+        [wx, wy, wz].get(index).copied().unwrap_or(0.0)
+    }
+}
+
+impl std::ops::Mul<f64> for ElementLoad {
+    type Output = ElementLoad;
+
+    fn mul(self, factor: f64) -> ElementLoad {
+        let ElementLoad::Uniform { wx, wy } = self;
+        ElementLoad::Uniform {
+            wx: wx * factor,
+            wy: wy * factor,
+        }
+    }
+}
+
+/// `ElementLoad`'s spatial counterpart — a uniform load on
+/// `ElasticBeamColumn3`, in the member's local axes (`vec_xz` defines local
+/// `y`/`z`): axial `wx` and biaxial transverse `wy`/`wz` (local `y` and `z`
+/// both carry bending in a spatial member). Xara/OpenSees's
+/// `Beam3dUniformLoad`. `ElementOps::Load` for the spatial profile.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ElementLoad3 {
-    /// Uniform transverse load (force/length) in the element's local `+y`
-    /// and `+z` directions.
-    UniformTransverse { wy: f64, wz: f64 },
+    /// Uniform load (force/length): `wx` along the member axis, `wy`/`wz`
+    /// transverse in local +y/+z.
+    Uniform { wx: f64, wy: f64, wz: f64 },
+}
+
+impl std::ops::Add for ElementLoad3 {
+    type Output = ElementLoad3;
+
+    /// See `ElementLoad`'s `Add`.
+    fn add(self, other: ElementLoad3) -> ElementLoad3 {
+        let (
+            ElementLoad3::Uniform {
+                wx: ax,
+                wy: ay,
+                wz: az,
+            },
+            ElementLoad3::Uniform {
+                wx: bx,
+                wy: by,
+                wz: bz,
+            },
+        ) = (self, other);
+        ElementLoad3::Uniform {
+            wx: ax + bx,
+            wy: ay + by,
+            wz: az + bz,
+        }
+    }
+}
+
+impl std::ops::Mul<f64> for ElementLoad3 {
+    type Output = ElementLoad3;
+
+    fn mul(self, factor: f64) -> ElementLoad3 {
+        let ElementLoad3::Uniform { wx, wy, wz } = self;
+        ElementLoad3::Uniform {
+            wx: wx * factor,
+            wy: wy * factor,
+            wz: wz * factor,
+        }
+    }
 }
 
 /// A named collection of reference loads (nodal and element), scaled by a
@@ -140,8 +226,7 @@ pub enum ElementLoad3 {
 ///
 /// Generic over `NDOF` (nodal-load array size), the node/element ID types,
 /// and `EL` (the element-load kind — `ElementLoad` for the planar profile,
-/// `Infallible` for the spatial one, matching `ElementOps::Load`; see its
-/// doc comment). `NDOF` defaults to the planar profile so bare `LoadPattern`
+/// `ElementLoad3` for the spatial one, matching `ElementOps::Load`). `NDOF` defaults to the planar profile so bare `LoadPattern`
 /// keeps working unchanged, the same trick `Node`'s defaults use.
 #[derive(Debug, Clone)]
 pub(crate) struct LoadPattern<
@@ -170,7 +255,12 @@ impl<const NDOF: usize, NId, EId, EL> LoadPattern<NDOF, NId, EId, EL>
 where
     NId: Eq + Hash + Copy,
     EId: Eq + Hash + Copy,
+    EL: Copy + std::ops::Add<Output = EL>,
 {
+    pub(crate) fn has_element_loads(&self) -> bool {
+        !self.element_loads.is_empty()
+    }
+
     pub(crate) fn new(series: LoadSeries) -> Self {
         LoadPattern {
             series,
@@ -216,8 +306,13 @@ where
         self.nodal_loads.entry(node).or_insert([0.0; NDOF])[dof] = value;
     }
 
+    /// Adds `load` to whatever this pattern already applies to `element`
+    /// (loads accumulate rather than replace).
     pub(crate) fn add_element_load(&mut self, element: EId, load: EL) {
-        self.element_loads.insert(element, load);
+        self.element_loads
+            .entry(element)
+            .and_modify(|existing| *existing = *existing + load)
+            .or_insert(load);
     }
 
     pub(crate) fn nodal_load(&self, node: NId) -> Option<&[f64; NDOF]> {
@@ -227,4 +322,49 @@ where
     pub(crate) fn element_load(&self, element: EId) -> Option<&EL> {
         self.element_loads.get(&element)
     }
+}
+
+/// Patterns that currently contribute element loads, each with its factor
+/// at `pseudo_time` — computed once per assembly so the per-element lookup
+/// below doesn't re-evaluate every pattern's time series per element.
+pub(crate) fn active_element_patterns<'a, const NDOF: usize, NId, EId, EL>(
+    patterns: impl Iterator<Item = &'a LoadPattern<NDOF, NId, EId, EL>>,
+    pseudo_time: f64,
+) -> Vec<(f64, &'a LoadPattern<NDOF, NId, EId, EL>)>
+where
+    NId: Eq + Hash + Copy + 'a,
+    EId: Eq + Hash + Copy + 'a,
+    EL: Copy + std::ops::Add<Output = EL> + 'a,
+{
+    patterns
+        .filter(|pattern| pattern.has_element_loads())
+        .map(|pattern| (pattern.factor(pseudo_time), pattern))
+        .filter(|(factor, _)| *factor != 0.0)
+        .collect()
+}
+
+/// An element's *effective* load: every active pattern's load on it, each
+/// scaled by that pattern's factor, summed — `None` if no active pattern
+/// loads it. What state-dependent elements (`ForceBeamColumn`) need inside
+/// their own state determination.
+pub(crate) fn effective_element_load<const NDOF: usize, NId, EId, EL>(
+    active: &[(f64, &LoadPattern<NDOF, NId, EId, EL>)],
+    element: EId,
+) -> Option<EL>
+where
+    NId: Eq + Hash + Copy,
+    EId: Eq + Hash + Copy,
+    EL: Copy + std::ops::Add<Output = EL> + std::ops::Mul<f64, Output = EL>,
+{
+    let mut total: Option<EL> = None;
+    for (factor, pattern) in active {
+        if let Some(load) = pattern.element_load(element) {
+            let scaled = *load * *factor;
+            total = Some(match total {
+                Some(sum) => sum + scaled,
+                None => scaled,
+            });
+        }
+    }
+    total
 }

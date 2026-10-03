@@ -208,10 +208,12 @@ pub enum ElementKind3 {
     rename_all_fields = "camelCase"
 )]
 pub enum ElementLoadSpec3 {
-    /// Only `ElasticBeamColumn3` currently honors this (mirroring planar
-    /// `ElementLoadSpec::UniformTransverse`'s own restriction) — biaxial,
-    /// since a spatial member bends in both local `y` and `z`.
-    UniformTransverse { wy: f64, wz: f64 },
+    /// Uniform load (force/length) in the element's *local* axes (`vec_xz`
+    /// defines `y`/`z`): `wx` axial, `wy`/`wz` transverse — biaxial, since a
+    /// spatial member bends in both local `y` and `z`. Only
+    /// the spatial beam-columns currently honor this (mirroring planar
+    /// `ElementLoadSpec::Uniform`'s own restriction).
+    Uniform { wx: f64, wy: f64, wz: f64 },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]

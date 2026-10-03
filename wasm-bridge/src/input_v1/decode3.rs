@@ -162,23 +162,22 @@ pub(super) fn decode_spatial(input: CarapaceInputV1) -> Result<SpatialSession, D
     for i in 0..input.element_loads3.element_index.len() {
         let pattern = pattern_at(input.element_loads3.pattern[i])?;
         let kind = input.element_loads3.element_kind[i];
-        if kind != ElementKind3::ElasticBeamColumn {
-            return Err(DecodeError::UnsupportedElementLoad {
-                element_kind: element_kind_name(kind),
-            });
-        }
-        let row = input.element_loads3.element_index[i];
-        let element_id =
-            *elastic_beam_ids
-                .get(row as usize)
-                .ok_or(DecodeError::UnknownElementIndex {
-                    table: "elastic_beam_columns",
-                    row,
-                })?;
-        let load = match input.element_loads3.load[i] {
-            ElementLoadSpec3::UniformTransverse { wy, wz } => {
-                ElementLoad3::UniformTransverse { wy, wz }
+        let (ids, table) = match kind {
+            ElementKind3::ElasticBeamColumn => (&elastic_beam_ids, "elastic_beam_columns"),
+            ElementKind3::DispBeamColumn => (&disp_beam_ids, "disp_beam_columns"),
+            ElementKind3::ForceBeamColumn => (&force_beam_ids, "force_beam_columns"),
+            _ => {
+                return Err(DecodeError::UnsupportedElementLoad {
+                    element_kind: element_kind_name(kind),
+                })
             }
+        };
+        let row = input.element_loads3.element_index[i];
+        let element_id = *ids
+            .get(row as usize)
+            .ok_or(DecodeError::UnknownElementIndex { table, row })?;
+        let load = match input.element_loads3.load[i] {
+            ElementLoadSpec3::Uniform { wx, wy, wz } => ElementLoad3::Uniform { wx, wy, wz },
         };
         let stage = input.element_loads3.stage[i];
         element_loads_by_stage
@@ -235,6 +234,14 @@ pub(super) fn decode_spatial(input: CarapaceInputV1) -> Result<SpatialSession, D
                     element_index,
                     component,
                 } => ResolvedRecorder::ElementForce {
+                    element: element_at(element_kind, element_index)?,
+                    component,
+                },
+                RecorderSpec3::ElementLoad {
+                    element_kind,
+                    element_index,
+                    component,
+                } => ResolvedRecorder::ElementLoad {
                     element: element_at(element_kind, element_index)?,
                     component,
                 },

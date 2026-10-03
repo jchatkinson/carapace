@@ -173,18 +173,12 @@ impl Corotational2d {
         tangent
     }
 
-    /// Follower uniform transverse load in the current local frame, integrated
-    /// over the undeformed member length like the reference formulation.
-    pub(crate) fn global_uniform_transverse_load(&self, load: f64) -> SVector<f64, 6> {
-        let local = SVector::<f64, 6>::from_row_slice(&[
-            0.0,
-            load * self.initial_length / 2.0,
-            load * self.initial_length.powi(2) / 12.0,
-            0.0,
-            load * self.initial_length / 2.0,
-            -load * self.initial_length.powi(2) / 12.0,
-        ]);
-        self.global_to_local.transpose() * local
+    /// Rotation from global components into the current (deformed-chord)
+    /// local frame; its transpose maps a follower load given in that frame
+    /// (integrated over the undeformed length, like the reference
+    /// formulation) back to global.
+    pub(crate) fn global_to_local(&self) -> &SMatrix<f64, 6, 6> {
+        &self.global_to_local
     }
 
     /// Local nodal modes for the three basic deformations, used to integrate

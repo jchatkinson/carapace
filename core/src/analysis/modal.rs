@@ -83,7 +83,7 @@ where
         }
     }
 
-    let (k, _resistance) = domain.assemble_tangent_and_resistance();
+    let (k, _resistance) = domain.assemble_tangent_and_resistance(domain.committed_time());
     let solver = SparseSolver::new();
     // K is unchanged throughout Lanczos; only the right-hand side varies.
     let factorization = solver.factor(&k)?;

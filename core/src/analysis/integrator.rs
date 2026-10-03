@@ -69,7 +69,7 @@ impl<NId: Copy> Integrator<NId> {
                 let eq = domain
                     .equation_of(*node, *dof)
                     .ok_or(AnalysisError::InvalidConstraint)?;
-                let (k, _resistance) = domain.assemble_tangent_and_resistance();
+                let (k, _resistance) = domain.assemble_tangent_and_resistance(current_pseudo_time);
                 let sensitivity = domain.assemble_reference_load_sensitivity(current_pseudo_time);
                 let unit_response = solver.solve(&k, &sensitivity)?;
                 let delta_lambda = increment / unit_response[eq];

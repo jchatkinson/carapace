@@ -176,8 +176,15 @@ through their own `g`/`j`.
 - `ElementLoadTable` / `ElementLoadTable3`: `pattern`, `elementKind`,
   `elementIndex` (row in the table named by `elementKind`), `load`, `stage`.
   - `elementKind`: `"truss" | "elasticBeamColumn" | "dispBeamColumn" | "forceBeamColumn" | "zeroLength" | "zeroLengthSection"`.
-  - `load`: `{ kind: "uniformTransverse", w }` (2D) or
-    `{ kind: "uniformTransverse", wy, wz }` (3D).
+  - `load`: `{ kind: "uniform", wx, wy }` (2D) or
+    `{ kind: "uniform", wx, wy, wz }` (3D). Uniform force per length in the
+    element's **local** axes: `wx` along the member axis, `wy`/`wz` transverse
+    (3D local `y`/`z` come from the element's `vecXz`). All fields are
+    required. The beam-column kinds (`elasticBeamColumn`, `dispBeamColumn`, `forceBeamColumn`) accept element loads today; any other
+    `elementKind` fails decode with `unsupportedElementLoad`. Several rows
+    for the same element and pattern sum.
+  - `elementForce` recorders report member end forces including the fixed-end
+    effect of element loads (the free end of a loaded cantilever reports zero).
 
 ## Analysis sequence
 

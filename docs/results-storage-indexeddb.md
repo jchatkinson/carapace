@@ -18,20 +18,20 @@ lifecycle/worker-protocol concepts this design builds on). It does not
 require SQLite, OPFS, or changes to `carapace-core`.
 
 **Current frontend scope:** pysees's compiler and storage pipeline handle
-planar static analysis with node-displacement recorders. The storage schema
-has no response-kind/target-kind dimension; each recorded node carries its
-full displacement vector.
+planar static analysis with three recorder kinds: node displacements (full
+`ndf` vector per node), support reactions (full `ndf` vector per node), and
+element local forces (six planar components per element, for the element
+kinds the compiler emits). Each is stored as consecutive scalar columns of
+the one dense per-step row, in wire-recorder order.
 
 **Current engine scope is broader:** Carapace accepts planar and spatial
-static, modal, and transient stages. Its recorders produce displacement,
-velocity, acceleration, reactions, local element forces, fiber stress/strain,
-and modal shape components paired with frequencies. Static and transient
-stages can select Newton tangent strategies, line search, or Krylov Newton;
-see [solver configuration](algorithms.md). These capabilities already cross
-the wasm boundary, but pysees's compiler does not yet emit the corresponding
-inputs. Extending frontend compilation, metadata, packing, and UI remains
-separate work; richer engine support does not automatically expand the
-node-displacement-only storage schema.
+static, modal, and transient stages. Its recorders also produce velocity,
+acceleration, fiber stress/strain, and modal shape components paired with
+frequencies. Static and transient stages can select Newton tangent strategies,
+line search, or Krylov Newton; see [solver configuration](algorithms.md).
+These already cross the wasm boundary, but pysees's compiler does not yet emit
+them. Extending frontend compilation, metadata, packing, and UI for those
+remains separate work.
 
 ## Goals and invariants
 
@@ -82,8 +82,8 @@ does not receive complete sample histories as progress messages.
 
 Database name: `pysees-results`; schema version: `2`.
 
-Every recorded node always carries its full displacement vector — there is no
-per-recorder DOF selection at the results-storage layer (a RecorderSpec's own
+Every recorded node always carries its full displacement vector (and reactions
+likewise) — there is no per-recorder DOF selection at the results-storage layer (a RecorderSpec's own
 `dofs` subset still governs the exported openseespy script; it just doesn't
 shape this cache). That gives every recorded node the same fixed width
 (`dofsPerNode`, the model's `ndf`), which is what makes a single dense,
@@ -98,14 +98,14 @@ turns out to be too slow in practice, not up front.
 
 | Object store | Key | Contents |
 |---|---|---|
-| `runs` | `runId` | Model and sequence hashes, schema/engine versions, start/end time, status, final stage, error detail, `dofsPerNode`, `nodeCount`, shared `sampleCount`, and storage failure detail if any |
+| `runs` | `runId` | Model and sequence hashes, schema/engine versions, start/end time, status, final stage, error detail, `dofsPerNode`, `nodeCount`, `columnCount` (data columns per row), shared `sampleCount`, and storage failure detail if any |
 | `stages` | `[runId, stageIndex]` | Stage ID/kind, order, and stage status |
-| `recorders` | `[runId, recorderId]` | One row per recorded node (`recorderId` is that node's tag as a string): its `nodeIndex` (position in the dense row) and component labels |
+| `recorders` | `[runId, recorderId]` | One row per recorded target: `kind` (`disp`/`reaction`/`force`), `columnOffset` (first data column in the dense row), component labels. `recorderId` is the node tag for `disp`, `reaction:<nodeTag>`, or `force:<elementTag>` |
 | `responseBlocks` | `[runId, blockIndex]` | `firstSample`, `sampleCount`, optional stage index, and one packed `Float64Array` covering every recorded node |
 
 Each sample is stored row-major as `[pseudoTime, node0.dof0..dof(D-1),
-node1.dof0.., ...]` — stride `1 + nodeCount * dofsPerNode`. A given node's
-columns start at `1 + nodeIndex * dofsPerNode`. Keep the numeric values in a
+node1.dof0.., ..., reaction columns..., element-force columns...]` — stride
+`1 + columnCount`. A recorder's columns start at `1 + columnOffset`. Keep the numeric values in a
 binary typed array. Do not serialize samples as JSON or create one object
 store entry per sample/node/DOF.
 
@@ -153,7 +153,7 @@ type ResultBlock = {
   firstSample: number
   sampleCount: number
   stageIndex: number
-  data: ArrayBuffer // row-major Float64, stride 1 + nodeCount*dofsPerNode; transferred, not cloned
+  data: ArrayBuffer // row-major Float64, stride 1 + columnCount; transferred, not cloned
 }
 ```
 

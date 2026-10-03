@@ -503,7 +503,7 @@ where
         let result = self.try_arc_step(config);
         match result {
             Ok(step) => {
-                self.domain.commit();
+                self.domain.commit(self.load_factor);
                 Ok(step)
             }
             Err(error) => {
@@ -519,7 +519,7 @@ where
     fn try_arc_step(&mut self, config: &ArcLength<NId>) -> Result<StepResult, AnalysisError> {
         let lambda_n = self.load_factor;
         let p = self.domain.assemble_reference_load_sensitivity(lambda_n);
-        let (k_n, internal_n) = self.domain.assemble_tangent_and_resistance();
+        let (k_n, internal_n) = self.domain.assemble_tangent_and_resistance(lambda_n);
         let external_n = self.domain.assemble_reference_load(lambda_n);
         let q_n = self.domain.gather_displacement();
         let mut factorizations = 0;
@@ -1250,7 +1250,7 @@ where
         sum
     };
     let evaluate = |domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>, lambda: f64| {
-        let (k, internal) = domain.assemble_tangent_and_resistance();
+        let (k, internal) = domain.assemble_tangent_and_resistance(lambda);
         let residual = domain.assemble_reference_load(lambda) - internal;
         (k, residual)
     };

@@ -208,15 +208,15 @@ pub enum ElementKind {
     rename_all_fields = "camelCase"
 )]
 pub enum ElementLoadSpec {
-    /// Only `ElasticBeamColumn` currently honors this (`core`'s
-    /// `Element::form_load_vector` falls through to zero for every other
-    /// kind) — decode rejects any other `element_kind` explicitly rather
-    /// than silently accepting a load that will never apply.
+    /// Uniform load (force/length) in the element's *local* axes: `wx`
+    /// along the member axis, `wy` transverse in local +y.
     ///
-    /// A struct-like (not tuple) variant: serde's internally-tagged enum
-    /// representation (`tag = "kind"`, needed for a JS-friendly
-    /// discriminated union) can't tag a bare-scalar tuple variant.
-    UniformTransverse { w: f64 },
+    /// The beam-column kinds (`ElasticBeamColumn`, `DispBeamColumn`,
+    /// `ForceBeamColumn`) currently honor this (`core`'s
+    /// `Element::form_load_vector` falls through to zero for every other kind) — decode rejects any other `element_kind` explicitly rather
+    /// than silently accepting a load that will never apply. Several loads
+    /// on one element in one pattern sum.
+    Uniform { wx: f64, wy: f64 },
 }
 
 /// Identity multi-point constraints (`core::Domain::equal_dof`'s doc

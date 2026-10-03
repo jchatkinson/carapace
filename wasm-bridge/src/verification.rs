@@ -103,7 +103,7 @@ pub fn simply_supported_beam_end_rotation(e: f64, iz: f64, area: f64, length: f6
         GeomTransf::Linear,
     )));
     let pattern = domain.default_pattern();
-    domain.add_element_load(pattern, beam, ElementLoad::UniformTransverse(w));
+    domain.add_element_load(pattern, beam, ElementLoad::Uniform { wx: 0.0, wy: w });
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)

@@ -20,12 +20,14 @@ use super::{
 /// constants exist instead of inline expressions.
 pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId: Copy> {
     /// An element-load kind this catalog supports — `ElementLoad` for
-    /// `Element`, `ElementLoad3` for `Element3` (currently just
-    /// `ElasticBeamColumn3`'s biaxial `wy`/`wz`, the spatial counterpart of
-    /// `ElementLoad::UniformTransverse` — `DispBeamColumn3`/
-    /// `ForceBeamColumn3` don't support element loads yet either, matching
-    /// their planar counterparts).
-    type Load;
+    /// `Element`, `ElementLoad3` for `Element3` (currently just a uniform
+    /// local-axis load on the beam-columns — `Truss` and `ZeroLength` don't
+    /// support element loads). `Add` so several loads on one
+    /// element in one pattern accumulate.
+    type Load: Copy
+        + super::ElementLoadComponents
+        + std::ops::Add<Output = Self::Load>
+        + std::ops::Mul<f64, Output = Self::Load>;
 
     /// This catalog's own `Domain` element-store key (`ElementId`/
     /// `Element3Id`) — an associated type rather than a further generic
@@ -40,10 +42,19 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: us
 
     fn nodes(&self) -> [NId; 2];
 
+    /// Tangent and internal resisting force at the current nodal state.
+    /// `load` is the *effective* element load at the pseudo-time being
+    /// assembled (every pattern's load on this element, each scaled by its
+    /// factor — `Domain::effective_element_load`). Only elements whose
+    /// internal state depends on the load itself (`ForceBeamColumn`, whose
+    /// section forces include the load's own contribution) read it; every
+    /// other element's resistance is load-independent and ignores it — their
+    /// loads enter only through `form_load_vector`.
     fn form_tangent_and_resistance(
         &self,
         node_i: &Node<NDIM, NDOF>,
         node_j: &Node<NDIM, NDOF>,
+        load: Option<&Self::Load>,
     ) -> (
         SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
         SVector<f64, ELEMENT_DOF>,
@@ -56,13 +67,34 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: us
         load: Option<&Self::Load>,
     ) -> SVector<f64, ELEMENT_DOF>;
 
+    /// `form_load_vector`'s equivalent nodal load expressed in the same
+    /// element-local frame as `local_force` (fixed orientation for
+    /// `Linear`/`PDelta`, current chord for `Corotational`) — what
+    /// `Domain::element_end_force` subtracts from `local_force` so a loaded
+    /// member's reported end forces include the load's fixed-end effect.
+    fn form_local_load_vector(
+        &self,
+        _node_i: &Node<NDIM, NDOF>,
+        _node_j: &Node<NDIM, NDOF>,
+        _load: Option<&Self::Load>,
+    ) -> SVector<f64, ELEMENT_DOF> {
+        SVector::<f64, ELEMENT_DOF>::zeros()
+    }
+
     fn form_mass(
         &self,
         node_i: &Node<NDIM, NDOF>,
         node_j: &Node<NDIM, NDOF>,
     ) -> SVector<f64, ELEMENT_DOF>;
 
-    fn commit(&mut self, node_i: &Node<NDIM, NDOF>, node_j: &Node<NDIM, NDOF>);
+    /// `load` is the effective element load at the committed pseudo-time — see
+    /// `form_tangent_and_resistance`.
+    fn commit(
+        &mut self,
+        node_i: &Node<NDIM, NDOF>,
+        node_j: &Node<NDIM, NDOF>,
+        load: Option<&Self::Load>,
+    );
 
     /// This element's local nodal force at its *current committed* state —
     /// the pre-transform nodal force vector every concrete element already
@@ -102,6 +134,7 @@ mod disp_beam_column;
 mod elastic_beam_column;
 mod force_beam_column;
 mod truss;
+mod uniform_load;
 mod zero_length;
 
 pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
@@ -156,6 +189,7 @@ impl Element {
         &self,
         node_i: &Node,
         node_j: &Node,
+        load: Option<&ElementLoad>,
     ) -> (
         SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
         SVector<f64, ELEMENT_DOF>,
@@ -166,7 +200,7 @@ impl Element {
             Element::ZeroLengthSection(z) => z.form_tangent_and_resistance(node_i, node_j),
             Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
-            Element::ForceBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
+            Element::ForceBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j, load),
         }
     }
 
@@ -175,8 +209,7 @@ impl Element {
     /// that whichever `LoadPattern` is currently being assembled has on
     /// this element (§3.4) — e.g. a beam-column's distributed transverse
     /// load. Zero when `load` is `None`, and for elements with no
-    /// element-load support at all (`Truss`, `ZeroLength`, `DispBeamColumn`
-    /// — see its doc comment for why).
+    /// element-load support at all (`Truss`, `ZeroLength`).
     pub fn form_load_vector(
         &self,
         node_i: &Node,
@@ -184,8 +217,35 @@ impl Element {
         load: Option<&ElementLoad>,
     ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
-            (Element::ElasticBeamColumn(b), Some(ElementLoad::UniformTransverse(w))) => {
-                b.form_load_vector(node_i, node_j, *w)
+            (Element::ElasticBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
+                b.form_load_vector(node_i, node_j, *wx, *wy)
+            }
+            (Element::DispBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
+                b.form_load_vector(node_i, node_j, *wx, *wy)
+            }
+            (Element::ForceBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
+                b.form_load_vector(node_i, node_j, *wx, *wy)
+            }
+            _ => SVector::<f64, ELEMENT_DOF>::zeros(),
+        }
+    }
+
+    /// See `ElementOps::form_local_load_vector`'s doc comment.
+    pub fn form_local_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        load: Option<&ElementLoad>,
+    ) -> SVector<f64, ELEMENT_DOF> {
+        match (self, load) {
+            (Element::ElasticBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
+                b.form_local_load_vector(node_i, node_j, *wx, *wy)
+            }
+            (Element::DispBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
+                b.form_local_load_vector(node_i, node_j, *wx, *wy)
+            }
+            (Element::ForceBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
+                b.form_local_load_vector(node_i, node_j, *wx, *wy)
             }
             _ => SVector::<f64, ELEMENT_DOF>::zeros(),
         }
@@ -212,14 +272,14 @@ impl Element {
     /// place a `Material` ever mutates. A no-op for `ElasticBeamColumn`
     /// (no `Material` — its response is closed-form, §3.1) and for any
     /// `ZeroLength` direction with no material assigned.
-    pub fn commit(&mut self, node_i: &Node, node_j: &Node) {
+    pub fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
         match self {
             Element::Truss(t) => t.commit(node_i, node_j),
             Element::ZeroLength(z) => z.commit(node_i, node_j),
             Element::ZeroLengthSection(z) => z.commit(node_i, node_j),
             Element::ElasticBeamColumn(_) => {}
             Element::DispBeamColumn(b) => b.commit(node_i, node_j),
-            Element::ForceBeamColumn(b) => b.commit(node_i, node_j),
+            Element::ForceBeamColumn(b) => b.commit(node_i, node_j, load),
         }
     }
 
@@ -263,11 +323,12 @@ impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
         &self,
         node_i: &Node,
         node_j: &Node,
+        load: Option<&ElementLoad>,
     ) -> (
         SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
         SVector<f64, ELEMENT_DOF>,
     ) {
-        Element::form_tangent_and_resistance(self, node_i, node_j)
+        Element::form_tangent_and_resistance(self, node_i, node_j, load)
     }
 
     fn form_load_vector(
@@ -279,12 +340,21 @@ impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
         Element::form_load_vector(self, node_i, node_j, load)
     }
 
+    fn form_local_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        load: Option<&ElementLoad>,
+    ) -> SVector<f64, ELEMENT_DOF> {
+        Element::form_local_load_vector(self, node_i, node_j, load)
+    }
+
     fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         Element::form_mass(self, node_i, node_j)
     }
 
-    fn commit(&mut self, node_i: &Node, node_j: &Node) {
-        Element::commit(self, node_i, node_j)
+    fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
+        Element::commit(self, node_i, node_j, load)
     }
 
     fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
@@ -324,6 +394,7 @@ impl Element3 {
         &self,
         node_i: &Node3,
         node_j: &Node3,
+        load: Option<&ElementLoad3>,
     ) -> (
         SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>,
         SVector<f64, SPATIAL_ELEMENT_DOF>,
@@ -334,7 +405,7 @@ impl Element3 {
             Element3::ZeroLengthSection3(z) => z.form_tangent_and_resistance(node_i, node_j),
             Element3::ElasticBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element3::DispBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
-            Element3::ForceBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
+            Element3::ForceBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j, load),
         }
     }
 
@@ -351,8 +422,35 @@ impl Element3 {
         load: Option<&ElementLoad3>,
     ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         match (self, load) {
-            (Element3::ElasticBeamColumn3(b), Some(ElementLoad3::UniformTransverse { wy, wz })) => {
-                b.form_load_vector(node_i, node_j, *wy, *wz)
+            (Element3::ElasticBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
+                b.form_load_vector(node_i, node_j, *wx, *wy, *wz)
+            }
+            (Element3::DispBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
+                b.form_load_vector(node_i, node_j, *wx, *wy, *wz)
+            }
+            (Element3::ForceBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
+                b.form_load_vector(node_i, node_j, *wx, *wy, *wz)
+            }
+            _ => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
+        }
+    }
+
+    /// See `ElementOps::form_local_load_vector`'s doc comment.
+    pub fn form_local_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        load: Option<&ElementLoad3>,
+    ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+        match (self, load) {
+            (Element3::ElasticBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
+                b.form_local_load_vector(node_i, node_j, *wx, *wy, *wz)
+            }
+            (Element3::DispBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
+                b.form_local_load_vector(node_i, node_j, *wx, *wy, *wz)
+            }
+            (Element3::ForceBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
+                b.form_local_load_vector(node_i, node_j, *wx, *wy, *wz)
             }
             _ => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
         }
@@ -370,14 +468,14 @@ impl Element3 {
         }
     }
 
-    pub fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
+    pub fn commit(&mut self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) {
         match self {
             Element3::Truss3(t) => t.commit(node_i, node_j),
             Element3::ZeroLength3(z) => z.commit(node_i, node_j),
             Element3::ZeroLengthSection3(z) => z.commit(node_i, node_j),
             Element3::ElasticBeamColumn3(_) => {}
             Element3::DispBeamColumn3(b) => b.commit(node_i, node_j),
-            Element3::ForceBeamColumn3(b) => b.commit(node_i, node_j),
+            Element3::ForceBeamColumn3(b) => b.commit(node_i, node_j, load),
         }
     }
 
@@ -418,11 +516,12 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Ele
         &self,
         node_i: &Node3,
         node_j: &Node3,
+        load: Option<&ElementLoad3>,
     ) -> (
         SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>,
         SVector<f64, SPATIAL_ELEMENT_DOF>,
     ) {
-        Element3::form_tangent_and_resistance(self, node_i, node_j)
+        Element3::form_tangent_and_resistance(self, node_i, node_j, load)
     }
 
     fn form_load_vector(
@@ -434,12 +533,21 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Ele
         Element3::form_load_vector(self, node_i, node_j, load)
     }
 
+    fn form_local_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        load: Option<&ElementLoad3>,
+    ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+        Element3::form_local_load_vector(self, node_i, node_j, load)
+    }
+
     fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         Element3::form_mass(self, node_i, node_j)
     }
 
-    fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
-        Element3::commit(self, node_i, node_j)
+    fn commit(&mut self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) {
+        Element3::commit(self, node_i, node_j, load)
     }
 
     fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {

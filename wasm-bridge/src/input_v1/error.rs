@@ -53,8 +53,8 @@ pub enum DecodeError {
         row: u32,
     },
     /// An element load referenced an element kind `core` doesn't apply
-    /// that load to (today, only `ElasticBeamColumn` honors
-    /// `UniformTransverse`).
+    /// that load to (today, only the beam-column kinds honor
+    /// `Uniform`).
     UnsupportedElementLoad {
         element_kind: &'static str,
     },

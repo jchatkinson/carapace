@@ -6,6 +6,7 @@ use super::super::{
     Node3, Node3Id, NodeId,
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
+use super::uniform_load;
 
 /// A 2-node, displacement-based, fiber-discretized 2D beam-column (§3.1):
 /// nodal displacements directly give the strain/curvature field along the
@@ -28,11 +29,12 @@ use super::truss::{SpatialElementMatrix, SpatialElementVector};
 /// basic deformations. `PDelta` remains unsupported for this element (a
 /// fiber section's force state does not reduce to the scalar axial force
 /// used by `ElasticBeamColumn`'s closed-form correction).
-/// No element loads (`ElasticBeamColumn`'s uniform transverse load) either
-/// — a fiber element's consistent load vector needs the same per-section
-/// integration machinery core to this element, not a closed-form formula,
-/// so it's deferred until `pysees` actually needs distributed loads on a
-/// fiber-section member.
+/// Uniform element loads use the same consistent equivalent nodal load as
+/// `ElasticBeamColumn` (`form_load_vector`), which is independent of the
+/// section model and integration rule. Note the field is still the
+/// Hermite-interpolated linear curvature: a distributed load's parabolic
+/// moment is only approximated within one element, so nonlinear response under
+/// distributed load wants the member subdivided.
 #[derive(Debug, Clone)]
 pub struct DispBeamColumn {
     pub node_i: NodeId,
@@ -249,6 +251,48 @@ impl DispBeamColumn {
             }
             None => r_local,
         }
+    }
+
+    /// Equivalent nodal load (global coordinates) from a uniform local-axis
+    /// load (`wx` axial, `wy` transverse). This is the same consistent
+    /// virtual-work vector `ElasticBeamColumn` uses — it depends only on the
+    /// load and member length, not on the section model or integration rule
+    /// (OpenSees's `DispBeamColumn2d` fixed-end forces `p0` are likewise
+    /// `wL/2`, `wL²/12`) — and, like the elastic beam, a corotational member
+    /// treats it as a follower load over the undeformed length.
+    pub(super) fn form_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        wx: f64,
+        wy: f64,
+    ) -> SVector<f64, 6> {
+        if wx == 0.0 && wy == 0.0 {
+            return SVector::<f64, 6>::zeros();
+        }
+        if self.transform == GeomTransf::Corotational {
+            let state = Corotational2d::new(node_i, node_j);
+            return state.global_to_local().transpose()
+                * uniform_load::planar_local(state.initial_length(), wx, wy);
+        }
+        let (length, cx, cy) = self.geometry(node_i, node_j);
+        self.transformation(cx, cy).transpose() * uniform_load::planar_local(length, wx, wy)
+    }
+
+    /// `form_load_vector` in the element-local frame `local_force` reports in.
+    pub(super) fn form_local_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        wx: f64,
+        wy: f64,
+    ) -> SVector<f64, 6> {
+        let length = if self.transform == GeomTransf::Corotational {
+            Corotational2d::new(node_i, node_j).initial_length()
+        } else {
+            self.geometry(node_i, node_j).0
+        };
+        uniform_load::planar_local(length, wx, wy)
     }
 
     pub(super) fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
@@ -491,6 +535,38 @@ impl DispBeamColumn3 {
             let kappa_y = b_kappa_y.dot(&d_local);
             section.commit(eps0, kappa_z, kappa_y);
         }
+    }
+
+    /// Spatial counterpart of `DispBeamColumn::form_load_vector`: equivalent
+    /// nodal load (global coordinates) from a uniform local-axis load —
+    /// axial `wx` and transverse `wy`/`wz`.
+    pub(super) fn form_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        wx: f64,
+        wy: f64,
+        wz: f64,
+    ) -> SpatialElementVector {
+        if wx == 0.0 && wy == 0.0 && wz == 0.0 {
+            return SpatialElementVector::zeros();
+        }
+        let (length, r) = GeomTransf3::linear(self.vec_xz).local_axes(node_i, node_j);
+        let t = GeomTransf3::rotation_matrix(&r);
+        t.transpose() * uniform_load::spatial_local(length, wx, wy, wz)
+    }
+
+    /// `form_load_vector` in the element-local frame `local_force` reports in.
+    pub(super) fn form_local_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        wx: f64,
+        wy: f64,
+        wz: f64,
+    ) -> SpatialElementVector {
+        let (length, _r) = GeomTransf3::linear(self.vec_xz).local_axes(node_i, node_j);
+        uniform_load::spatial_local(length, wx, wy, wz)
     }
 
     pub(super) fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SpatialElementVector {

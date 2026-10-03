@@ -179,9 +179,9 @@ where
         let n = self.domain.num_free_dofs();
         let u0 = self.domain.gather_displacement();
         let v0 = self.domain.gather_velocity();
-        let (_k, resistance0) = self.domain.assemble_tangent_and_resistance();
+        let (_k, resistance0) = self.domain.assemble_tangent_and_resistance(self.time);
         let load0 = self.domain.assemble_reference_load(self.time);
-        let k_v0 = self.domain.multiply_stiffness(&v0);
+        let k_v0 = self.domain.multiply_stiffness(&v0, self.time);
         let ground_force0 = self.ground_force(self.time);
 
         let mut a0 = DVector::<f64>::zeros(n);
@@ -194,7 +194,7 @@ where
         // Align committed material state with the given initial condition
         // (matters if `with_initial_displacement` was used) before any
         // stepping begins — see `Material`'s doc comment.
-        self.domain.commit();
+        self.domain.commit(self.time);
     }
 
     /// `-M·ι·ag(t)`, summed over every active `GroundMotion` — the
@@ -244,7 +244,7 @@ where
             self.time = snapshot_time;
             self.step_count = snapshot_step_count;
         } else {
-            self.domain.commit();
+            self.domain.commit(self.time);
         }
 
         result
@@ -268,8 +268,8 @@ where
 
         let mass_coeff = a1 + a4 * self.damping.alpha_m;
         let stiffness_coeff = 1.0 + a4 * self.damping.beta_k;
-        let external =
-            self.domain.assemble_reference_load(self.time) + self.ground_force(self.time);
+        let time = self.time;
+        let external = self.domain.assemble_reference_load(time) + self.ground_force(time);
 
         let (iterations, factorizations) = match self.algorithm {
             // One effective-system solve at `u_n`, unconditionally
@@ -287,10 +287,13 @@ where
                 let mass_vec = &u_n * a1 + &v_n * a2 + &a_n * a3;
                 let damp_vec = &u_n * a4 + &v_n * a5 + &a_n * a6;
 
-                let (k_eff, _resistance) =
-                    self.domain
-                        .assemble_newmark_system(&self.mass, mass_coeff, stiffness_coeff);
-                let k_damp_vec = self.domain.multiply_stiffness(&damp_vec);
+                let (k_eff, _resistance) = self.domain.assemble_newmark_system(
+                    &self.mass,
+                    mass_coeff,
+                    stiffness_coeff,
+                    self.time,
+                );
+                let k_damp_vec = self.domain.multiply_stiffness(&damp_vec, self.time);
 
                 let n = self.domain.num_free_dofs();
                 let mut f_eff = external;
@@ -337,7 +340,7 @@ where
                 // force and the committed internal force.
                 let force_tolerance = matches!(self.test, ConvergenceTest::Combined { .. })
                     .then(|| {
-                        let (_k, resistance) = self.domain.assemble_tangent_and_resistance();
+                        let (_k, resistance) = self.domain.assemble_tangent_and_resistance(self.time);
                         ForceTolerance::for_test(
                             &self.test,
                             &self.domain.rotational_equations(),
@@ -357,9 +360,13 @@ where
                     |domain, _scalar| {
                         let u_trial = domain.gather_displacement();
                         let (v_trial, a_trial) = newmark_state(&u_trial);
-                        let (k_eff, resistance) =
-                            domain.assemble_newmark_system(mass, mass_coeff, stiffness_coeff);
-                        let k_v = domain.multiply_stiffness(&v_trial);
+                        let (k_eff, resistance) = domain.assemble_newmark_system(
+                            mass,
+                            mass_coeff,
+                            stiffness_coeff,
+                            time,
+                        );
+                        let k_v = domain.multiply_stiffness(&v_trial, time);
 
                         let n = resistance.len();
                         let mut residual = external.clone();

@@ -4,7 +4,9 @@ use faer::sparse::Triplet;
 use nalgebra::{DVector, SVector};
 use slotmap::{Key, SlotMap};
 
-use super::load_pattern::LoadPattern;
+use super::load_pattern::{
+    active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
+};
 use super::{
     Axis3, Element, Element3, ElementOps, LoadPatternId, LoadSeries, Node, Node3Id, NodeId,
     SparseMatrix, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
@@ -143,6 +145,10 @@ pub struct Domain<
     load_patterns: SlotMap<LoadPatternId, LoadPattern<NDOF, NId, E::Id, E::Load>>,
     default_pattern: LoadPatternId,
     num_free_dofs: usize,
+    /// Pseudo-time of the last `commit` — what analyses that run on the
+    /// committed state without a time of their own (modal) evaluate element
+    /// loads at.
+    committed_time: f64,
     /// Resolved (at `number_dofs` time) affine terms for every
     /// `AffineConstraint`-covered `(node, dof)` — see `AffineConstraint`'s
     /// doc comment. Empty for every domain that only uses `equal_dof`/
@@ -177,6 +183,7 @@ where
             load_patterns: self.load_patterns.clone(),
             default_pattern: self.default_pattern,
             num_free_dofs: self.num_free_dofs,
+            committed_time: self.committed_time,
             dof_transform: self.dof_transform.clone(),
         }
     }
@@ -217,6 +224,7 @@ where
             load_patterns,
             default_pattern,
             num_free_dofs: 0,
+            committed_time: 0.0,
             dof_transform: HashMap::new(),
         }
     }
@@ -241,6 +249,37 @@ where
         let element = &self.elements[id];
         let [node_i, node_j] = element.nodes();
         element.local_force(&self.nodes[node_i], &self.nodes[node_j])
+    }
+
+    /// Component `component` of the load `id` carries at `pseudo_time` — every
+    /// pattern's load on it, scaled by that pattern's factor (frozen patterns
+    /// at their frozen value), summed; `0.0` for an unloaded element. Local
+    /// axes: `ElementLoad` is `[wx, wy]`, `ElementLoad3` is `[wx, wy, wz]`.
+    pub fn element_load_component(&self, id: E::Id, pseudo_time: f64, component: usize) -> f64 {
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        effective_element_load(&active, id).map_or(0.0, |load| load.component(component))
+    }
+
+    /// `element_local_force` including the fixed-end effect of element loads:
+    /// the member end forces a loaded element actually carries
+    /// (`k·d − Σ factor·f_eq`, OpenSees's `K·u + p0`), with every pattern's
+    /// factor evaluated at `pseudo_time`. Identical to `element_local_force`
+    /// for an element with no load.
+    pub fn element_end_force(&self, id: E::Id, pseudo_time: f64) -> SVector<f64, ELEMENT_DOF> {
+        let element = &self.elements[id];
+        let [id_i, id_j] = element.nodes();
+        let (node_i, node_j) = (&self.nodes[id_i], &self.nodes[id_j]);
+        let mut force = element.local_force(node_i, node_j);
+        for (_, pattern) in self.load_patterns.iter() {
+            let factor = pattern.factor(pseudo_time);
+            if factor == 0.0 {
+                continue;
+            }
+            if let Some(load) = pattern.element_load(id) {
+                force -= factor * element.form_local_load_vector(node_i, node_j, Some(load));
+            }
+        }
+        force
     }
 
     /// Every integration point's per-fiber `(strain, stress)` at `id`'s
@@ -288,14 +327,19 @@ where
             }
         };
 
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
         let mut resistance = 0.0;
-        for (_, element) in self.elements.iter() {
+        for (element_id, element) in self.elements.iter() {
             let [id_i, id_j] = element.nodes();
             let Some(a) = local_index_at(id_i, id_j) else {
                 continue;
             };
-            let (_k_local, r_local) =
-                element.form_tangent_and_resistance(&self.nodes[id_i], &self.nodes[id_j]);
+            let load = effective_element_load(&active, element_id);
+            let (_k_local, r_local) = element.form_tangent_and_resistance(
+                &self.nodes[id_i],
+                &self.nodes[id_j],
+                load.as_ref(),
+            );
             resistance += r_local[a];
         }
 
@@ -522,6 +566,11 @@ where
         next
     }
 
+    /// Pseudo-time of the last `commit` (zero before any).
+    pub(crate) fn committed_time(&self) -> f64 {
+        self.committed_time
+    }
+
     pub fn num_free_dofs(&self) -> usize {
         self.num_free_dofs
     }
@@ -616,16 +665,26 @@ where
     /// state. Duplicate `(row, col)` triplets (every DOF shared by more
     /// than one element) are summed by whoever consumes them — `faer`'s
     /// triplet constructor does this automatically.
-    fn assemble_stiffness_triplets(&self) -> (Vec<Triplet<usize, usize, f64>>, DVector<f64>) {
+    ///
+    /// `pseudo_time` fixes the element loads that state-dependent elements
+    /// (`ForceBeamColumn`) fold into their own resistance — see
+    /// `ElementOps::form_tangent_and_resistance`.
+    fn assemble_stiffness_triplets(
+        &self,
+        pseudo_time: f64,
+    ) -> (Vec<Triplet<usize, usize, f64>>, DVector<f64>) {
         let n = self.num_free_dofs;
         let mut triplets = Vec::new();
         let mut resistance = DVector::<f64>::zeros(n);
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
 
-        for (_, element) in self.elements.iter() {
+        for (element_id, element) in self.elements.iter() {
             let [id_i, id_j] = element.nodes();
             let node_i = &self.nodes[id_i];
             let node_j = &self.nodes[id_j];
-            let (k_local, r_local) = element.form_tangent_and_resistance(node_i, node_j);
+            let load = effective_element_load(&active, element_id);
+            let (k_local, r_local) =
+                element.form_tangent_and_resistance(node_i, node_j, load.as_ref());
 
             let mut dof_terms = [DofTerms::empty(); ELEMENT_DOF];
             for (a, terms) in dof_terms.iter_mut().enumerate() {
@@ -660,9 +719,12 @@ where
     /// resisting force over free DOFs only, at the current nodal
     /// displacement state. No load-pattern contribution — see
     /// `assemble_reference_load`.
-    pub(crate) fn assemble_tangent_and_resistance(&self) -> (SparseMatrix, DVector<f64>) {
+    pub(crate) fn assemble_tangent_and_resistance(
+        &self,
+        pseudo_time: f64,
+    ) -> (SparseMatrix, DVector<f64>) {
         let n = self.num_free_dofs;
-        let (triplets, resistance) = self.assemble_stiffness_triplets();
+        let (triplets, resistance) = self.assemble_stiffness_triplets(pseudo_time);
         let k = SparseMatrix::try_new_from_triplets(n, n, &triplets)
             .expect("equation numbers are always in [0, num_free_dofs)");
         (k, resistance)
@@ -756,7 +818,7 @@ where
         &self,
         pseudo_time: f64,
     ) -> (SparseMatrix, DVector<f64>) {
-        let (k, resistance) = self.assemble_tangent_and_resistance();
+        let (k, resistance) = self.assemble_tangent_and_resistance(pseudo_time);
         let residual = self.assemble_reference_load(pseudo_time) - resistance;
         (k, residual)
     }
@@ -783,13 +845,20 @@ where
     /// `TransientAnalysis` step, never during Newton iteration itself. See
     /// `Material`'s doc comment for the trial/commit design this closes
     /// the loop on.
-    pub(crate) fn commit(&mut self) {
-        for (_, element) in self.elements.iter_mut() {
+    ///
+    /// `pseudo_time` is the converged step's pseudo-time: a state-dependent
+    /// element (`ForceBeamColumn`) commits the state that is consistent with
+    /// the element load at that time.
+    pub(crate) fn commit(&mut self, pseudo_time: f64) {
+        self.committed_time = pseudo_time;
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        for (element_id, element) in self.elements.iter_mut() {
             let [id_i, id_j] = element.nodes();
-            // `self.nodes` and `self.elements` are disjoint fields, so
-            // borrowing one immutably while iterating the other mutably
-            // is fine.
-            element.commit(&self.nodes[id_i], &self.nodes[id_j]);
+            let load = effective_element_load(&active, element_id);
+            // `self.nodes`, `self.elements` and `self.load_patterns` are
+            // disjoint fields, so borrowing the others immutably while
+            // iterating `elements` mutably is fine.
+            element.commit(&self.nodes[id_i], &self.nodes[id_j], load.as_ref());
         }
     }
 
@@ -877,8 +946,8 @@ where
     /// triplets `assemble_tangent_and_resistance` builds its sparse matrix
     /// from, computed directly (no `faer` matrix construction needed for a
     /// single matrix-vector product).
-    pub(crate) fn multiply_stiffness(&self, v: &DVector<f64>) -> DVector<f64> {
-        let (triplets, _resistance) = self.assemble_stiffness_triplets();
+    pub(crate) fn multiply_stiffness(&self, v: &DVector<f64>, pseudo_time: f64) -> DVector<f64> {
+        let (triplets, _resistance) = self.assemble_stiffness_triplets(pseudo_time);
         let mut result = DVector::<f64>::zeros(self.num_free_dofs);
         for t in &triplets {
             result[t.row] += t.val * v[t.col];
@@ -900,9 +969,10 @@ where
         mass: &DVector<f64>,
         mass_coeff: f64,
         stiffness_coeff: f64,
+        pseudo_time: f64,
     ) -> (SparseMatrix, DVector<f64>) {
         let n = self.num_free_dofs;
-        let (triplets, resistance) = self.assemble_stiffness_triplets();
+        let (triplets, resistance) = self.assemble_stiffness_triplets(pseudo_time);
 
         let mut eff_triplets = Vec::with_capacity(triplets.len() + n);
         for t in &triplets {

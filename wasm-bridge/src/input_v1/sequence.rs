@@ -439,6 +439,16 @@ pub enum RecorderSpec {
         element_index: u32,
         component: u8,
     },
+    /// The uniform load an element carries at the sample's pseudo-time
+    /// (every pattern's load on it, scaled by its factor, summed — frozen
+    /// patterns included): `component` `0` = `wx`, `1` = `wy`, local axes.
+    /// What a consumer needs to recover internal-force diagrams from
+    /// `ElementForce`'s end forces. `0` for an unloaded element.
+    ElementLoad {
+        element_kind: ElementKind,
+        element_index: u32,
+        component: u8,
+    },
     /// Only meaningful during a `Modal` stage: `mode` indexes that stage's
     /// computed `Vec<Mode>` (ascending frequency, `0` = lowest), `node`/
     /// `dof` locate one entry of that mode's free-DOF-indexed shape vector
@@ -511,6 +521,12 @@ pub enum RecorderSpec3 {
         dof: u8,
     },
     ElementForce {
+        element_kind: ElementKind3,
+        element_index: u32,
+        component: u8,
+    },
+    /// See `RecorderSpec::ElementLoad`; `component` `0..3` = `wx`, `wy`, `wz`.
+    ElementLoad {
         element_kind: ElementKind3,
         element_index: u32,
         component: u8,

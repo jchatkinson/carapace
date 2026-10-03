@@ -172,7 +172,7 @@ where
             self.step_count = snapshot_step_count;
             self.load_factor = snapshot_load_factor;
         } else {
-            self.domain.commit();
+            self.domain.commit(self.load_factor);
         }
 
         result
@@ -183,7 +183,7 @@ where
         // `Combined`'s per-equation reference (committed and predicted
         // external force, committed internal force), frozen for the step.
         let committed_forces = matches!(self.test, ConvergenceTest::Combined { .. }).then(|| {
-            let (_k, internal) = self.domain.assemble_tangent_and_resistance();
+            let (_k, internal) = self.domain.assemble_tangent_and_resistance(self.load_factor);
             (self.domain.assemble_reference_load(self.load_factor), internal)
         });
         self.load_factor = self

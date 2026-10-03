@@ -577,7 +577,7 @@ mod tests {
                 domain.load_node(grid[level][0], 0, level as f64);
             }
             domain.number_dofs();
-            let (k, _) = domain.assemble_tangent_and_resistance();
+            let (k, _) = domain.assemble_tangent_and_resistance(0.0);
             let p = domain.assemble_reference_load_sensitivity(0.0);
             let n = p.len();
             let row = DVector::from_element(n, 1.0);

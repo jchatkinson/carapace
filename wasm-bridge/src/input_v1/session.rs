@@ -15,9 +15,9 @@
 //! ones.
 
 use carapace_core::analysis::{
-    modal_analysis, Algorithm, Analysis, AnalysisBuilder, AnalysisError, ArcFailure,
-    ArcStepInfo, ConstraintHandler, ConvergenceTest, GroundMotion, Integrator, Mode,
-    RayleighDamping, StopReason, TransientAnalysis,
+    modal_analysis, Algorithm, Analysis, AnalysisBuilder, AnalysisError, ArcFailure, ArcStepInfo,
+    ConstraintHandler, ConvergenceTest, GroundMotion, Integrator, Mode, RayleighDamping,
+    StopReason, TransientAnalysis,
 };
 use carapace_core::model::{
     Domain, Element, Element3, ElementOps, LoadPatternId, Node3Id, NodeId, ELEMENT_DOF, NDF,
@@ -259,6 +259,11 @@ pub enum ResolvedRecorder<NId, EId> {
         dof: u8,
     },
     ElementForce {
+        element: EId,
+        component: u8,
+    },
+    /// See `RecorderSpec::ElementLoad`; skipped during `Modal`.
+    ElementLoad {
         element: EId,
         component: u8,
     },
@@ -760,8 +765,16 @@ where
                         ResolvedRecorder::NodeDisp { node, dof } => {
                             Some(analysis.domain().node(node).displacement[dof as usize])
                         }
-                        ResolvedRecorder::ElementForce { element, component } => {
-                            Some(analysis.domain().element_local_force(element)[component as usize])
+                        ResolvedRecorder::ElementForce { element, component } => Some(
+                            analysis.domain().element_end_force(element, progress)
+                                [component as usize],
+                        ),
+                        ResolvedRecorder::ElementLoad { element, component } => {
+                            Some(analysis.domain().element_load_component(
+                                element,
+                                progress,
+                                component as usize,
+                            ))
                         }
                         ResolvedRecorder::Reaction { node, dof } => {
                             Some(analysis.domain().reaction(node, dof as usize, progress))
@@ -794,8 +807,16 @@ where
                         ResolvedRecorder::NodeAccel { node, dof } => {
                             Some(analysis.domain().node(node).acceleration[dof as usize])
                         }
-                        ResolvedRecorder::ElementForce { element, component } => {
-                            Some(analysis.domain().element_local_force(element)[component as usize])
+                        ResolvedRecorder::ElementForce { element, component } => Some(
+                            analysis.domain().element_end_force(element, progress)
+                                [component as usize],
+                        ),
+                        ResolvedRecorder::ElementLoad { element, component } => {
+                            Some(analysis.domain().element_load_component(
+                                element,
+                                progress,
+                                component as usize,
+                            ))
                         }
                         ResolvedRecorder::Reaction { node, dof } => {
                             Some(analysis.domain().reaction(node, dof as usize, progress))

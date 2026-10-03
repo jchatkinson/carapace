@@ -2,8 +2,8 @@ use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use super::super::transform::Corotational2d;
 use super::super::{
-    BeamIntegration, Fiber, Fiber3, FiberSection, FiberSection3, GeomTransf, GeomTransf3, Node,
-    Node3, Node3Id, NodeId,
+    BeamIntegration, ElementLoad, ElementLoad3, Fiber, Fiber3, FiberSection, FiberSection3,
+    GeomTransf, GeomTransf3, Node, Node3, Node3Id, NodeId,
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
@@ -54,9 +54,19 @@ use super::truss::{SpatialElementMatrix, SpatialElementVector};
 ///
 /// Small-displacement by default, with an opt-in `GeomTransf::Corotational`
 /// transformation that supplies objective chord-relative basic
-/// deformations and the consistent geometric tangent. No element loads;
+/// deformations and the consistent geometric tangent.
 /// `BeamIntegration::Lobatto` is the usual choice (endpoints included —
 /// plastic hinges concentrate at member ends).
+///
+/// **Element loads.** A uniform local-axis load enters the section forces
+/// exactly, which is the point of a force-based element: `s(x) = b(x)·q +
+/// s_p(x)`, where `s_p` is the load's own section force on the statically
+/// determinate basic system (axial restrained at node i, simply supported in
+/// bending: `N_p = wx·(L−x)`, `M_p = wy·x(x−L)/2`). The load therefore
+/// reaches `state_determination`, and the element's nodal resistance is
+/// `Aᵀq` — the load's statically equivalent nodal forces (`wx·L` axial at
+/// node i, `w·L/2` shear at each end; `form_load_vector`) are the *applied*
+/// side. This mirrors OpenSees's `ForceBeamColumn2d` (`sp` and `p0`).
 #[derive(Debug, Clone)]
 pub struct ForceBeamColumn {
     pub node_i: NodeId,
@@ -82,7 +92,16 @@ pub struct ForceBeamColumn {
     /// subdivide a too-large jump to `v` into smaller intermediate targets
     /// (see its doc comment) rather than only its own start and end point.
     v_commit: SVector<f64, NBD>,
+    /// Effective element load `q_commit`/`e_commit` are consistent with —
+    /// the starting point for interpolating the load across subdivided
+    /// state-determination sub-steps.
+    load_commit: ElementLoad,
     max_iters: usize,
+    /// Energy tolerance (`dv·dq`) of the state-determination loop. Tight on
+    /// purpose (OpenSees's own default): a loose value leaves a freshly
+    /// committed state re-evaluating slightly off equilibrium at the same
+    /// displacement, which `DisplacementControl`'s first-iteration exactness
+    /// relies on never happening.
     tolerance: f64,
     /// Last-committed local nodal force (`a.transpose() * q_commit`, or its
     /// corotational-frame equivalent) — cached at `commit` time rather than
@@ -126,8 +145,9 @@ impl ForceBeamColumn {
             q_commit: SVector::<f64, NBD>::zeros(),
             e_commit: vec![(0.0, 0.0); n_points],
             v_commit: SVector::<f64, NBD>::zeros(),
+            load_commit: ElementLoad::Uniform { wx: 0.0, wy: 0.0 },
             max_iters: 50,
-            tolerance: 1e-6,
+            tolerance: 1e-12,
             local_force: SVector::<f64, 6>::zeros(),
         }
     }
@@ -208,6 +228,17 @@ impl ForceBeamColumn {
         b
     }
 
+    /// The load's own section force `s_p = [N_p, M_p]` at `xi` on the basic
+    /// system (see the type doc comment) — sagging-positive `M`, matching
+    /// `b_matrix`.
+    fn section_load(xi: f64, length: f64, load: &ElementLoad) -> SVector<f64, NSD> {
+        let ElementLoad::Uniform { wx, wy } = *load;
+        SVector::<f64, NSD>::new(
+            wx * length * (1.0 - xi),
+            wy * length * length * xi * (xi - 1.0) / 2.0,
+        )
+    }
+
     fn invert_2x2(m: [[f64; 2]; 2]) -> SMatrix<f64, NSD, NSD> {
         let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
         SMatrix::<f64, NSD, NSD>::new(m[1][1] / det, -m[0][1] / det, -m[1][0] / det, m[0][0] / det)
@@ -226,7 +257,12 @@ impl ForceBeamColumn {
     /// fully-plastic state on the way to a perfectly reasonable final
     /// answer — subdividing keeps each step's target close enough to its
     /// start that this doesn't happen.
-    fn state_determination(&self, v: SVector<f64, NBD>, length: f64) -> StateDeterminationResult {
+    fn state_determination(
+        &self,
+        v: SVector<f64, NBD>,
+        load: &ElementLoad,
+        length: f64,
+    ) -> StateDeterminationResult {
         let mut divisions = 1;
         loop {
             let mut q = self.q_commit;
@@ -235,8 +271,14 @@ impl ForceBeamColumn {
             let mut all_converged = true;
 
             for step in 1..=divisions {
-                let v_step = self.v_commit + (v - self.v_commit) * (step as f64 / divisions as f64);
-                let ((q2, e2, k2), converged) = self.try_state_determination(v_step, length, q, e);
+                let fraction = step as f64 / divisions as f64;
+                let v_step = self.v_commit + (v - self.v_commit) * fraction;
+                // The load moves from its committed to its current level in
+                // step with `v`, so each sub-step's target stays close to its
+                // start in both.
+                let load_step = self.load_commit * (1.0 - fraction) + *load * fraction;
+                let ((q2, e2, k2), converged) =
+                    self.try_state_determination(v_step, &load_step, length, q, e);
                 q = q2;
                 e = e2;
                 k_basic = k2;
@@ -258,8 +300,7 @@ impl ForceBeamColumn {
     /// `xara/SRC/element/Frame/Other/Force/ForceBeamColumn2d.cpp`'s
     /// `update()` (the Neuenhofer-Filippou/Spacone-Ciampi-Filippou
     /// algorithm that file's header cites), not re-derived by hand.
-    /// Simplified from the source: no distributed element loads (§3.1
-    /// scope), no initial-tangent iteration variant (the source's
+    /// Simplified from the source: no initial-tangent iteration variant (the source's
     /// `Newton`/`InitialFirst`/`Initial` algorithm ladder — an additional
     /// robustness measure on top of subdivision, not needed for
     /// correctness, addable later if a model actually demands it).
@@ -290,6 +331,7 @@ impl ForceBeamColumn {
     fn try_state_determination(
         &self,
         v: SVector<f64, NBD>,
+        load: &ElementLoad,
         length: f64,
         q0: SVector<f64, NBD>,
         e0: Vec<(f64, f64)>,
@@ -306,7 +348,7 @@ impl ForceBeamColumn {
 
             for (i, (xi, w)) in points.iter().enumerate() {
                 let b = Self::b_matrix(*xi);
-                let target = b * q;
+                let target = b * q + Self::section_load(*xi, length, load);
                 let scale = w * length;
 
                 // First correction: advance this section's own stored
@@ -364,7 +406,9 @@ impl ForceBeamColumn {
         &self,
         node_i: &Node,
         node_j: &Node,
+        load: Option<&ElementLoad>,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
+        let load = load.copied().unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
         let corotational = (self.transform == GeomTransf::Corotational)
             .then(|| Corotational2d::new(node_i, node_j));
         let (length, t, d_local) = if let Some(state) = &corotational {
@@ -381,7 +425,7 @@ impl ForceBeamColumn {
             .as_ref()
             .map_or_else(|| a * d_local, Corotational2d::basic_deformation);
 
-        let (q, _e, k_basic) = self.state_determination(v, length);
+        let (q, _e, k_basic) = self.state_determination(v, &load, length);
 
         if let Some(state) = &corotational {
             return (
@@ -396,7 +440,8 @@ impl ForceBeamColumn {
         (t.transpose() * k_local * t, t.transpose() * r_local)
     }
 
-    pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node) {
+    pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
+        let load = load.copied().unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
         let (length, d_local, corotational) = if self.transform == GeomTransf::Corotational {
             let state = Corotational2d::new(node_i, node_j);
             (
@@ -413,7 +458,7 @@ impl ForceBeamColumn {
             .as_ref()
             .map_or_else(|| a * d_local, Corotational2d::basic_deformation);
 
-        let (q, e, _k_basic) = self.state_determination(v, length);
+        let (q, e, _k_basic) = self.state_determination(v, &load, length);
 
         for (i, (eps0, kappa)) in e.iter().enumerate() {
             self.sections[i].commit(*eps0, *kappa);
@@ -425,6 +470,53 @@ impl ForceBeamColumn {
         self.q_commit = q;
         self.e_commit = e;
         self.v_commit = v;
+        self.load_commit = load;
+    }
+
+    /// Equivalent nodal load (global coordinates) from a uniform local-axis
+    /// load — the *statically* equivalent forces on the basic system
+    /// (`wx·L` axial at node i, `wy·L/2` shear at each end, no moments), not
+    /// the consistent Hermite vector the displacement-based and elastic
+    /// beams use: this element's section forces carry the rest of the load's
+    /// effect (see the type doc comment). A corotational member treats it as
+    /// a follower load over the undeformed length.
+    pub(super) fn form_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        wx: f64,
+        wy: f64,
+    ) -> SVector<f64, 6> {
+        if wx == 0.0 && wy == 0.0 {
+            return SVector::<f64, 6>::zeros();
+        }
+        if self.transform == GeomTransf::Corotational {
+            let state = Corotational2d::new(node_i, node_j);
+            return state.global_to_local().transpose()
+                * Self::static_load_local(state.initial_length(), wx, wy);
+        }
+        let (length, cx, cy) = self.geometry(node_i, node_j);
+        self.transformation(cx, cy).transpose() * Self::static_load_local(length, wx, wy)
+    }
+
+    /// `form_load_vector` in the element-local frame `local_force` reports in.
+    pub(super) fn form_local_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        wx: f64,
+        wy: f64,
+    ) -> SVector<f64, 6> {
+        let length = if self.transform == GeomTransf::Corotational {
+            Corotational2d::new(node_i, node_j).initial_length()
+        } else {
+            self.geometry(node_i, node_j).0
+        };
+        Self::static_load_local(length, wx, wy)
+    }
+
+    fn static_load_local(l: f64, wx: f64, wy: f64) -> SVector<f64, 6> {
+        SVector::<f64, 6>::from_row_slice(&[wx * l, wy * l / 2.0, 0.0, 0.0, wy * l / 2.0, 0.0])
     }
 
     /// Reads the local nodal force cached by `commit` — see this element's
@@ -457,6 +549,14 @@ impl ForceBeamColumn {
         SVector::<f64, 6>::from_column_slice(&[half, half, 0.0, half, half, 0.0])
     }
 }
+
+/// Sign of the `wz`-driven `My` section force relative to `Mz`'s `wy`-driven
+/// form (the `ry = -dw/dx` convention flips it).
+const NO_LOAD3: ElementLoad3 = ElementLoad3::Uniform {
+    wx: 0.0,
+    wy: 0.0,
+    wz: 0.0,
+};
 
 /// `3` — number of section force/deformation components for
 /// `ForceBeamColumn3` (`N`, `Mz`, `My` — biaxial bending, no torsion; see
@@ -518,6 +618,8 @@ pub struct ForceBeamColumn3 {
     q_commit: SVector<f64, NBD3>,
     e_commit: Vec<(f64, f64, f64)>,
     v_commit: SVector<f64, NBD3>,
+    /// See `ForceBeamColumn::load_commit`.
+    load_commit: ElementLoad3,
     max_iters: usize,
     tolerance: f64,
     /// See `ForceBeamColumn::local_force`'s doc comment — same reasoning,
@@ -553,8 +655,13 @@ impl ForceBeamColumn3 {
             q_commit: SVector::<f64, NBD3>::zeros(),
             e_commit: vec![(0.0, 0.0, 0.0); n_points],
             v_commit: SVector::<f64, NBD3>::zeros(),
+            load_commit: ElementLoad3::Uniform {
+                wx: 0.0,
+                wy: 0.0,
+                wz: 0.0,
+            },
             max_iters: 50,
-            tolerance: 1e-6,
+            tolerance: 1e-12,
             local_force: SpatialElementVector::zeros(),
         }
     }
@@ -637,9 +744,25 @@ impl ForceBeamColumn3 {
         b
     }
 
+    /// The load's own section force `s_p = [N_p, Mz_p, My_p]` at `xi` on the
+    /// basic system — see `ForceBeamColumn::section_load`. `My_p` is `Mz_p`'s
+    /// form driven by `wz`, with no sign change: the `ry = -dw/dx` flip is
+    /// already absorbed into `b_matrix`'s conjugate `q4`/`q5` (verified
+    /// against `ElasticBeamColumn3` in `core/tests/force_beam_element_load.rs`).
+    fn section_load(xi: f64, length: f64, load: &ElementLoad3) -> SVector<f64, NSD3> {
+        let ElementLoad3::Uniform { wx, wy, wz } = *load;
+        let bending = length * length * xi * (xi - 1.0) / 2.0;
+        SVector::<f64, NSD3>::new(wx * length * (1.0 - xi), wy * bending, wz * bending)
+    }
+
     /// See `ForceBeamColumn::state_determination`'s doc comment — identical
     /// bisection-subdivision structure, `NSD3`/`NBD3` in place of `NSD`/`NBD`.
-    fn state_determination(&self, v: SVector<f64, NBD3>, length: f64) -> StateDeterminationResult3 {
+    fn state_determination(
+        &self,
+        v: SVector<f64, NBD3>,
+        load: &ElementLoad3,
+        length: f64,
+    ) -> StateDeterminationResult3 {
         let mut divisions = 1;
         loop {
             let mut q = self.q_commit;
@@ -648,8 +771,11 @@ impl ForceBeamColumn3 {
             let mut all_converged = true;
 
             for step in 1..=divisions {
-                let v_step = self.v_commit + (v - self.v_commit) * (step as f64 / divisions as f64);
-                let ((q2, e2, k2), converged) = self.try_state_determination(v_step, length, q, e);
+                let fraction = step as f64 / divisions as f64;
+                let v_step = self.v_commit + (v - self.v_commit) * fraction;
+                let load_step = self.load_commit * (1.0 - fraction) + *load * fraction;
+                let ((q2, e2, k2), converged) =
+                    self.try_state_determination(v_step, &load_step, length, q, e);
                 q = q2;
                 e = e2;
                 k_basic = k2;
@@ -674,6 +800,7 @@ impl ForceBeamColumn3 {
     fn try_state_determination(
         &self,
         v: SVector<f64, NBD3>,
+        load: &ElementLoad3,
         length: f64,
         q0: SVector<f64, NBD3>,
         e0: Vec<(f64, f64, f64)>,
@@ -690,7 +817,7 @@ impl ForceBeamColumn3 {
 
             for (i, (xi, w)) in points.iter().enumerate() {
                 let b = Self::b_matrix(*xi);
-                let target = b * q;
+                let target = b * q + Self::section_load(*xi, length, load);
                 let scale = w * length;
 
                 let (n0, mz0, my0, k_sec0) = self.sections[i].trial(e[i].0, e[i].1, e[i].2);
@@ -758,12 +885,14 @@ impl ForceBeamColumn3 {
         &self,
         node_i: &Node3,
         node_j: &Node3,
+        load: Option<&ElementLoad3>,
     ) -> (SpatialElementMatrix, SpatialElementVector) {
+        let load = load.copied().unwrap_or(NO_LOAD3);
         let (length, t, d_local) = self.local_displacement(node_i, node_j);
         let a = Self::basic_deformation_matrix(length);
         let v = a * d_local;
 
-        let (q, _e, k_basic) = self.state_determination(v, length);
+        let (q, _e, k_basic) = self.state_determination(v, &load, length);
 
         let k_torsion = self.torsion_stiffness(length);
         let k_local = a.transpose() * k_basic * a + k_torsion;
@@ -772,12 +901,13 @@ impl ForceBeamColumn3 {
         (t.transpose() * k_local * t, t.transpose() * r_local)
     }
 
-    pub(super) fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
+    pub(super) fn commit(&mut self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) {
+        let load = load.copied().unwrap_or(NO_LOAD3);
         let (length, _t, d_local) = self.local_displacement(node_i, node_j);
         let a = Self::basic_deformation_matrix(length);
         let v = a * d_local;
 
-        let (q, e, _k_basic) = self.state_determination(v, length);
+        let (q, e, _k_basic) = self.state_determination(v, &load, length);
 
         for (i, (eps0, kappa_z, kappa_y)) in e.iter().enumerate() {
             self.sections[i].commit(*eps0, *kappa_z, *kappa_y);
@@ -786,6 +916,49 @@ impl ForceBeamColumn3 {
         self.q_commit = q;
         self.e_commit = e;
         self.v_commit = v;
+        self.load_commit = load;
+    }
+
+    /// Spatial counterpart of `ForceBeamColumn::form_load_vector`: the
+    /// load's statically equivalent nodal forces (`wx·L` axial at node i,
+    /// `wy·L/2`/`wz·L/2` shear at each end), global coordinates.
+    pub(super) fn form_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        wx: f64,
+        wy: f64,
+        wz: f64,
+    ) -> SpatialElementVector {
+        if wx == 0.0 && wy == 0.0 && wz == 0.0 {
+            return SpatialElementVector::zeros();
+        }
+        let (length, r) = GeomTransf3::linear(self.vec_xz).local_axes(node_i, node_j);
+        let t = GeomTransf3::rotation_matrix(&r);
+        t.transpose() * Self::static_load_local(length, wx, wy, wz)
+    }
+
+    /// `form_load_vector` in the element-local frame `local_force` reports in.
+    pub(super) fn form_local_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        wx: f64,
+        wy: f64,
+        wz: f64,
+    ) -> SpatialElementVector {
+        let (length, _r) = GeomTransf3::linear(self.vec_xz).local_axes(node_i, node_j);
+        Self::static_load_local(length, wx, wy, wz)
+    }
+
+    fn static_load_local(l: f64, wx: f64, wy: f64, wz: f64) -> SpatialElementVector {
+        let mut local = SpatialElementVector::zeros();
+        local[0] = wx * l;
+        local[1] = wy * l / 2.0;
+        local[7] = wy * l / 2.0;
+        local[2] = wz * l / 2.0;
+        local[8] = wz * l / 2.0;
+        local
     }
 
     /// See `ForceBeamColumn::local_force`'s doc comment.

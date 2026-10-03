@@ -184,21 +184,22 @@ fn decode_planar(input: CarapaceInputV1) -> Result<PlanarSession, DecodeError> {
     for i in 0..input.element_loads.element_index.len() {
         let pattern = pattern_at(input.element_loads.pattern[i])?;
         let kind = input.element_loads.element_kind[i];
-        if kind != ElementKind::ElasticBeamColumn {
-            return Err(DecodeError::UnsupportedElementLoad {
-                element_kind: element_kind_name(kind),
-            });
-        }
+        let (ids, table) = match kind {
+            ElementKind::ElasticBeamColumn => (&elastic_beam_ids, "elastic_beam_columns"),
+            ElementKind::DispBeamColumn => (&disp_beam_ids, "disp_beam_columns"),
+            ElementKind::ForceBeamColumn => (&force_beam_ids, "force_beam_columns"),
+            _ => {
+                return Err(DecodeError::UnsupportedElementLoad {
+                    element_kind: element_kind_name(kind),
+                })
+            }
+        };
         let row = input.element_loads.element_index[i];
-        let element_id =
-            *elastic_beam_ids
-                .get(row as usize)
-                .ok_or(DecodeError::UnknownElementIndex {
-                    table: "elastic_beam_columns",
-                    row,
-                })?;
+        let element_id = *ids
+            .get(row as usize)
+            .ok_or(DecodeError::UnknownElementIndex { table, row })?;
         let load = match input.element_loads.load[i] {
-            ElementLoadSpec::UniformTransverse { w } => ElementLoad::UniformTransverse(w),
+            ElementLoadSpec::Uniform { wx, wy } => ElementLoad::Uniform { wx, wy },
         };
         let stage = input.element_loads.stage[i];
         element_loads_by_stage
@@ -255,6 +256,14 @@ fn decode_planar(input: CarapaceInputV1) -> Result<PlanarSession, DecodeError> {
                     element_index,
                     component,
                 } => ResolvedRecorder::ElementForce {
+                    element: element_at(element_kind, element_index)?,
+                    component,
+                },
+                RecorderSpec::ElementLoad {
+                    element_kind,
+                    element_index,
+                    component,
+                } => ResolvedRecorder::ElementLoad {
                     element: element_at(element_kind, element_index)?,
                     component,
                 },

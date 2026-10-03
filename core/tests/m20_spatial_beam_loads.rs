@@ -7,8 +7,8 @@ use carapace_core::model::{
 
 /// Spatial counterpart to `m3_beam.rs`'s `simply_supported_beam_udl_
 /// matches_closed_form_end_rotation` — `ElasticBeamColumn3`'s new local
-/// `wy`/`wz` uniform transverse load (`ElementLoad3::UniformTransverse`,
-/// the spatial generalization of planar `ElementLoad::UniformTransverse`;
+/// `wy`/`wz` uniform transverse load (`ElementLoad3::Uniform`,
+/// the spatial generalization of planar `ElementLoad::Uniform`;
 /// see `spatial-architecture.md`'s "Spatial beam loads" milestone),
 /// exercised through the full `Domain3`/`Analysis3` stack with a member
 /// aligned along global `x` (`vec_xz = [0,0,1]` makes local `[x,y,z]` equal
@@ -60,7 +60,7 @@ fn axis_aligned_biaxial_udl_matches_closed_form_end_rotations_in_both_planes() {
         GeomTransf3::linear([0.0, 0.0, 1.0]),
     )));
     let pattern = domain.default_pattern();
-    domain.add_element_load(pattern, beam, ElementLoad3::UniformTransverse { wy, wz });
+    domain.add_element_load(pattern, beam, ElementLoad3::Uniform { wx: 0.0, wy, wz });
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
@@ -154,7 +154,11 @@ fn zero_uniform_transverse_load_matches_no_load_at_all() {
             domain.add_element_load(
                 pattern,
                 beam,
-                ElementLoad3::UniformTransverse { wy: 0.0, wz: 0.0 },
+                ElementLoad3::Uniform {
+                    wx: 0.0,
+                    wy: 0.0,
+                    wz: 0.0,
+                },
             );
         }
         domain.load_node(node_j, SpatialDof::Uy as usize, 1.0);

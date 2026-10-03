@@ -216,32 +216,52 @@ impl ElasticBeamColumn {
         k_local * (t * d_global)
     }
 
-    /// Equivalent nodal load (global coordinates) from a uniform transverse
-    /// load `w` (force/length, local +y direction) applied to this element
-    /// by whichever `LoadPattern` is currently being assembled (§3.4;
-    /// `Domain::assemble_reference_load` passes `w` in — it's no longer a
-    /// field on the element itself, since a pattern-scoped load can't live
-    /// on `Element`, same reasoning as `Node`'s load leaving `Node`), via
-    /// consistent (virtual-work) Hermite cubic shape-function integration.
-    pub(super) fn form_load_vector(&self, node_i: &Node, node_j: &Node, w: f64) -> SVector<f64, 6> {
-        if w == 0.0 {
+    /// Equivalent nodal load (global coordinates) from a uniform local-axis
+    /// load (`wx` axial, `wy` transverse in local +y; force/length) applied
+    /// to this element by whichever `LoadPattern` is currently being
+    /// assembled (§3.4; `Domain::assemble_reference_load` passes the load in
+    /// — a pattern-scoped load can't live on `Element`, same reasoning as
+    /// `Node`'s load leaving `Node`), via consistent (virtual-work) Hermite
+    /// cubic / linear-axial shape-function integration.
+    pub(super) fn form_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        wx: f64,
+        wy: f64,
+    ) -> SVector<f64, 6> {
+        if wx == 0.0 && wy == 0.0 {
             return SVector::<f64, 6>::zeros();
         }
         if self.transform == GeomTransf::Corotational {
-            return Corotational2d::new(node_i, node_j).global_uniform_transverse_load(w);
+            let transform = Corotational2d::new(node_i, node_j);
+            return transform.global_to_local().transpose()
+                * Self::uniform_load_local(transform.initial_length(), wx, wy);
         }
         let (length, cx, cy) = self.geometry(node_i, node_j);
         let t = self.transformation(cx, cy);
-        let l = length;
-        let local = SVector::<f64, 6>::from_row_slice(&[
-            0.0,
-            w * l / 2.0,
-            w * l * l / 12.0,
-            0.0,
-            w * l / 2.0,
-            -w * l * l / 12.0,
-        ]);
-        t.transpose() * local
+        t.transpose() * Self::uniform_load_local(length, wx, wy)
+    }
+
+    /// `form_load_vector`'s equivalent nodal load in the element-local frame
+    /// `local_force` reports in (the current chord frame for `Corotational`).
+    pub(super) fn form_local_load_vector(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+        wx: f64,
+        wy: f64,
+    ) -> SVector<f64, 6> {
+        if self.transform == GeomTransf::Corotational {
+            let length = Corotational2d::new(node_i, node_j).initial_length();
+            return Self::uniform_load_local(length, wx, wy);
+        }
+        let (length, _cx, _cy) = self.geometry(node_i, node_j);
+        Self::uniform_load_local(length, wx, wy)
+    }
+
+    fn uniform_load_local(l: f64, wx: f64, wy: f64) -> SVector<f64, 6> {
+        super::uniform_load::planar_local(l, wx, wy)
     }
 
     /// Lumped mass: half the element's total mass (`density * a * length`)
@@ -491,8 +511,9 @@ impl ElasticBeamColumn3 {
         k_local * (t * d_global)
     }
 
-    /// Equivalent nodal load (global coordinates) from local transverse
-    /// loads `wy`/`wz` (force/length, local `+y`/`+z` directions) — the
+    /// Equivalent nodal load (global coordinates) from a uniform local-axis
+    /// load: axial `wx` plus transverse `wy`/`wz` (force/length, local
+    /// `+y`/`+z` directions). The transverse part is the
     /// direct spatial generalization of planar `ElasticBeamColumn::
     /// form_load_vector`'s consistent (virtual-work) Hermite-cubic
     /// equivalent load, applied independently in each bending plane. The
@@ -511,28 +532,34 @@ impl ElasticBeamColumn3 {
         &self,
         node_i: &Node3,
         node_j: &Node3,
+        wx: f64,
         wy: f64,
         wz: f64,
     ) -> SpatialElementVector {
-        if wy == 0.0 && wz == 0.0 {
+        if wx == 0.0 && wy == 0.0 && wz == 0.0 {
             return SpatialElementVector::zeros();
         }
         let (length, r) = self.transform.local_axes(node_i, node_j);
         let t = GeomTransf3::rotation_matrix(&r);
-        let l = length;
+        t.transpose() * Self::uniform_load_local(length, wx, wy, wz)
+    }
 
-        let mut local = SpatialElementVector::zeros();
-        local[1] = wy * l / 2.0;
-        local[5] = wy * l * l / 12.0;
-        local[7] = wy * l / 2.0;
-        local[11] = -wy * l * l / 12.0;
+    /// `form_load_vector`'s equivalent nodal load in the element-local
+    /// frame `local_force` reports in.
+    pub(super) fn form_local_load_vector(
+        &self,
+        node_i: &Node3,
+        node_j: &Node3,
+        wx: f64,
+        wy: f64,
+        wz: f64,
+    ) -> SpatialElementVector {
+        let (length, _r) = self.transform.local_axes(node_i, node_j);
+        Self::uniform_load_local(length, wx, wy, wz)
+    }
 
-        local[2] = wz * l / 2.0;
-        local[4] = -wz * l * l / 12.0;
-        local[8] = wz * l / 2.0;
-        local[10] = wz * l * l / 12.0;
-
-        t.transpose() * local
+    fn uniform_load_local(l: f64, wx: f64, wy: f64, wz: f64) -> SpatialElementVector {
+        super::uniform_load::spatial_local(l, wx, wy, wz)
     }
 
     /// Lumped mass: half the element's total mass at each node's three

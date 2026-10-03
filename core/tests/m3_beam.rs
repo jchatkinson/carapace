@@ -35,7 +35,7 @@ fn simply_supported_beam_udl_matches_closed_form_end_rotation() {
         GeomTransf::Linear,
     )));
     let pattern = domain.default_pattern();
-    domain.add_element_load(pattern, beam, ElementLoad::UniformTransverse(w));
+    domain.add_element_load(pattern, beam, ElementLoad::Uniform { wx: 0.0, wy: w });
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
