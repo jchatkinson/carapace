@@ -113,6 +113,12 @@ pub struct ZeroLengthTable {
     /// `normal_dof` must already have a `materials` entry on the same row,
     /// and `shear_dof` must not (checked by `core` via `debug_assert`).
     pub friction: Vec<(u32, u8, u8, f64, f64, f64)>,
+    /// Sparse `(row, x1, x2, x3)` — OpenSees' 2D `-orient x1 x2 x3`: local x is
+    /// `(x1, x2)` (`x3` must be 0) and local y is local x turned 90 degrees
+    /// counter-clockwise; every DOF of the row is evaluated along those axes.
+    /// Rows without an entry use the global axes; at most one entry per row.
+    #[serde(default)]
+    pub orient: Vec<(u32, f64, f64, f64)>,
 }
 
 /// A `ZeroLength` driven by a coupled `FiberSection` (axial + moment
@@ -129,6 +135,12 @@ pub struct ZeroLengthSectionTable {
     /// an independent spring for the one DOF (`uy`) the section has no
     /// resultant for.
     pub materials: Vec<(u32, u8, u32)>,
+    /// Sparse `(row, x1, x2, x3)` — OpenSees' 2D `-orient x1 x2 x3`: local x is
+    /// `(x1, x2)` (`x3` must be 0) and local y is local x turned 90 degrees
+    /// counter-clockwise; every DOF of the row is evaluated along those axes.
+    /// Rows without an entry use the global axes; at most one entry per row.
+    #[serde(default)]
+    pub orient: Vec<(u32, f64, f64, f64)>,
 }
 
 /// Fibers for every `DispBeamColumn`/`ForceBeamColumn` section, flattened

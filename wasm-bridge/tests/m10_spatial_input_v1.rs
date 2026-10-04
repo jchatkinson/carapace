@@ -163,6 +163,7 @@ fn decodes_a_zero_length3_with_friction_coupling_on_two_shear_axes() {
         node_j: vec![1],
         materials: vec![(0, 0, 0)], // dof 0 (normal) uses material arena index 0
         friction: vec![(0, 0, 1, 2, mu, k0, b)], // normal=ux, shear=[uy, uz]
+        orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![
@@ -249,6 +250,7 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
         node_j: vec![1],
         fiber_section: vec![0],
         materials: vec![],
+        orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
@@ -274,6 +276,77 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
             hold_patterns_after: vec![],
         }],
         recorders: vec![RecorderSpec3::NodeDisp { node: 1, dof: 0 }],
+    };
+
+    let mut session = decode(input).expect("well-formed zero-length-section3 input should decode");
+    let outcome = session.advance(1);
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
+
+    let expected = load / (e * area);
+    let (_, got) = last_sample(&outcome, 0).expect("one recorded sample");
+    assert!(
+        (got - expected).abs() < 1e-9,
+        "expected {expected}, got {got}"
+    );
+}
+
+/// `ZeroLengthSectionTable3::orient`: local x = global Z (yp = global X), so
+/// the section's axial stiffness answers a `uz` load.
+#[test]
+fn decodes_an_oriented_zero_length_section3_and_matches_closed_form_axial_stiffness() {
+    let (e, area, iy, iz, load): (f64, f64, f64, f64, f64) = (30_000.0, 4.0, 500.0, 2000.0, 50.0);
+    let hz = (iy / area).sqrt();
+    let hy = (iz / area).sqrt();
+    let a4 = area / 4.0;
+    let mut input = empty_input();
+    input.nodes3 = NodeTable3 {
+        coords: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        fixed: vec![0b111111, 0b111011], // node 1 free only in uz
+        mass_node_index: vec![],
+        mass: vec![],
+    };
+    input.materials = vec![MaterialSpec::Elastic { e }];
+    input.fibers3 = FiberTable3 {
+        section_offsets: vec![0, 4],
+        y: vec![hy, hy, -hy, -hy],
+        z: vec![hz, -hz, hz, -hz],
+        area: vec![a4, a4, a4, a4],
+        material: vec![0, 0, 0, 0],
+    };
+    input.zero_length_sections3 = ZeroLengthSectionTable3 {
+        node_i: vec![0],
+        node_j: vec![1],
+        fiber_section: vec![0],
+        materials: vec![],
+        orient: vec![(0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0)],
+    };
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
+        scale_factor: vec![1.0],
+    };
+    input.nodal_loads3 = NodalLoadTable {
+        pattern: vec![0],
+        node: vec![1],
+        dof: vec![2],
+        value: vec![load],
+        stage: vec![0],
+    };
+    input.sequence3 = SequenceSpec3 {
+        stages: vec![StageSpec::Static {
+            id: "only".to_string(),
+            steps: 1,
+            integrator: IntegratorSpec::LoadControl { increment: 1.0 },
+            algorithm: AlgorithmSpec::Linear,
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
+            hold_patterns_after: vec![],
+        }],
+        recorders: vec![RecorderSpec3::NodeDisp { node: 1, dof: 2 }],
     };
 
     let mut session = decode(input).expect("well-formed zero-length-section3 input should decode");

@@ -113,6 +113,13 @@ pub struct ZeroLengthTable3 {
     /// to the same normal force; see `Friction3`'s doc comment).
     #[allow(clippy::type_complexity)]
     pub friction: Vec<(u32, u8, u8, u8, f64, f64, f64)>,
+    /// Sparse `(row, x1, x2, x3, yp1, yp2, yp3)` — OpenSees' `-orient`: local x
+    /// is `x`, local z is `x × yp`, local y completes the frame, and every DOF
+    /// of the row is evaluated along those axes. Rows without an entry use
+    /// the global axes; at most one entry per row.
+    #[serde(default)]
+    #[allow(clippy::type_complexity)]
+    pub orient: Vec<(u32, f64, f64, f64, f64, f64, f64)>,
 }
 
 /// A `ZeroLength3` driven by a coupled `FiberSection3` (axial + biaxial
@@ -129,6 +136,13 @@ pub struct ZeroLengthSectionTable3 {
     /// an independent spring for a DOF the section doesn't drive: `uy`/`uz`
     /// (shear, dofs 1/2) or `rx` (torsion, dof 3).
     pub materials: Vec<(u32, u8, u32)>,
+    /// Sparse `(row, x1, x2, x3, yp1, yp2, yp3)` — OpenSees' `-orient`: local x
+    /// is `x`, local z is `x × yp`, local y completes the frame, and every DOF
+    /// of the row is evaluated along those axes. Rows without an entry use
+    /// the global axes; at most one entry per row.
+    #[serde(default)]
+    #[allow(clippy::type_complexity)]
+    pub orient: Vec<(u32, f64, f64, f64, f64, f64, f64)>,
 }
 
 /// Fibers for every `DispBeamColumn3`/`ForceBeamColumn3` section, flattened

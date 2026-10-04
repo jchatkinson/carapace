@@ -70,4 +70,10 @@ pub enum DecodeError {
         table: &'static str,
         row: u32,
     },
+    /// A zero-length element's `orient` vectors are zero or parallel, or (for
+    /// a 2D element) leave the xy plane, so no local frame exists.
+    InvalidOrientation {
+        table: &'static str,
+        row: u32,
+    },
 }

@@ -126,6 +126,7 @@ fn configurable_algorithms_solve_static_and_transient_yielding() {
                 node_j: vec![1, 1],
                 materials: vec![(0, 0, 0), (1, 0, 1)],
                 friction: vec![],
+                orient: vec![],
             };
             input.load_patterns = LoadPatternTable {
                 series: vec![if transient {
@@ -382,6 +383,7 @@ fn decodes_a_zero_length_with_friction_coupling() {
         node_j: vec![1],
         materials: vec![(0, 0, 0)], // dof 0 (normal) uses material arena index 0
         friction: vec![(0, 0, 1, mu, k0, b)], // normal_dof=0, shear_dof=1
+        orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![
@@ -463,6 +465,7 @@ fn decodes_a_zero_length_section_and_matches_closed_form_axial_stiffness() {
         node_j: vec![1],
         fiber_section: vec![0],
         materials: vec![],
+        orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
@@ -503,6 +506,129 @@ fn decodes_a_zero_length_section_and_matches_closed_form_axial_stiffness() {
         (got - expected).abs() < 1e-9,
         "expected {expected}, got {got}"
     );
+}
+
+/// `ZeroLengthSectionTable::orient`: the section's axial direction turned onto
+/// global y (OpenSees `-orient 0 1 0`), so a `uy` load meets the same
+/// closed-form axial stiffness the unoriented test above gets in `ux`.
+#[test]
+fn decodes_an_oriented_zero_length_section_and_matches_closed_form_axial_stiffness() {
+    let (e, area, iz, load): (f64, f64, f64, f64) = (30_000.0, 2.0, 1000.0, 50.0);
+    let h = (iz / area).sqrt();
+    let mut input = empty_input(2);
+    input.nodes = NodeTable {
+        coords: vec![0.0, 0.0, 0.0, 0.0],
+        fixed: vec![0b111, 0b101], // node 1 free only in uy
+        mass_node_index: vec![],
+        mass: vec![],
+    };
+    input.materials = vec![MaterialSpec::Elastic { e }];
+    input.fibers = FiberTable {
+        section_offsets: vec![0, 2],
+        y: vec![h, -h],
+        area: vec![area / 2.0, area / 2.0],
+        material: vec![0, 0],
+    };
+    input.zero_length_sections = ZeroLengthSectionTable {
+        node_i: vec![0],
+        node_j: vec![1],
+        fiber_section: vec![0],
+        materials: vec![],
+        orient: vec![(0, 0.0, 1.0, 0.0)],
+    };
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
+        scale_factor: vec![1.0],
+    };
+    input.nodal_loads = NodalLoadTable {
+        pattern: vec![0],
+        node: vec![1],
+        dof: vec![1],
+        value: vec![load],
+        stage: vec![0],
+    };
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Static {
+            id: "only".to_string(),
+            steps: 1,
+            integrator: IntegratorSpec::LoadControl { increment: 1.0 },
+            algorithm: AlgorithmSpec::Linear,
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
+            hold_patterns_after: vec![],
+        }],
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 1 }],
+    };
+
+    let mut session = decode(input).expect("well-formed zero-length-section input should decode");
+    let outcome = session.advance(1);
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
+
+    let expected = load / (e * area);
+    let (_, got) = last_sample(&outcome, 0).expect("one recorded sample");
+    assert!(
+        (got - expected).abs() < 1e-9,
+        "expected {expected}, got {got}"
+    );
+}
+
+/// Bad `orient` rows are decode errors, not silent global axes: a zero
+/// vector, a 2D vector leaving the xy plane (`x3 != 0`), and a row past the
+/// table.
+#[test]
+fn rejects_invalid_zero_length_orientations() {
+    use carapace_wasm::input_v1::DecodeError;
+    for (orient, expected) in [
+        (
+            (0, 0.0, 0.0, 0.0),
+            DecodeError::InvalidOrientation {
+                table: "zero_length_sections",
+                row: 0,
+            },
+        ),
+        (
+            (0, 0.0, 0.0, 1.0),
+            DecodeError::InvalidOrientation {
+                table: "zero_length_sections",
+                row: 0,
+            },
+        ),
+        (
+            (3, 1.0, 0.0, 0.0),
+            DecodeError::UnknownElementIndex {
+                table: "zero_length_sections",
+                row: 3,
+            },
+        ),
+    ] {
+        let mut input = empty_input(2);
+        input.nodes = NodeTable {
+            coords: vec![0.0, 0.0, 0.0, 0.0],
+            fixed: vec![0b111, 0b110],
+            mass_node_index: vec![],
+            mass: vec![],
+        };
+        input.materials = vec![MaterialSpec::Elastic { e: 1.0 }];
+        input.fibers = FiberTable {
+            section_offsets: vec![0, 1],
+            y: vec![0.0],
+            area: vec![1.0],
+            material: vec![0],
+        };
+        input.zero_length_sections = ZeroLengthSectionTable {
+            node_i: vec![0],
+            node_j: vec![1],
+            fiber_section: vec![0],
+            materials: vec![],
+            orient: vec![orient],
+        };
+        assert_eq!(decode(input).err(), Some(expected));
+    }
 }
 
 /// `Material::Hysteretic`/`Material::Pinching4` (`materials.rs`'s newly
@@ -578,6 +704,7 @@ fn decodes_hysteretic_and_pinching4_materials_in_the_elastic_range() {
         node_j: vec![1, 2],
         materials: vec![(0, 0, 0), (1, 0, 1)],
         friction: vec![],
+        orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
@@ -656,6 +783,7 @@ fn decodes_a_modal_stage_and_matches_the_golden_ratio_closed_form() {
         node_j: vec![1, 2],
         materials: vec![(0, 0, 0), (1, 0, 0)],
         friction: vec![],
+        orient: vec![],
     };
     input.sequence = SequenceSpec {
         stages: vec![StageSpec::Modal {
@@ -716,6 +844,7 @@ fn a_mode_shape_recorder_past_the_computed_mode_count_records_nothing() {
         node_j: vec![1],
         materials: vec![(0, 0, 0)],
         friction: vec![],
+        orient: vec![],
     };
     input.sequence = SequenceSpec {
         stages: vec![StageSpec::Modal {
@@ -761,6 +890,7 @@ fn decodes_a_transient_stage_and_matches_damped_free_vibration_closed_form() {
         node_j: vec![1],
         materials: vec![(0, 0, 0)],
         friction: vec![],
+        orient: vec![],
     };
     // The wire format has no initial-displacement field yet, so this
     // exercises the Newmark integration a different (still closed-form)

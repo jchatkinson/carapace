@@ -20,8 +20,8 @@ see each element/section entry below for which profile(s) it covers.
 
 **Elements**
 - [x] Truss (2D + 3D)
-- [x] ZeroLength — per-DOF materials and Coulomb friction coupling (2D + 3D; 3D springs are
-  axis-aligned only, no arbitrary orientation)
+- [x] ZeroLength — per-DOF materials and Coulomb friction coupling (2D + 3D), with optional
+  OpenSees-style `-orient` local axes (default: global axes)
 - [x] ElasticBeamColumn — axial, bending, torsion, `Linear`/`PDelta`
   transforms (2D + 3D)
 - [x] DispBeamColumn — fiber-discretized, displacement-based (2D uniaxial,

@@ -142,7 +142,8 @@ pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
 pub use zero_length::{
-    Friction, Friction3, ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3,
+    Friction, Friction3, Orientation, OrientationError, ZeroLength, ZeroLength3, ZeroLengthSection,
+    ZeroLengthSection3,
 };
 
 new_key_type! {

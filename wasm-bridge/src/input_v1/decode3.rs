@@ -15,7 +15,7 @@ use carapace_core::model::{
     Material, Node3, Node3Id, Truss3, ZeroLength3, ZeroLengthSection3,
 };
 
-use super::decode::{check_dof_within, compile_stages, load_series_of};
+use super::decode::{check_dof_within, compile_stages, load_series_of, orientations_by_row_3d};
 use super::error::DecodeError;
 use super::materials::resolve_materials;
 use super::sequence::RecorderSpec3;
@@ -419,9 +419,12 @@ fn add_zero_lengths(
             })? = Some((normal_dof, shear_dof_0, shear_dof_1, mu, k0, b));
     }
 
+    let orientation_by_row =
+        orientations_by_row_3d(&table.orient, table.node_i.len(), "zero_lengths")?;
+
     let mut ids = Vec::with_capacity(table.node_i.len());
     #[allow(clippy::needless_range_loop)]
-    // parallel-indexes node_i/node_j/materials_by_row/friction_by_row
+    // parallel-indexes node_i/node_j/materials_by_row/friction_by_row/orientation_by_row
     for i in 0..table.node_i.len() {
         let mut element = ZeroLength3::new(
             node_at(table.node_i[i], "zero_lengths")?,
@@ -439,6 +442,9 @@ fn add_zero_lengths(
                 k0,
                 b,
             ));
+        }
+        if let Some(orientation) = orientation_by_row[i] {
+            element = element.with_orientation(orientation);
         }
         ids.push(domain.add_element(Element3::ZeroLength3(element)));
     }
@@ -463,9 +469,12 @@ fn add_zero_length_sections(
             .push((dof, material_index));
     }
 
+    let orientation_by_row =
+        orientations_by_row_3d(&table.orient, table.node_i.len(), "zero_length_sections")?;
+
     let mut ids = Vec::with_capacity(table.node_i.len());
     #[allow(clippy::needless_range_loop)]
-    // parallel-indexes node_i/node_j/fiber_section/materials_by_row
+    // parallel-indexes node_i/node_j/fiber_section/materials_by_row/orientation_by_row
     for i in 0..table.node_i.len() {
         let section = FiberSection3::new(fiber_section_at(table.fiber_section[i])?);
         let mut element = ZeroLengthSection3::new(
@@ -478,6 +487,9 @@ fn add_zero_length_sections(
                 dof as usize,
                 material_at(material_index, "zero_length_sections")?,
             );
+        }
+        if let Some(orientation) = orientation_by_row[i] {
+            element = element.with_orientation(orientation);
         }
         ids.push(domain.add_element(Element3::ZeroLengthSection3(element)));
     }

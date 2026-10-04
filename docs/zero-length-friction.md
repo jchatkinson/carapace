@@ -31,8 +31,9 @@ can preserve a stiffness path while sliding.
 
 Spatial shear directions slide independently against the shared normal
 force, giving a square interaction surface. A circular biaxial friction
-cone, arbitrary spatial orientation, and velocity-dependent friction are
-not implemented.
+cone and velocity-dependent friction are not implemented. Friction follows an
+element's `orient` frame like any other DOF, so its normal and shear
+directions are the local axes.
 
 Core tests in `core/src/model/elements/zero_length.rs` cover sticking,
 sliding, normal-force dependence, tension, permanent slip, and the coupled

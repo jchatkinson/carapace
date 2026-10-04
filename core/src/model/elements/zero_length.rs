@@ -1,10 +1,154 @@
-use nalgebra::{SMatrix, SVector};
+use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use super::super::{
     FiberSection, FiberSection3, Material, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF,
     SPATIAL_NDF,
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
+
+/// Local axes of a zero-length element, built the OpenSees way. In 3D that
+/// is `-orient x1 x2 x3 yp1 yp2 yp3`: local x is `x`, local z is `x × yp`, and
+/// local y is `z × x`. In 2D OpenSees takes only `x` (see `in_plane`) and
+/// derives y by a 90 degree turn. Every per-DOF material (and a section's axial and
+/// flexural directions) is then evaluated on the relative displacement and
+/// rotation *projected onto these axes* rather than the global ones.
+/// Without an orientation the local axes are the global axes.
+///
+/// Translations and rotations share one frame, as in OpenSees: local `rz`
+/// is the rotation about the local z axis, and so on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Orientation {
+    /// Rows are the local x, y, z axes in global coordinates.
+    rotation: Matrix3<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrientationError {
+    /// `x` is zero, or `yp` is zero or parallel to `x`, so the frame is undefined.
+    Degenerate,
+    /// A 2D element's local x and y must lie in the model (xy) plane (a 3D
+    /// frame handed to a 2D element that leaves it).
+    OutOfPlane,
+}
+
+impl std::fmt::Display for OrientationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrientationError::Degenerate => {
+                write!(
+                    f,
+                    "orient vectors are zero or parallel, so the local frame is undefined"
+                )
+            }
+            OrientationError::OutOfPlane => {
+                write!(
+                    f,
+                    "orient vectors must lie in the xy plane for a 2D element"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for OrientationError {}
+
+impl Orientation {
+    pub fn global() -> Self {
+        Orientation {
+            rotation: Matrix3::identity(),
+        }
+    }
+
+    pub fn new(x: [f64; 3], yp: [f64; 3]) -> Result<Self, OrientationError> {
+        let x = Vector3::from(x);
+        let yp = Vector3::from(yp);
+        let z = x.cross(&yp);
+        // Relative tolerance: parallel vectors give a cross product that is
+        // zero only up to rounding.
+        if x.norm() == 0.0 || z.norm() <= 1e-12 * x.norm() * yp.norm() {
+            return Err(OrientationError::Degenerate);
+        }
+        let ex = x.normalize();
+        let ez = z.normalize();
+        let ey = ez.cross(&ex);
+        Ok(Orientation {
+            rotation: Matrix3::from_rows(&[ex.transpose(), ey.transpose(), ez.transpose()]),
+        })
+    }
+
+    /// OpenSees' 2D `-orient x1 x2`: local x is `(x1, x2)` and local y is that
+    /// vector turned 90 degrees counter-clockwise, so the frame is always
+    /// right-handed about z and local `rz` is global `rz`.
+    pub fn in_plane(x1: f64, x2: f64) -> Result<Self, OrientationError> {
+        Self::new([x1, x2, 0.0], [-x2, x1, 0.0])
+    }
+
+    /// The 6x6 (3D) map from global relative `[ux, uy, uz, rx, ry, rz]` to
+    /// the same quantities along the local axes.
+    fn frame3(&self) -> SMatrix<f64, SPATIAL_NDF, SPATIAL_NDF> {
+        let mut t = SMatrix::<f64, SPATIAL_NDF, SPATIAL_NDF>::zeros();
+        t.fixed_view_mut::<3, 3>(0, 0).copy_from(&self.rotation);
+        t.fixed_view_mut::<3, 3>(3, 3).copy_from(&self.rotation);
+        t
+    }
+
+    /// The 3x3 (2D) map from global relative `[ux, uy, rz]` to local. The
+    /// local x and y axes must lie in the xy plane; local `rz` then equals
+    /// global `rz`, or `-rz` for a left-handed 3D frame (which `in_plane`
+    /// never produces).
+    fn frame2(&self) -> Result<SMatrix<f64, NDF, NDF>, OrientationError> {
+        const TOL: f64 = 1e-9;
+        let r = &self.rotation;
+        if r[(0, 2)].abs() > TOL || r[(1, 2)].abs() > TOL {
+            return Err(OrientationError::OutOfPlane);
+        }
+        Ok(SMatrix::<f64, NDF, NDF>::new(
+            r[(0, 0)],
+            r[(0, 1)],
+            0.0,
+            r[(1, 0)],
+            r[(1, 1)],
+            0.0,
+            0.0,
+            0.0,
+            r[(2, 2)],
+        ))
+    }
+}
+
+/// Relative displacement of `dof` along its local axis: row `dof` of the
+/// frame applied to `uj - ui`.
+fn local_relative<const N: usize>(
+    frame: &SMatrix<f64, N, N>,
+    dof: usize,
+    ui: &[f64; N],
+    uj: &[f64; N],
+) -> f64 {
+    (0..N).map(|c| frame[(dof, c)] * (uj[c] - ui[c])).sum()
+}
+
+/// Strain-displacement row for local `dof`: `-row` on node i's DOFs and
+/// `+row` on node j's, so `row · [ui; uj]` is `local_relative`.
+fn dof_row_2d(frame: &SMatrix<f64, NDF, NDF>, dof: usize) -> SVector<f64, ELEMENT_DOF> {
+    let mut b = SVector::<f64, ELEMENT_DOF>::zeros();
+    for c in 0..NDF {
+        b[c] = -frame[(dof, c)];
+        b[NDF + c] = frame[(dof, c)];
+    }
+    b
+}
+
+fn dof_row_3d(
+    frame: &SMatrix<f64, SPATIAL_NDF, SPATIAL_NDF>,
+    dof: usize,
+) -> SVector<f64, { 2 * SPATIAL_NDF }> {
+    let mut b = SVector::<f64, { 2 * SPATIAL_NDF }>::zeros();
+    for c in 0..SPATIAL_NDF {
+        b[c] = -frame[(dof, c)];
+        b[SPATIAL_NDF + c] = frame[(dof, c)];
+    }
+    b
+}
 
 /// Couples one "shear" DOF to a *different* DOF's own material — the
 /// normal direction's current force — via a bilinear-kinematic-hardening
@@ -146,11 +290,9 @@ impl Friction3 {
 /// A 2-node, zero-length connector: no geometry or integration, just direct
 /// per-DOF material evaluation (§3.1) — each direction with a material
 /// assigned independently relates that DOF's relative displacement between
-/// the two nodes to a force along that same (global) direction. No
-/// orientation vectors (unlike OpenSees' general `ZeroLength`, which can
-/// evaluate materials along arbitrary local axes) — directions are the
-/// global DOF axes (including rotation, since M3's DOF bump), which is all
-/// the current scope needs.
+/// the two nodes to a force along that same direction. Directions are the
+/// global DOF axes (including rotation, since M3's DOF bump) unless an
+/// `Orientation` (OpenSees' `-orient`) rotates them to local axes.
 ///
 /// `friction` adds one cross-DOF coupling term on top of the independent
 /// `materials` (see `Friction`'s doc comment for why this lives here rather
@@ -162,6 +304,7 @@ pub struct ZeroLength {
     pub node_j: NodeId,
     materials: [Option<Material>; NDF],
     friction: Option<Friction>,
+    frame: SMatrix<f64, NDF, NDF>,
 }
 
 impl ZeroLength {
@@ -171,12 +314,21 @@ impl ZeroLength {
             node_j,
             materials: std::array::from_fn(|_| None),
             friction: None,
+            frame: SMatrix::identity(),
         }
     }
 
     pub fn with_material(mut self, dof: usize, material: Material) -> Self {
         self.materials[dof] = Some(material);
         self
+    }
+
+    /// Evaluate every DOF along the local axes of `orientation` instead of
+    /// the global ones (see `Orientation`). Errors if the frame leaves the
+    /// model plane.
+    pub fn with_orientation(mut self, orientation: Orientation) -> Result<Self, OrientationError> {
+        self.frame = orientation.frame2()?;
+        Ok(self)
     }
 
     /// `friction.normal_dof` must already have a material set via
@@ -210,15 +362,14 @@ impl ZeroLength {
         for (dof, material) in self.materials.iter().enumerate() {
             let Some(material) = material else { continue };
 
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             let (force, tangent_modulus) = material.trial_stress_tangent(relative);
 
             // Local DOF order [ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]; this
             // direction only couples node_i's and node_j's copy of the same
             // dof.
-            let mut b = SVector::<f64, ELEMENT_DOF>::zeros();
-            b[dof] = -1.0;
-            b[NDF + dof] = 1.0;
+            let b = dof_row_2d(&self.frame, dof);
 
             k += tangent_modulus * (b * b.transpose());
             resistance += force * b;
@@ -228,18 +379,23 @@ impl ZeroLength {
             let normal_material = self.materials[fr.normal_dof]
                 .as_ref()
                 .expect("friction needs a normal-direction material");
-            let normal_rel =
-                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_rel = local_relative(
+                &self.frame,
+                fr.normal_dof,
+                &node_i.displacement,
+                &node_j.displacement,
+            );
             let (normal_force, normal_tangent) = normal_material.trial_stress_tangent(normal_rel);
-            let shear_rel = node_j.displacement[fr.shear_dof] - node_i.displacement[fr.shear_dof];
+            let shear_rel = local_relative(
+                &self.frame,
+                fr.shear_dof,
+                &node_i.displacement,
+                &node_j.displacement,
+            );
             let (force, dv_dshear, dv_dnormal, _) = fr.evaluate(normal_force, shear_rel);
 
-            let mut b_v = SVector::<f64, ELEMENT_DOF>::zeros();
-            b_v[fr.shear_dof] = -1.0;
-            b_v[NDF + fr.shear_dof] = 1.0;
-            let mut b_n = SVector::<f64, ELEMENT_DOF>::zeros();
-            b_n[fr.normal_dof] = -1.0;
-            b_n[NDF + fr.normal_dof] = 1.0;
+            let b_v = dof_row_2d(&self.frame, fr.shear_dof);
+            let b_n = dof_row_2d(&self.frame, fr.normal_dof);
 
             // Only a `b_v * b_nᵀ` block, not its transpose — `k` is not
             // symmetric in general. Fine here: the solver uses a general
@@ -255,7 +411,8 @@ impl ZeroLength {
     pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node) {
         for (dof, material) in self.materials.iter_mut().enumerate() {
             let Some(material) = material else { continue };
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             *material = material.commit(relative);
         }
 
@@ -266,35 +423,40 @@ impl ZeroLength {
             // reproduces the same force whether read just before or just
             // after its own `commit()`, so this ordering is safe, but
             // committing it a second time from here would not be.
-            let normal_rel =
-                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_rel = local_relative(
+                &self.frame,
+                fr.normal_dof,
+                &node_i.displacement,
+                &node_j.displacement,
+            );
             let normal_force = self.materials[fr.normal_dof]
                 .as_ref()
                 .unwrap()
                 .trial_stress_tangent(normal_rel)
                 .0;
-            let shear_rel = node_j.displacement[fr.shear_dof] - node_i.displacement[fr.shear_dof];
+            let shear_rel = local_relative(
+                &self.frame,
+                fr.shear_dof,
+                &node_i.displacement,
+                &node_j.displacement,
+            );
             let (.., next_slip) = fr.evaluate(normal_force, shear_rel);
             fr.slip = next_slip;
         }
     }
 
-    /// No orientation vectors, no separate local frame — see `Truss::
-    /// local_force`'s doc comment for why this is just the resistance
-    /// vector, recomputed fresh from each direction's current committed
-    /// material state.
+    /// No separate local-frame force — see `Truss::local_force`'s doc
+    /// comment for why this is just the resistance vector (already in
+    /// global element DOFs, whatever the orientation), recomputed fresh from
+    /// each direction's current committed material state.
     pub(super) fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         self.form_tangent_and_resistance(node_i, node_j).1
     }
 }
 
 /// `ZeroLength`'s spatial counterpart: independent per-DOF materials along
-/// the six global directions `[ux, uy, uz, rx, ry, rz]` — no orientation
-/// vectors, same simplification `ZeroLength` already makes relative to
-/// OpenSees' general `ZeroLength` (which can evaluate materials along
-/// arbitrary local axes via a user-supplied orientation). Arbitrarily
-/// oriented local springs are a later, explicit transform feature (see
-/// `docs/spatial-architecture.md`'s "Elements and transforms" section).
+/// the six directions `[ux, uy, uz, rx, ry, rz]` — global by default, or the
+/// local axes of an `Orientation` (OpenSees' `-orient`).
 /// `friction` — see `ZeroLength`'s doc comment — adds two independent
 /// (Phase 2, see `Friction3`) shear-DOF couplings on top of the
 /// independent `materials`.
@@ -304,6 +466,7 @@ pub struct ZeroLength3 {
     pub node_j: Node3Id,
     materials: [Option<Material>; SPATIAL_NDF],
     friction: Option<Friction3>,
+    frame: SMatrix<f64, SPATIAL_NDF, SPATIAL_NDF>,
 }
 
 impl ZeroLength3 {
@@ -313,11 +476,19 @@ impl ZeroLength3 {
             node_j,
             materials: std::array::from_fn(|_| None),
             friction: None,
+            frame: SMatrix::identity(),
         }
     }
 
     pub fn with_material(mut self, dof: usize, material: Material) -> Self {
         self.materials[dof] = Some(material);
+        self
+    }
+
+    /// Evaluate every DOF along the local axes of `orientation` instead of
+    /// the global ones (see `Orientation`).
+    pub fn with_orientation(mut self, orientation: Orientation) -> Self {
+        self.frame = orientation.frame3();
         self
     }
 
@@ -349,12 +520,11 @@ impl ZeroLength3 {
         for (dof, material) in self.materials.iter().enumerate() {
             let Some(material) = material else { continue };
 
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             let (force, tangent_modulus) = material.trial_stress_tangent(relative);
 
-            let mut b = SpatialElementVector::zeros();
-            b[dof] = -1.0;
-            b[SPATIAL_NDF + dof] = 1.0;
+            let b = dof_row_3d(&self.frame, dof);
 
             k += tangent_modulus * (b * b.transpose());
             resistance += force * b;
@@ -364,21 +534,26 @@ impl ZeroLength3 {
             let normal_material = self.materials[fr.normal_dof]
                 .as_ref()
                 .expect("friction needs a normal-direction material");
-            let normal_rel =
-                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_rel = local_relative(
+                &self.frame,
+                fr.normal_dof,
+                &node_i.displacement,
+                &node_j.displacement,
+            );
             let (normal_force, normal_tangent) = normal_material.trial_stress_tangent(normal_rel);
 
-            let mut b_n = SpatialElementVector::zeros();
-            b_n[fr.normal_dof] = -1.0;
-            b_n[SPATIAL_NDF + fr.normal_dof] = 1.0;
+            let b_n = dof_row_3d(&self.frame, fr.normal_dof);
 
             for (axis, &shear_dof) in fr.shear_dofs.iter().enumerate() {
-                let shear_rel = node_j.displacement[shear_dof] - node_i.displacement[shear_dof];
+                let shear_rel = local_relative(
+                    &self.frame,
+                    shear_dof,
+                    &node_i.displacement,
+                    &node_j.displacement,
+                );
                 let (force, dv_dshear, dv_dnormal, _) = fr.evaluate(axis, normal_force, shear_rel);
 
-                let mut b_v = SpatialElementVector::zeros();
-                b_v[shear_dof] = -1.0;
-                b_v[SPATIAL_NDF + shear_dof] = 1.0;
+                let b_v = dof_row_3d(&self.frame, shear_dof);
 
                 k += dv_dshear * (b_v * b_v.transpose())
                     + (dv_dnormal * normal_tangent) * (b_v * b_n.transpose());
@@ -392,15 +567,20 @@ impl ZeroLength3 {
     pub(super) fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
         for (dof, material) in self.materials.iter_mut().enumerate() {
             let Some(material) = material else { continue };
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             *material = material.commit(relative);
         }
 
         if let Some(fr) = &mut self.friction {
             // See `ZeroLength::commit`'s doc comment for why reading (not
             // committing) the normal material here is correct.
-            let normal_rel =
-                node_j.displacement[fr.normal_dof] - node_i.displacement[fr.normal_dof];
+            let normal_rel = local_relative(
+                &self.frame,
+                fr.normal_dof,
+                &node_i.displacement,
+                &node_j.displacement,
+            );
             let normal_force = self.materials[fr.normal_dof]
                 .as_ref()
                 .unwrap()
@@ -409,7 +589,12 @@ impl ZeroLength3 {
 
             let mut next_slip = fr.slip;
             for (axis, &shear_dof) in fr.shear_dofs.iter().enumerate() {
-                let shear_rel = node_j.displacement[shear_dof] - node_i.displacement[shear_dof];
+                let shear_rel = local_relative(
+                    &self.frame,
+                    shear_dof,
+                    &node_i.displacement,
+                    &node_j.displacement,
+                );
                 let (.., slip) = fr.evaluate(axis, normal_force, shear_rel);
                 next_slip[axis] = slip;
             }
@@ -447,6 +632,7 @@ pub struct ZeroLengthSection {
     pub node_j: NodeId,
     section: FiberSection,
     materials: [Option<Material>; NDF],
+    frame: SMatrix<f64, NDF, NDF>,
 }
 
 impl ZeroLengthSection {
@@ -456,6 +642,7 @@ impl ZeroLengthSection {
             node_j,
             section,
             materials: std::array::from_fn(|_| None),
+            frame: SMatrix::identity(),
         }
     }
 
@@ -467,6 +654,13 @@ impl ZeroLengthSection {
         self
     }
 
+    /// The section's axial direction is local x and its flexure is about
+    /// local z (see `Orientation`); the default is the global axes.
+    pub fn with_orientation(mut self, orientation: Orientation) -> Result<Self, OrientationError> {
+        self.frame = orientation.frame2()?;
+        Ok(self)
+    }
+
     pub(super) fn form_tangent_and_resistance(
         &self,
         node_i: &Node,
@@ -475,14 +669,12 @@ impl ZeroLengthSection {
         SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
         SVector<f64, ELEMENT_DOF>,
     ) {
-        let eps0 = node_j.displacement[0] - node_i.displacement[0];
-        let kappa = node_j.displacement[2] - node_i.displacement[2];
+        let eps0 = local_relative(&self.frame, 0, &node_i.displacement, &node_j.displacement);
+        let kappa = local_relative(&self.frame, 2, &node_i.displacement, &node_j.displacement);
         let (n, m, k_section) = self.section.trial(eps0, kappa);
 
-        let b_eps0 =
-            SVector::<f64, ELEMENT_DOF>::from_column_slice(&[-1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-        let b_kappa =
-            SVector::<f64, ELEMENT_DOF>::from_column_slice(&[0.0, 0.0, -1.0, 0.0, 0.0, 1.0]);
+        let b_eps0 = dof_row_2d(&self.frame, 0);
+        let b_kappa = dof_row_2d(&self.frame, 2);
 
         let mut k = k_section[0][0] * (b_eps0 * b_eps0.transpose())
             + k_section[0][1] * (b_eps0 * b_kappa.transpose())
@@ -493,12 +685,11 @@ impl ZeroLengthSection {
         for (dof, material) in self.materials.iter().enumerate() {
             let Some(material) = material else { continue };
 
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             let (force, tangent_modulus) = material.trial_stress_tangent(relative);
 
-            let mut b = SVector::<f64, ELEMENT_DOF>::zeros();
-            b[dof] = -1.0;
-            b[NDF + dof] = 1.0;
+            let b = dof_row_2d(&self.frame, dof);
 
             k += tangent_modulus * (b * b.transpose());
             resistance += force * b;
@@ -508,13 +699,14 @@ impl ZeroLengthSection {
     }
 
     pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node) {
-        let eps0 = node_j.displacement[0] - node_i.displacement[0];
-        let kappa = node_j.displacement[2] - node_i.displacement[2];
+        let eps0 = local_relative(&self.frame, 0, &node_i.displacement, &node_j.displacement);
+        let kappa = local_relative(&self.frame, 2, &node_i.displacement, &node_j.displacement);
         self.section.commit(eps0, kappa);
 
         for (dof, material) in self.materials.iter_mut().enumerate() {
             let Some(material) = material else { continue };
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             *material = material.commit(relative);
         }
     }
@@ -539,6 +731,7 @@ pub struct ZeroLengthSection3 {
     pub node_j: Node3Id,
     section: FiberSection3,
     materials: [Option<Material>; SPATIAL_NDF],
+    frame: SMatrix<f64, SPATIAL_NDF, SPATIAL_NDF>,
 }
 
 impl ZeroLengthSection3 {
@@ -548,6 +741,7 @@ impl ZeroLengthSection3 {
             node_j,
             section,
             materials: std::array::from_fn(|_| None),
+            frame: SMatrix::identity(),
         }
     }
 
@@ -559,27 +753,26 @@ impl ZeroLengthSection3 {
         self
     }
 
+    /// The section's axial direction is local x and its flexure is about
+    /// local y and z (see `Orientation`); the default is the global axes.
+    pub fn with_orientation(mut self, orientation: Orientation) -> Self {
+        self.frame = orientation.frame3();
+        self
+    }
+
     pub(super) fn form_tangent_and_resistance(
         &self,
         node_i: &Node3,
         node_j: &Node3,
     ) -> (SpatialElementMatrix, SpatialElementVector) {
-        let eps0 = node_j.displacement[0] - node_i.displacement[0];
-        let kappa_z = node_j.displacement[5] - node_i.displacement[5];
-        let kappa_y = node_j.displacement[4] - node_i.displacement[4];
+        let eps0 = local_relative(&self.frame, 0, &node_i.displacement, &node_j.displacement);
+        let kappa_z = local_relative(&self.frame, 5, &node_i.displacement, &node_j.displacement);
+        let kappa_y = local_relative(&self.frame, 4, &node_i.displacement, &node_j.displacement);
         let (n, mz, my, k_section) = self.section.trial(eps0, kappa_z, kappa_y);
 
-        let mut b_eps0 = SpatialElementVector::zeros();
-        b_eps0[0] = -1.0;
-        b_eps0[SPATIAL_NDF] = 1.0;
-
-        let mut b_kappa_z = SpatialElementVector::zeros();
-        b_kappa_z[5] = -1.0;
-        b_kappa_z[SPATIAL_NDF + 5] = 1.0;
-
-        let mut b_kappa_y = SpatialElementVector::zeros();
-        b_kappa_y[4] = -1.0;
-        b_kappa_y[SPATIAL_NDF + 4] = 1.0;
+        let b_eps0 = dof_row_3d(&self.frame, 0);
+        let b_kappa_z = dof_row_3d(&self.frame, 5);
+        let b_kappa_y = dof_row_3d(&self.frame, 4);
 
         let mut k = SpatialElementMatrix::zeros();
         let mut resistance = b_eps0 * n + b_kappa_z * mz + b_kappa_y * my;
@@ -594,12 +787,11 @@ impl ZeroLengthSection3 {
         for (dof, material) in self.materials.iter().enumerate() {
             let Some(material) = material else { continue };
 
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             let (force, tangent_modulus) = material.trial_stress_tangent(relative);
 
-            let mut bm = SpatialElementVector::zeros();
-            bm[dof] = -1.0;
-            bm[SPATIAL_NDF + dof] = 1.0;
+            let bm = dof_row_3d(&self.frame, dof);
 
             k += tangent_modulus * (bm * bm.transpose());
             resistance += force * bm;
@@ -609,14 +801,15 @@ impl ZeroLengthSection3 {
     }
 
     pub(super) fn commit(&mut self, node_i: &Node3, node_j: &Node3) {
-        let eps0 = node_j.displacement[0] - node_i.displacement[0];
-        let kappa_z = node_j.displacement[5] - node_i.displacement[5];
-        let kappa_y = node_j.displacement[4] - node_i.displacement[4];
+        let eps0 = local_relative(&self.frame, 0, &node_i.displacement, &node_j.displacement);
+        let kappa_z = local_relative(&self.frame, 5, &node_i.displacement, &node_j.displacement);
+        let kappa_y = local_relative(&self.frame, 4, &node_i.displacement, &node_j.displacement);
         self.section.commit(eps0, kappa_z, kappa_y);
 
         for (dof, material) in self.materials.iter_mut().enumerate() {
             let Some(material) = material else { continue };
-            let relative = node_j.displacement[dof] - node_i.displacement[dof];
+            let relative =
+                local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
             *material = material.commit(relative);
         }
     }
@@ -1172,5 +1365,145 @@ mod tests {
         assert!((k[(2, 2)] - k0).abs() < 1e-9, "Uz tangent == k0 (sticking)");
         assert_eq!(k[(1, 2)], 0.0, "no cross-talk between the two shear axes");
         assert_eq!(k[(2, 1)], 0.0, "no cross-talk between the two shear axes");
+    }
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    /// local x = global y (a 90 degree turn about z): a spring on dof 0 must
+    /// resist relative `uy`, and nothing along global `ux`.
+    #[test]
+    fn oriented_zero_length_spring_follows_the_local_x_axis() {
+        let orient = Orientation::in_plane(0.0, 1.0).unwrap();
+        let zl = ZeroLength::new(NodeId::default(), NodeId::default())
+            .with_material(0, Material::Elastic { e: 100.0 })
+            .with_orientation(orient)
+            .unwrap();
+        let node_i = Node::new([0.0, 0.0]);
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[1] = 0.01;
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+        assert!(approx(r[4], 1.0) && approx(r[1], -1.0), "uy force");
+        assert!(approx(k[(4, 4)], 100.0), "uy stiffness");
+        assert!(approx(k[(3, 3)], 0.0), "no ux stiffness");
+    }
+
+    /// 45 degrees: a unit global `ux` is `cos 45` of local x, so the force
+    /// splits equally between global x and y, and `K` stays consistent with
+    /// the resistance (linear material: `r = K u`).
+    #[test]
+    fn oriented_zero_length_at_45_degrees_splits_force_and_stays_consistent() {
+        let orient = Orientation::in_plane(1.0, 1.0).unwrap();
+        let zl = ZeroLength::new(NodeId::default(), NodeId::default())
+            .with_material(0, Material::Elastic { e: 100.0 })
+            .with_orientation(orient)
+            .unwrap();
+        let node_i = Node::new([0.0, 0.0]);
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[0] = 0.02;
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+        assert!(approx(r[3], 100.0 * 0.02 * 0.5));
+        assert!(approx(r[4], 100.0 * 0.02 * 0.5));
+        let u = SVector::<f64, ELEMENT_DOF>::from_column_slice(&[0.0, 0.0, 0.0, 0.02, 0.0, 0.0]);
+        assert!((k * u - r).norm() < 1e-9);
+    }
+
+    #[test]
+    fn oriented_zero_length_section_axis_follows_local_x() {
+        let (e, area, iz): (f64, f64, f64) = (30000.0, 2.0, 1000.0);
+        let h = (iz / area).sqrt();
+        let section = FiberSection::new(vec![
+            Fiber::new(h, area / 2.0, Material::Elastic { e }),
+            Fiber::new(-h, area / 2.0, Material::Elastic { e }),
+        ]);
+        let orient = Orientation::in_plane(0.0, 1.0).unwrap();
+        let zl = ZeroLengthSection::new(NodeId::default(), NodeId::default(), section)
+            .with_orientation(orient)
+            .unwrap();
+        let node_i = Node::new([0.0, 0.0]);
+        let mut node_j = Node::new([0.0, 0.0]);
+        node_j.displacement[1] = 0.001;
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+        assert!((k[(4, 4)] - e * area).abs() < 1e-6, "axial stiffness on uy");
+        assert!(k[(3, 3)].abs() < 1e-9, "no axial stiffness on ux");
+        assert!((r[4] - e * area * 0.001).abs() < 1e-6);
+    }
+
+    #[test]
+    fn oriented_zero_length_2d_rejects_out_of_plane_and_degenerate_frames() {
+        assert_eq!(
+            Orientation::in_plane(0.0, 0.0),
+            Err(OrientationError::Degenerate)
+        );
+        // in_plane is the general frame with yp = x turned 90 degrees.
+        assert_eq!(
+            Orientation::in_plane(1.0, 2.0),
+            Orientation::new([1.0, 2.0, 0.0], [-2.0, 1.0, 0.0])
+        );
+        assert_eq!(
+            Orientation::new([0.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+            Err(OrientationError::Degenerate)
+        );
+        assert_eq!(
+            Orientation::new([1.0, 0.0, 0.0], [2.0, 0.0, 0.0]),
+            Err(OrientationError::Degenerate)
+        );
+        let tilted = Orientation::new([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]).unwrap();
+        assert!(matches!(
+            ZeroLength::new(NodeId::default(), NodeId::default()).with_orientation(tilted),
+            Err(OrientationError::OutOfPlane)
+        ));
+    }
+
+    /// local x = global Z, local y = global X, local z = global Y: so local
+    /// `rx` is global `rz` — rotations ride the same frame as translations.
+    #[test]
+    fn oriented_zero_length3_rotates_translations_and_rotations_together() {
+        let orient = Orientation::new([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]).unwrap();
+        let zl = ZeroLength3::new(Node3Id::default(), Node3Id::default())
+            .with_material(0, Material::Elastic { e: 10.0 })
+            .with_material(3, Material::Elastic { e: 7.0 })
+            .with_orientation(orient);
+        let node_i = Node3::new([0.0, 0.0, 0.0]);
+        let mut node_j = Node3::new([0.0, 0.0, 0.0]);
+        node_j.displacement[2] = 0.1; // uz = local ux
+        node_j.displacement[5] = 0.2; // rz = local rx
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+        assert!(
+            approx(r[SPATIAL_NDF + 2], 1.0),
+            "uz force from the local x spring"
+        );
+        assert!(
+            approx(r[SPATIAL_NDF + 5], 1.4),
+            "rz moment from the local rx spring"
+        );
+        assert!(approx(r[SPATIAL_NDF], 0.0) && approx(r[SPATIAL_NDF + 3], 0.0));
+        let mut u = SpatialElementVector::zeros();
+        u[SPATIAL_NDF + 2] = 0.1;
+        u[SPATIAL_NDF + 5] = 0.2;
+        assert!((k * u - r).norm() < 1e-9);
+    }
+
+    #[test]
+    fn oriented_zero_length_section3_axis_follows_local_x() {
+        let (e, area, iy, iz): (f64, f64, f64, f64) = (30000.0, 2.0, 800.0, 1000.0);
+        let (hy, hz) = ((iz / area).sqrt(), (iy / area).sqrt());
+        let section = FiberSection3::new(vec![
+            Fiber3::new(hy, hz, area / 4.0, Material::Elastic { e }),
+            Fiber3::new(-hy, hz, area / 4.0, Material::Elastic { e }),
+            Fiber3::new(hy, -hz, area / 4.0, Material::Elastic { e }),
+            Fiber3::new(-hy, -hz, area / 4.0, Material::Elastic { e }),
+        ]);
+        let orient = Orientation::new([0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]).unwrap();
+        let zl = ZeroLengthSection3::new(Node3Id::default(), Node3Id::default(), section)
+            .with_orientation(orient);
+        let node_i = Node3::new([0.0, 0.0, 0.0]);
+        let mut node_j = Node3::new([0.0, 0.0, 0.0]);
+        node_j.displacement[1] = 0.001; // uy = local ux
+        let (k, r) = zl.form_tangent_and_resistance(&node_i, &node_j);
+        assert!((k[(SPATIAL_NDF + 1, SPATIAL_NDF + 1)] - e * area).abs() < 1e-6);
+        assert!(k[(SPATIAL_NDF, SPATIAL_NDF)].abs() < 1e-9);
+        assert!((r[SPATIAL_NDF + 1] - e * area * 0.001).abs() < 1e-6);
     }
 }

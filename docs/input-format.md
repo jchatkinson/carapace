@@ -133,13 +133,23 @@ where present, a `density` array for mass.
 | `ElasticBeamColumnTable3` | `e`, `g`, `a`, `j`, `iy`, `iz`, `transform: TransformSpec3[]` |
 | `FiberBeamColumnTable` (disp and force) | `fiberSection` (index into `FiberTable.sectionOffsets`), `integration: IntegrationSpec[]`, `corotational: boolean[]` |
 | `FiberBeamColumnTable3` (disp and force) | `g`, `j` (decoupled elastic torsion), `vecXz: [x,y,z][]`, `fiberSection`, `integration` |
-| `ZeroLengthTable` | `materials: [row, dof, material][]` (sparse), `friction: [row, normalDof, shearDof, mu, k0, b][]` (at most one per row) |
-| `ZeroLengthTable3` | same, with `friction: [row, normalDof, shearDof0, shearDof1, mu, k0, b][]` |
-| `ZeroLengthSectionTable` | `fiberSection`, `materials: [row, dof, material][]` for DOFs the section does not drive (`uy`) |
-| `ZeroLengthSectionTable3` | same; extra springs for `uy`, `uz`, `rx` |
+| `ZeroLengthTable` | `materials: [row, dof, material][]` (sparse), `friction: [row, normalDof, shearDof, mu, k0, b][]` (at most one per row), `orient?: [row, x1, x2, x3][]` (at most one per row) |
+| `ZeroLengthTable3` | same, with `friction: [row, normalDof, shearDof0, shearDof1, mu, k0, b][]` and `orient?: [row, x1, x2, x3, yp1, yp2, yp3][]` |
+| `ZeroLengthSectionTable` | `fiberSection`, `materials: [row, dof, material][]` for DOFs the section does not drive (`uy`), `orient?: [row, x1, x2, x3][]` |
+| `ZeroLengthSectionTable3` | same; extra springs for `uy`, `uz`, `rx`; `orient?` as in `ZeroLengthTable3` |
 
 Notes:
 
+- Zero-length `orient` follows OpenSees' `-orient`. 2D rows are
+  `[row, x1, x2, x3]`: local x is `(x1, x2)` (`x3` must be 0) and local y is
+  local x turned 90° counter-clockwise, so `rz` is unchanged. 3D rows are
+  `[row, x1, x2, x3, yp1, yp2, yp3]`: local z is `x × yp`, local y is `z × x`.
+  Every per-DOF material, friction coupling and the section's axial/flexural
+  directions are evaluated on the relative displacement and rotation projected
+  onto those axes (translations and rotations share the frame). Rows without an
+  entry use the global axes, and the field may be omitted. A zero vector (or, in
+  3D, parallel vectors; in 2D, `x3 != 0`) decodes to `InvalidOrientation`.
+  Element forces recorded for an oriented element are still in global DOFs.
 - `TransformSpec`: `"linear" | "pDelta" | "corotational"`.
   `TransformSpec3`: `{ kind: "linear3" | "pDelta3", vecXz: [x,y,z] }`. There is
   no 3D corotational transform. `vecXz` is a vector not parallel to the

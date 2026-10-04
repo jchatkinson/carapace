@@ -134,6 +134,7 @@ fn snap_back_input(
         node_j: vec![1, 2],
         materials: vec![(0, 0, 0), (1, 0, 1)],
         friction: vec![],
+        orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
@@ -290,6 +291,7 @@ fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
         node_j: vec![1],
         materials: vec![(0, 2, 0)],
         friction: vec![],
+        orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],

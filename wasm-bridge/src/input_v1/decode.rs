@@ -17,7 +17,7 @@ use carapace_core::analysis::{
 use carapace_core::model::{
     BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
     Fiber, FiberSection, ForceBeamColumn, Friction, GeomTransf, LoadPatternId, LoadSeries,
-    Material, Node, NodeId, Truss, ZeroLength, ZeroLengthSection,
+    Material, Node, NodeId, Orientation, Truss, ZeroLength, ZeroLengthSection,
 };
 
 use super::error::DecodeError;
@@ -430,6 +430,50 @@ fn build_fiber_section(
 /// `(normal_dof, shear_dof, mu, k0, b)` — see `ZeroLengthTable::friction`.
 type FrictionRow = (u8, u8, f64, f64, f64);
 
+/// Per-row `Orientation` from a 2D sparse `orient` table (OpenSees' 2D
+/// `-orient x1 x2 x3`). `None` means "global axes". A row past the end of the
+/// owning table is `UnknownElementIndex`; a zero vector or `x3 != 0` is
+/// `InvalidOrientation`.
+pub(super) fn orientations_by_row_2d(
+    orient: &[(u32, f64, f64, f64)],
+    rows: usize,
+    table: &'static str,
+) -> Result<Vec<Option<Orientation>>, DecodeError> {
+    let mut by_row = vec![None; rows];
+    for &(row, x1, x2, x3) in orient {
+        let slot = by_row
+            .get_mut(row as usize)
+            .ok_or(DecodeError::UnknownElementIndex { table, row })?;
+        let invalid = DecodeError::InvalidOrientation { table, row };
+        if x3 != 0.0 {
+            return Err(invalid);
+        }
+        *slot = Some(Orientation::in_plane(x1, x2).map_err(|_| invalid)?);
+    }
+    Ok(by_row)
+}
+
+/// The 3D counterpart (`-orient x1 x2 x3 yp1 yp2 yp3`); zero or parallel
+/// vectors are `InvalidOrientation`.
+#[allow(clippy::type_complexity)]
+pub(super) fn orientations_by_row_3d(
+    orient: &[(u32, f64, f64, f64, f64, f64, f64)],
+    rows: usize,
+    table: &'static str,
+) -> Result<Vec<Option<Orientation>>, DecodeError> {
+    let mut by_row = vec![None; rows];
+    for &(row, x1, x2, x3, yp1, yp2, yp3) in orient {
+        let slot = by_row
+            .get_mut(row as usize)
+            .ok_or(DecodeError::UnknownElementIndex { table, row })?;
+        *slot = Some(
+            Orientation::new([x1, x2, x3], [yp1, yp2, yp3])
+                .map_err(|_| DecodeError::InvalidOrientation { table, row })?,
+        );
+    }
+    Ok(by_row)
+}
+
 fn add_zero_lengths(
     domain: &mut Domain,
     table: &super::tables::ZeroLengthTable,
@@ -457,9 +501,12 @@ fn add_zero_lengths(
             })? = Some((normal_dof, shear_dof, mu, k0, b));
     }
 
+    let orientation_by_row =
+        orientations_by_row_2d(&table.orient, table.node_i.len(), "zero_lengths")?;
+
     let mut ids = Vec::with_capacity(table.node_i.len());
     #[allow(clippy::needless_range_loop)]
-    // parallel-indexes node_i/node_j/materials_by_row/friction_by_row
+    // parallel-indexes node_i/node_j/materials_by_row/friction_by_row/orientation_by_row
     for i in 0..table.node_i.len() {
         let mut element = ZeroLength::new(
             node_at(table.node_i[i], "zero_lengths")?,
@@ -477,6 +524,14 @@ fn add_zero_lengths(
                 k0,
                 b,
             ));
+        }
+        if let Some(orientation) = orientation_by_row[i] {
+            element = element.with_orientation(orientation).map_err(|_| {
+                DecodeError::InvalidOrientation {
+                    table: "zero_lengths",
+                    row: i as u32,
+                }
+            })?;
         }
         ids.push(domain.add_element(Element::ZeroLength(element)));
     }
@@ -501,9 +556,12 @@ fn add_zero_length_sections(
             .push((dof, material_index));
     }
 
+    let orientation_by_row =
+        orientations_by_row_2d(&table.orient, table.node_i.len(), "zero_length_sections")?;
+
     let mut ids = Vec::with_capacity(table.node_i.len());
     #[allow(clippy::needless_range_loop)]
-    // parallel-indexes node_i/node_j/fiber_section/materials_by_row
+    // parallel-indexes node_i/node_j/fiber_section/materials_by_row/orientation_by_row
     for i in 0..table.node_i.len() {
         let section = FiberSection::new(fiber_section_at(table.fiber_section[i])?);
         let mut element = ZeroLengthSection::new(
@@ -516,6 +574,14 @@ fn add_zero_length_sections(
                 dof as usize,
                 material_at(material_index, "zero_length_sections")?,
             );
+        }
+        if let Some(orientation) = orientation_by_row[i] {
+            element = element.with_orientation(orientation).map_err(|_| {
+                DecodeError::InvalidOrientation {
+                    table: "zero_length_sections",
+                    row: i as u32,
+                }
+            })?;
         }
         ids.push(domain.add_element(Element::ZeroLengthSection(element)));
     }
