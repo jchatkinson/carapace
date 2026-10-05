@@ -15,8 +15,12 @@ pub(super) fn evaluate_elastic_pp(e: f64, eyp: f64, ep: f64, strain: f64) -> (f6
     // Elastic predictor relative to the *committed* plastic
     // strain — standard 1D return mapping.
     let trial_stress = e * (strain - ep);
-    if trial_stress.abs() <= yield_stress {
-        (trial_stress, e, Material::ElasticPP { e, eyp, ep })
+    // Deliberately `<=` yield: OpenSees' `fYieldSurface = -E * DBL_EPSILON`
+    // slack makes a trial exactly on the surface plastic (tangent 0), which
+    // sends Newton oscillating between the two kinks when unloading from a
+    // yielded state (OpenSees itself fails `material_state.rs`'s
+    // unload-from-yield case). Elastic on the surface converges.
+    if trial_stress.abs() <= yield_stress {        (trial_stress, e, Material::ElasticPP { e, eyp, ep })
     } else {
         let stress = yield_stress.copysign(trial_stress);
         // Return to the yield surface: the plastic strain

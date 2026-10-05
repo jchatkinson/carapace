@@ -31,6 +31,7 @@ impl Material {
             tension_strain: 0.0,
             strain: 0.0,
             stress: 0.0,
+            tangent: 2.0 * fc / epsc0,
         }
     }
 }
@@ -49,6 +50,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         tension_strain,
         strain: cstrain,
         stress: cstress,
+        tangent: ctangent,
     } = m
     else {
         unreachable!()
@@ -58,6 +60,11 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     let (cstrain, cstress) = (*cstrain, *cstress);
 
     let ec0 = 2.0 * fc / epsc0;
+
+    // `Concrete02::setTrialStrain` returns early below `DBL_EPSILON`.
+    if (strain - cstrain).abs() < f64::EPSILON {
+        return (cstress, *ctangent, m.clone());
+    }
 
     let (stress, tangent) = if strain < min_strain {
         // Further into compression than ever committed: monotonic
@@ -128,6 +135,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
             tension_strain,
             strain,
             stress,
+            tangent,
         },
     )
 }

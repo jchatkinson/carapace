@@ -138,6 +138,10 @@ pub enum Material {
         loading: Steel01Loading,
         strain: f64,
         stress: f64,
+        /// Committed tangent (OpenSees' `Ctangent`). A trial at the
+        /// committed strain returns it unchanged, so a displacement-control
+        /// predictor sees the hardening tangent of a yielded fiber, not `e0`.
+        tangent: f64,
     },
     /// Kent-Scott-Park compression envelope with Karsan-Jirsa degrading
     /// unload/reload and zero tensile strength, ported from OpenSees'
@@ -161,6 +165,9 @@ pub enum Material {
         unload_slope: f64,
         strain: f64,
         stress: f64,
+        /// Committed tangent (OpenSees' `Ctangent`), returned unchanged for
+        /// a trial at the committed strain.
+        tangent: f64,
     },
     /// Menegotto-Pinto transition curve with Filippou isotropic hardening,
     /// ported from OpenSees' `Steel02`. Unlike `Steel01`'s piecewise-linear
@@ -227,6 +234,9 @@ pub enum Material {
         tension_strain: f64,
         strain: f64,
         stress: f64,
+        /// Committed tangent (OpenSees' `eP`), returned unchanged for a
+        /// trial at the committed strain.
+        tangent: f64,
     },
     /// Multi-linear (up to 3 points per side) backbone with pinching,
     /// deformation/energy-based damage, and ductility-degraded unloading

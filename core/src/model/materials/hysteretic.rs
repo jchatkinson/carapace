@@ -64,6 +64,9 @@ pub struct HystereticFields {
     pub load: HystereticLoad,
     pub strain: f64,
     pub stress: f64,
+    /// Committed tangent (OpenSees' `Ttangent` as left by the last trial),
+    /// returned unchanged for a trial at the committed strain.
+    pub tangent: f64,
 }
 
 /// `HystereticMaterial`'s fixed (non-history) backbone parameters, bundled
@@ -304,25 +307,17 @@ impl Material {
             load: HystereticLoad::None,
             strain: 0.0,
             stress: 0.0,
+            tangent: e1p,
         }))
     }
 }
 
 /// Ported from `HystereticMaterial::setTrialStrain`
-/// (`HystereticMaterial.cpp`). Two of OpenSees' early-return guards
-/// aren't ported, for reasons consistent with the other materials
-/// above:
-///
-/// - `TloadIndicator == 0 && strain == 0.0`: returns the untouched
-///   initial `(Tstress, Ttangent) = (0.0, E1p)` — the general formula
-///   below reproduces this exactly anyway (checked by
-///   `hysteretic_reproduces_initial_tangent_at_zero_strain`).
-/// - `|dStrain| < DBL_EPSILON`: exists to skip re-deriving a stress/
-///   tangent OpenSees would just recompute identically; the one place
-///   this isn't quite idempotent (unlike every other material here) is
-///   the interior branch's `dStrain < 0.0` / `dStrain > 0.0` split,
-///   which has no case at all for `dStrain == 0.0` — see the comment
-///   below for how that's resolved.
+/// (`HystereticMaterial.cpp`). OpenSees' `TloadIndicator == 0 && strain ==
+/// 0.0` guard isn't ported: it returns the untouched initial
+/// `(Tstress, Ttangent) = (0.0, E1p)`, which the `|dStrain| < DBL_EPSILON`
+/// return below reproduces from the committed state (checked by
+/// `hysteretic_reproduces_initial_tangent_at_zero_strain`).
 pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     let Material::Hysteretic(fields) = m else {
         unreachable!()
@@ -362,6 +357,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         mut load,
         strain: cstrain,
         stress: cstress,
+        tangent: ctangent,
     } = **fields;
 
     let envelope = HystereticEnvelope {
@@ -386,6 +382,12 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     };
 
     let dstrain = strain - cstrain;
+
+    // `HystereticMaterial::setTrialStrain` returns early below
+    // `DBL_EPSILON`, leaving the previous `(Tstress, Ttangent)`.
+    if dstrain.abs() < f64::EPSILON {
+        return (cstress, ctangent, m.clone());
+    }
 
     if load == HystereticLoad::None {
         load = if dstrain < 0.0 {
@@ -431,16 +433,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         load = new_load;
         (stress, tangent)
     } else {
-        // `dstrain >= 0.0`: OpenSees only calls `positiveIncrement` for
-        // `dStrain > 0.0` (the `dStrain == 0.0` case falls through with
-        // whatever `Tstress`/`Ttangent` happened to hold from before —
-        // meaningless for a pure function with no "before"). Treating
-        // `dstrain == 0.0` as belonging to this branch instead gives a
-        // well-defined answer that's consistent with the tie-break
-        // this same file already uses for the *first ever* increment
-        // (`dStrain < 0.0 ? Negative : Positive`, just above) — and
-        // `hysteretic_positive_increment` handles `dstrain == 0.0`
-        // gracefully (`tmpmo1` reduces to `cstress` exactly).
+        // `dstrain > 0.0` (an increment under `DBL_EPSILON` returned above).
         let (stress, tangent, new_rot_max, new_rot_nu, new_load) = hysteretic_positive_increment(
             dstrain,
             strain,
@@ -509,6 +502,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
             load,
             strain,
             stress,
+            tangent,
         })),
     )
 }

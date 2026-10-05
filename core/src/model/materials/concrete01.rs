@@ -19,6 +19,7 @@ impl Material {
             unload_slope: ec0,
             strain: 0.0,
             stress: 0.0,
+            tangent: ec0,
         }
     }
 }
@@ -38,6 +39,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         unload_slope,
         strain: cstrain,
         stress: cstress,
+        tangent: ctangent,
     } = m
     else {
         unreachable!()
@@ -45,6 +47,12 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     let (fpc, epsc0, fpcu, epscu) = (*fpc, *epsc0, *fpcu, *epscu);
     let (min_strain, end_strain, unload_slope) = (*min_strain, *end_strain, *unload_slope);
     let (cstrain, cstress) = (*cstrain, *cstress);
+
+    // `Concrete01::setTrialStrain` returns the committed state below
+    // `DBL_EPSILON`.
+    if (strain - cstrain).abs() < f64::EPSILON {
+        return (cstress, *ctangent, m.clone());
+    }
 
     // Quick return: tension, zero stiffness, no compression-envelope
     // history update — but strain/stress still commit to the new
@@ -63,6 +71,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
                 unload_slope,
                 strain,
                 stress: 0.0,
+                tangent: 0.0,
             },
         );
     }
@@ -118,6 +127,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
             unload_slope,
             strain,
             stress,
+            tangent,
         },
     )
 }

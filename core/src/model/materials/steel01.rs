@@ -24,6 +24,7 @@ impl Material {
             loading: Steel01Loading::None,
             strain: 0.0,
             stress: 0.0,
+            tangent: e0,
         }
     }
 }
@@ -46,6 +47,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
         loading,
         strain: cstrain,
         stress: cstress,
+        tangent: ctangent,
     } = m
     else {
         unreachable!()
@@ -57,6 +59,12 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
     let (cstrain, cstress) = (*cstrain, *cstress);
 
     let dstrain = strain - cstrain;
+
+    // `Steel01::setTrialStrain` skips `determineTrialState` below
+    // `DBL_EPSILON`, leaving the trial state at the committed one.
+    if dstrain.abs() <= f64::EPSILON {
+        return (cstress, *ctangent, m.clone());
+    }
 
     let fy_one_minus_b = fy * (1.0 - b);
     let esh = b * e0;
@@ -122,6 +130,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
             loading,
             strain,
             stress,
+            tangent,
         },
     )
 }
@@ -152,6 +161,16 @@ mod tests {
             "expected {expected}, got {stress}"
         );
         assert!((tangent - esh).abs() < 1e-9);
+    }
+
+    #[test]
+    fn steel01_trial_at_committed_strain_keeps_committed_tangent() {
+        // A displacement-control predictor evaluates the committed state; a
+        // yielded fiber must report its hardening tangent, not e0.
+        let m = Material::steel01(60.0, 29000.0, 0.01, 0.9, 5.0, 0.9, 5.0).commit(0.02);
+        let (stress, tangent) = m.trial_stress_tangent(0.02);
+        assert_eq!(tangent, 0.01 * 29000.0);
+        assert!((stress - (0.01 * 29000.0 * 0.02 + 60.0 * 0.99)).abs() < 1e-9);
     }
 
     #[test]
