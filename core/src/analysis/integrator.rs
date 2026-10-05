@@ -48,19 +48,26 @@ pub enum Integrator<NId = NodeId> {
 
 impl<NId: Copy> Integrator<NId> {
     /// Compute this step's new pseudo-time, given the domain's state as of
-    /// the end of the *previous* (converged) step.
+    /// the end of the *previous* (converged) step, plus the displacement
+    /// predictor the caller must apply before iterating (`None` for
+    /// `LoadControl`). `DisplacementControl`'s predictor is the unit-load
+    /// response scaled by the pseudo-time increment, so the controlled DOF
+    /// starts the step exactly at its target and every Newton iteration
+    /// (the first included) measures a true correction. That is what lets
+    /// a linear step converge in one iteration instead of spending its
+    /// first on the predictor and a second on proving `du` is small.
     pub(crate) fn predict<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
         &self,
         domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
         solver: &SparseSolver,
         current_pseudo_time: f64,
-    ) -> Result<f64, AnalysisError>
+    ) -> Result<(f64, Option<DVector<f64>>), AnalysisError>
     where
         NId: Key,
         E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
     {
         match self {
-            Integrator::LoadControl { increment } => Ok(current_pseudo_time + increment),
+            Integrator::LoadControl { increment } => Ok((current_pseudo_time + increment, None)),
             Integrator::DisplacementControl {
                 node,
                 dof,
@@ -73,7 +80,7 @@ impl<NId: Copy> Integrator<NId> {
                 let sensitivity = domain.assemble_reference_load_sensitivity(current_pseudo_time);
                 let unit_response = solver.solve(&k, &sensitivity)?;
                 let delta_lambda = increment / unit_response[eq];
-                Ok(current_pseudo_time + delta_lambda)
+                Ok((current_pseudo_time + delta_lambda, Some(unit_response * delta_lambda)))
             }
             Integrator::ArcLength(_) => {
                 unreachable!("Analysis::step routes ArcLength to its continuation driver")
@@ -81,35 +88,30 @@ impl<NId: Copy> Integrator<NId> {
         }
     }
 
-    /// Corrector for the *second and later* Newton iterations of a step
-    /// (the caller must skip this on the first iteration — see below).
+    /// Corrector for every Newton iteration of a step, applied after
+    /// `predict`'s displacement predictor.
     /// `predict`'s pseudo-time only accounts for the tangent at the *start*
     /// of the step — exact for `LoadControl` (whose pseudo-time never
     /// changes mid-step, so `du_bar` unmodified is already the right
     /// increment every iteration).
     ///
-    /// For `DisplacementControl`, the first Newton iteration uses that same
-    /// starting tangent (nothing has moved yet), so its residual-driven
-    /// `du_bar` already delivers `predict`'s target displacement at the
-    /// controlled DOF exactly — the caller applies it unmodified, with no
-    /// call to `correct` (equivalent to OpenSees' `newStep`, which predicts
-    /// *and* applies that first increment together). But the tangent used
-    /// by `predict`/iteration 1 can go stale for the *rest* of the step
-    /// (e.g. a step landing exactly on a material's yield breakpoint sees
-    /// the elastic tangent at `predict` time, then the true, much softer,
-    /// post-yield tangent from iteration 2 on) — left uncorrected, ordinary
-    /// fixed-load-factor Newton iteration would then keep driving the
-    /// controlled DOF *past* the target already reached, chasing force
-    /// equilibrium at the wrong load factor instead. This is the standard
-    /// Yang & Shieh consistent Displacement Control corrector: solve the
-    /// current tangent against the reference load sensitivity again
-    /// (`unit_response`, this iteration's version of `predict`'s unit-load
-    /// probe), then pick `delta_lambda` so that adding `delta_lambda *
-    /// unit_response` to `du_bar` cancels `du_bar`'s contribution at the
-    /// controlled DOF — i.e. this iteration leaves the controlled DOF
-    /// exactly where it already was after iteration 1, no matter how far
-    /// the tangent has drifted since, while every other DOF still gets
-    /// `du_bar`'s residual-driven correction.
+    /// For `DisplacementControl`, `predict` already moved the controlled DOF
+    /// to its target (OpenSees' `newStep` does the same), but the tangent it
+    /// used can go stale as the iteration proceeds (e.g. a step landing
+    /// exactly on a material's yield breakpoint sees the elastic tangent at
+    /// `predict` time, then the true, much softer, post-yield tangent) —
+    /// left uncorrected, ordinary fixed-load-factor Newton iteration would
+    /// then keep driving the controlled DOF *past* the target already
+    /// reached, chasing force equilibrium at the wrong load factor instead.
+    /// This is the standard Yang & Shieh consistent Displacement Control
+    /// corrector: solve the current tangent against the reference load
+    /// sensitivity again (`unit_response`, this iteration's version of
+    /// `predict`'s unit-load probe), then pick `delta_lambda` so that adding
+    /// `delta_lambda * unit_response` to `du_bar` cancels `du_bar`'s
+    /// contribution at the controlled DOF — i.e. this iteration leaves the
+    /// controlled DOF exactly where it already is, no matter how far the
+    /// tangent has drifted, while every other DOF still gets `du_bar`'s
+    /// residual-driven correction.
     /// `current_factorization`, when supplied, must factor `k`. An older
     /// Newton tangent must not be passed here: the load-sensitivity probe
     /// continues to use the current tangent even under tangent reuse.

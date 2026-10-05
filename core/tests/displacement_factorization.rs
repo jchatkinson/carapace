@@ -62,6 +62,10 @@ fn displacement_control_converges_across_yield_with_each_tangent_strategy() {
         assert!((analysis.domain().node(tip).displacement[0] - 0.03).abs() < 1e-10);
         assert!((analysis.domain().node(middle).displacement[0] - 2.0 / 150.0).abs() < 1e-10);
         assert!((result.load_factor - 5.0 / 3.0).abs() < 1e-9);
-        assert!(result.iterations > 1);
+        // Piecewise-linear response: the predictor's stale elastic tangent
+        // is fixed by the first (corrector) iteration under `Current`; the
+        // reuse strategies need more. The assertions above are what show
+        // the corrector held the controlled DOF at its target.
+        assert!(result.iterations >= 1, "{algorithm:?}: {}", result.iterations);
     }
 }

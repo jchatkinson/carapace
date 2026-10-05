@@ -226,9 +226,10 @@ where
             let (_k, internal) = self.domain.assemble_tangent_and_resistance(self.load_factor);
             (self.domain.assemble_reference_load(self.load_factor), internal)
         });
-        self.load_factor = self
-            .integrator
-            .predict(&self.domain, &self.solver, self.load_factor)?;
+        let (predicted_load_factor, predictor) =
+            self.integrator
+                .predict(&self.domain, &self.solver, self.load_factor)?;
+        self.load_factor = predicted_load_factor;
         let force_tolerance = committed_forces.and_then(|(external, internal)| {
             let predicted = self.domain.assemble_reference_load(self.load_factor);
             ForceTolerance::for_test(
@@ -252,6 +253,11 @@ where
                 (1, 1)
             }
             Algorithm::Newton { .. } | Algorithm::KrylovNewton { .. } => {
+                // `Linear` keeps `predict`'s pseudo-time only: its single
+                // tangent solve already is the step's displacement.
+                if let Some(du) = &predictor {
+                    self.domain.apply_displacement_increment(du);
+                }
                 let integrator = &self.integrator;
                 let solver = &self.solver;
                 let (outcome, load_factor) = iterate_to_equilibrium(
@@ -263,23 +269,11 @@ where
                     &mut self.domain,
                     self.load_factor,
                     |domain, load_factor| domain.form_tangent_and_residual(load_factor),
-                    |domain, k, current_factorization, du_bar, load_factor, iteration| {
-                        // The first iteration uses the same tangent
-                        // `predict` used, so `du_bar` already delivers
-                        // `predict`'s target displacement at the
-                        // controlled DOF exactly (see `Integrator::
-                        // correct`'s doc comment) — only from the second
-                        // iteration on does the controlled DOF need to be
-                        // actively held there while other DOFs still get
-                        // corrected.
-                        if iteration == 0 {
-                            Ok((du_bar, 0.0))
-                        } else {
-                            let (delta_lambda, du) = integrator.correct(
-                                domain, solver, k, current_factorization, du_bar, load_factor,
-                            )?;
-                            Ok((du, delta_lambda))
-                        }
+                    |domain, k, current_factorization, du_bar, load_factor, _iteration| {
+                        let (delta_lambda, du) = integrator.correct(
+                            domain, solver, k, current_factorization, du_bar, load_factor,
+                        )?;
+                        Ok((du, delta_lambda))
                     },
                     |_domain| {},
                     force_tolerance.as_ref(),

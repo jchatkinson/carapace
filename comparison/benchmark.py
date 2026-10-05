@@ -1,4 +1,4 @@
-"""Compare native release Carapace with OpenSees SuperLU frame solves.
+"""Compare native release Carapace, the wasm bundle (under Node) and OpenSees SuperLU frame solves.
 
 Run: comparison/.venv/bin/python comparison/benchmark.py
 Compilation and imports precede all timings; solve timings exclude setup.
@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--runs", type=int, default=21)
     parser.add_argument("--warmups", type=int, default=2)
+    parser.add_argument("--wasm-warm-runs", type=int, default=0,
+                        help="untimed in-process wasm runs before the timed one (0 = cold JIT, as in a fresh worker)")
     parser.add_argument("--displacement-increment", type=float, default=12.0)
     parser.add_argument("--output", type=Path, default=ROOT / "comparison/out/frame_benchmark.json")
     args = parser.parse_args()
@@ -29,6 +31,8 @@ def main():
         parser.error("dimensions, steps and runs must be positive; warmups must be nonnegative")
     subprocess.run(["cargo", "build", "--release", "-p", "carapace-core",
                     "--example", "benchmark_frame"], cwd=ROOT, check=True)
+    subprocess.run(["wasm-pack", "build", "wasm-bridge", "--target", "nodejs", "--out-dir", "../pkg"],
+                   cwd=ROOT, check=True)
     report = {"configuration": vars(args).copy(), "cases": []}
     report["configuration"]["output"] = str(args.output)
     for model in ["elastic", "fiber"]:
@@ -39,7 +43,12 @@ def main():
                        "--bays", str(args.bays), "--steps", str(args.steps), "--json"]
             if increment is not None:
                 command += ["--displacement-increment", str(increment)]
-            samples = {engine: [] for engine in ["carapace", "SuperLU"]}
+            wasm_command = ["node", str(ROOT / "comparison/wasm_frame.mjs"), "--model", model,
+                            "--stories", str(args.stories), "--bays", str(args.bays),
+                            "--steps", str(args.steps), "--warm-runs", str(args.wasm_warm_runs)]
+            if increment is not None:
+                wasm_command += ["--displacement-increment", str(increment)]
+            samples = {engine: [] for engine in ["carapace", "wasm", "SuperLU"]}
             for repetition in range(args.warmups + args.runs):
                 # Rotate execution order to reduce systematic timing bias.
                 engines = list(samples)
@@ -47,6 +56,8 @@ def main():
                 for engine in engines[rotation:] + engines[:rotation]:
                     if engine == "carapace":
                         data = json.loads(subprocess.check_output(command, cwd=ROOT, text=True))
+                    elif engine == "wasm":
+                        data = json.loads(subprocess.check_output(wasm_command, cwd=ROOT, text=True))
                     else:
                         data = run_opensees(args.stories, args.bays, args.steps,
                                             model, "SparseGeneral", increment)
@@ -75,7 +86,8 @@ def main():
             report["cases"].append(summary)
             timings = summary["engines"]
             print(f"{model}/{control}: " + ", ".join(
-                f"{engine} {data['median_ms']:.3f} ms ({data['iterations']} iterations)"
+                f"{engine} {data['median_ms']:.3f} ms"
+                + (f" ({data['iterations']} iterations)" if data["iterations"] is not None else "")
                 for engine, data in timings.items()), flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
