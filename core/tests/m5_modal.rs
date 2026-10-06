@@ -1,5 +1,5 @@
 use carapace_core::analysis::modal_analysis;
-use carapace_core::model::{Domain, Element, Material, Node, ZeroLength};
+use carapace_core::model::{Domain, Element, ElasticBeamColumn, GeomTransf, Material, Node, ZeroLength};
 
 /// M5 acceptance (implementation-plan §6): eigenvalues of a small known
 /// model match closed form. This is the classic 2-DOF "1-1-1-1" mass-spring
@@ -95,5 +95,34 @@ fn massless_free_dof_is_reported_as_a_singular_system() {
     assert!(
         result.is_err(),
         "a massless free DOF should be reported as an error"
+    );
+}
+
+/// Rotations and axial DOFs with no assigned mass are statically condensed,
+/// not an error: a cantilever column with a lumped tip mass in the transverse
+/// direction only has `omega = sqrt(3 E I / (m L^3))` exactly (the elastic
+/// beam-column's stiffness is the Euler-Bernoulli one).
+#[test]
+fn cantilever_with_massless_rotation_matches_closed_form() {
+    let (e, a, iz, length, m) = (200000.0, 8000.0, 2.0e8, 3000.0, 1.5);
+    let mut domain = Domain::new();
+    let base = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let tip = domain.add_node(Node::new([0.0, length]).with_mass(0, m));
+    domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+        base,
+        tip,
+        e,
+        a,
+        iz,
+        GeomTransf::Linear,
+    )));
+
+    let modes = modal_analysis(&mut domain, 1).expect("massless rotation should be condensed");
+    let expected = (3.0 * e * iz / (m * length.powi(3))).sqrt();
+    assert_eq!(modes.len(), 1);
+    assert!(
+        (modes[0].frequency - expected).abs() / expected < 1e-9,
+        "expected omega={expected}, got {}",
+        modes[0].frequency
     );
 }

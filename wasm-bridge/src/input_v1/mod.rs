@@ -26,7 +26,7 @@ pub use error::DecodeError;
 pub use materials::MaterialSpec;
 pub use session::{
     AnalysisErrorDetail, ArcFailureDetail, ContinuationDetail, ContinuationStopDetail,
-    RecorderBatch, Session, StepOutcome, StopReasonDetail,
+    ModalResultsReport, ModalStageResult, ModeResult, RecorderBatch, Session, StepOutcome, StopReasonDetail,
 };
 
 use sequence::{SequenceSpec, SequenceSpec3};
@@ -53,6 +53,12 @@ pub struct Header {
     pub space: u8,
     /// `carapace-core`'s version, recorded for run provenance.
     pub engine_version: String,
+    /// Record one sample of every supported recorder at the start of each `Static`/`Transient`
+    /// stage, before its first step (the stage's initial conditions, at load factor/time `0`).
+    /// Off by default: every stage's samples are then only the ones its steps produce.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub record_initial: bool,
 }
 
 /// The full wire payload: header plus one table per (profile, entity-kind)

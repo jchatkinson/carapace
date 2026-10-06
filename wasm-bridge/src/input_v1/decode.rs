@@ -292,7 +292,7 @@ fn decode_planar(input: CarapaceInputV1) -> Result<PlanarSession, DecodeError> {
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;
 
-    Ok(PlanarSession::new(domain, stages, recorders))
+    Ok(PlanarSession::new(domain, node_ids, stages, recorders, input.header.record_initial))
 }
 
 fn check_dof(table: &'static str, row: u32, dof: u8) -> Result<(), DecodeError> {
@@ -728,6 +728,8 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                         num_modes: *modes as usize,
                     },
                 ),
+                // Takes no steps: the domain is swapped for its pristine copy when the stage starts.
+                StageSpec::Reset { .. } => (0, CompiledStageKind::Reset),
                 StageSpec::Transient {
                     steps,
                     dt,

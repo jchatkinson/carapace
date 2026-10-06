@@ -37,6 +37,7 @@ fn empty_input(header_space: u8) -> CarapaceInputV1 {
             schema_version: 1,
             space: header_space,
             engine_version: "test".to_string(),
+            record_initial: false,
         },
         nodes: NodeTable::default(),
         materials: Vec::new(),
@@ -823,6 +824,63 @@ fn decodes_a_modal_stage_and_matches_the_golden_ratio_closed_form() {
         (mode1_freq - phi).abs() < 1e-9,
         "expected {phi}, got {mode1_freq}"
     );
+}
+
+/// `Session::modal_results` returns frequencies, full-node shapes and participation for a
+/// finished `Modal` stage — no recorders needed. For the 2-mass chain every mode's effective
+/// mass sums to the total x mass (all modes requested), shapes are M-normalized and sign-fixed.
+#[test]
+fn modal_results_report_shapes_and_participation_without_recorders() {
+    let mut input = empty_input(2);
+    input.nodes = NodeTable {
+        coords: vec![0.0, 0.0, 1.0, 0.0, 2.0, 0.0],
+        fixed: vec![0b111, 0b110, 0b110],
+        mass_node_index: vec![1, 2],
+        mass: vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    };
+    input.materials = vec![MaterialSpec::Elastic { e: 1.0 }];
+    input.zero_lengths = ZeroLengthTable {
+        node_i: vec![0, 1],
+        node_j: vec![1, 2],
+        materials: vec![(0, 0, 0), (1, 0, 0)],
+        friction: vec![],
+        orient: vec![],
+    };
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Modal {
+            id: "modes".to_string(),
+            modes: 2,
+        }],
+        recorders: vec![],
+    };
+
+    let mut session = decode(input).expect("well-formed modal input should decode");
+    assert!(session.modal_results().stages.is_empty());
+    let outcome = session.advance(1);
+    assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");
+
+    let report = session.modal_results();
+    assert_eq!(report.stages.len(), 1);
+    let stage = &report.stages[0];
+    assert_eq!((stage.stage_index, stage.stage_id.as_str(), stage.ndf), (0, "modes", 3));
+    assert_eq!(stage.modes.len(), 2);
+    assert!((stage.total_mass[0] - 2.0).abs() < 1e-12);
+    assert_eq!(stage.total_mass[1], 0.0);
+
+    let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
+    assert!((stage.modes[0].frequency - 1.0 / phi).abs() < 1e-9);
+    let ratio_sum: f64 = stage.modes.iter().map(|m| m.mass_ratio[0]).sum();
+    assert!((ratio_sum - 1.0).abs() < 1e-9, "x mass ratios sum to {ratio_sum}");
+    for mode in &stage.modes {
+        assert_eq!(mode.shape.len(), 3 * 3);
+        // Ground node fixed -> zero; largest entry positive; M-normalized.
+        assert!(mode.shape[..3].iter().all(|v| *v == 0.0));
+        let peak = mode.shape.iter().copied().fold(0.0_f64, |b, v| if v.abs() > b.abs() { v } else { b });
+        assert!(peak > 0.0);
+        let norm: f64 = mode.shape[3] * mode.shape[3] + mode.shape[6] * mode.shape[6];
+        assert!((norm - 1.0).abs() < 1e-9);
+        assert_eq!(mode.mass_ratio[1], 0.0);
+    }
 }
 
 /// An out-of-range `ModeShape.mode` records nothing this call, rather than
@@ -1942,4 +2000,97 @@ fn an_element_load_recorder_follows_the_pattern_factor_then_the_frozen_value() {
     assert!(outcome.error.is_none(), "unexpected outcome: {outcome:?}");
     let (_, wy_held) = last_sample(&outcome, 1).expect("wy sample");
     assert!((wy_held - 0.5 * wy).abs() < 1e-12, "held wy {wy_held}");
+}
+
+/// A bar loaded in two static stages that both ramp pattern 0 (load stage `0`), optionally with a
+/// `Reset` between them. `hold` freezes the pattern after the first stage.
+fn two_stage_bar(record_initial: bool, between: Option<StageSpec>, hold: bool) -> carapace_wasm::input_v1::Session {
+    let static_stage = |id: &str, hold: bool| StageSpec::Static {
+        id: id.to_string(),
+        steps: 2,
+        integrator: IntegratorSpec::LoadControl { increment: 0.5 },
+        algorithm: AlgorithmSpec::Linear,
+        convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+        hold_patterns_after: if hold { vec![0] } else { vec![] },
+    };
+    let mut input = empty_input(2);
+    input.header.record_initial = record_initial;
+    input.nodes = NodeTable {
+        coords: vec![0.0, 0.0, 100.0, 0.0],
+        fixed: vec![0b111, 0b110],
+        mass_node_index: vec![],
+        mass: vec![],
+    };
+    input.materials = vec![MaterialSpec::Elastic { e: 30000.0 }];
+    input.trusses = TrussTable { node_i: vec![0], node_j: vec![1], area: vec![2.0], material: vec![0], density: vec![0.0] };
+    input.load_patterns = LoadPatternTable { series: vec![TimeSeriesSpec::Linear { slope: 1.0 }], scale_factor: vec![1.0] };
+    input.nodal_loads = NodalLoadTable { pattern: vec![0], node: vec![1], dof: vec![0], value: vec![60.0], stage: vec![0] };
+    let mut stages = vec![static_stage("first", hold)];
+    stages.extend(between);
+    stages.push(static_stage("second", false));
+    input.sequence = SequenceSpec { stages, recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }] };
+    decode(input).expect("well-formed input should decode")
+}
+
+/// Every sample of recorder 0, as `(stage_index, pseudo_time, value)`, running a session to the end.
+fn all_samples(session: &mut carapace_wasm::input_v1::Session) -> Vec<(usize, f64, f64)> {
+    let mut out = Vec::new();
+    loop {
+        let outcome = session.advance(8);
+        assert!(outcome.error.is_none(), "{outcome:?}");
+        for batch in outcome.recorder_batches.iter().filter(|b| b.recorder_index == 0) {
+            out.extend(batch.samples.iter().map(|&(t, v)| (batch.stage_index, t, v)));
+        }
+        if outcome.done {
+            return out;
+        }
+    }
+}
+
+/// `header.recordInitial` adds each static stage's initial conditions as its first sample: load
+/// factor 0 and the state the stage inherits (zero for the first, the first stage's end for the
+/// second). Without it a stage's samples are only its steps.
+#[test]
+fn record_initial_adds_a_step_zero_sample_per_stage() {
+    let without = all_samples(&mut two_stage_bar(false, None, true));
+    assert_eq!(without.len(), 4);
+
+    let samples = all_samples(&mut two_stage_bar(true, None, true));
+    assert_eq!(samples.len(), 6);
+    let stage = |i: usize| samples.iter().filter(|s| s.0 == i).collect::<Vec<_>>();
+    let (first, second) = (stage(0), stage(1));
+    assert_eq!((first.len(), second.len()), (3, 3));
+    assert_eq!((first[0].1, first[0].2), (0.0, 0.0));
+    let end_of_first = first[2].2;
+    assert!((end_of_first - 60.0 * 100.0 / (2.0 * 30000.0)).abs() < 1e-9);
+    assert_eq!(second[0].1, 0.0);
+    assert!((second[0].2 - end_of_first).abs() < 1e-12, "stage 2 starts where stage 1 ended");
+}
+
+/// A `Reset` stage reverts displacements to the as-built state (a later stage starts from zero, not
+/// from where the previous one ended). Like OpenSees' `reset`, a pattern frozen by `holdPatternsAfter`
+/// stays frozen at its final factor: the next stage applies it in full from its first step.
+#[test]
+fn reset_stage_reverts_the_state_but_keeps_held_patterns_applied() {
+    let reset = Some(StageSpec::Reset { id: "reset".to_string() });
+    let samples = all_samples(&mut two_stage_bar(true, reset, true));
+    // Reset records nothing: stage indices are first = 0, second = 2.
+    let second: Vec<_> = samples.iter().filter(|s| s.0 == 2).collect();
+    assert_eq!(second.len(), 3);
+    assert_eq!(second[0].2, 0.0, "second stage starts from the as-built state");
+    let end_of_first = samples.iter().filter(|s| s.0 == 0).last().unwrap().2;
+    assert!((second[1].2 - end_of_first).abs() < 1e-12, "the held load is applied in full at once");
+    assert!((second[2].2 - end_of_first).abs() < 1e-12);
+}
+
+/// Without a hold, the same pattern ramps again from zero after a `Reset`.
+#[test]
+fn reset_stage_lets_an_unheld_pattern_ramp_again() {
+    let reset = Some(StageSpec::Reset { id: "reset".to_string() });
+    let samples = all_samples(&mut two_stage_bar(true, reset, false));
+    let second: Vec<_> = samples.iter().filter(|s| s.0 == 2).collect();
+    let end_of_first = samples.iter().filter(|s| s.0 == 0).last().unwrap().2;
+    assert_eq!(second[0].2, 0.0);
+    assert!((second[1].2 - end_of_first / 2.0).abs() < 1e-12, "half the load at the first of two steps");
+    assert!((second[2].2 - end_of_first).abs() < 1e-12);
 }

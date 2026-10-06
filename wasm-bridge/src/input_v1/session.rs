@@ -310,6 +310,8 @@ pub(super) enum CompiledStageKind<NId> {
     /// A single eigensolve, not an iterative loop — `CompiledStage::steps`
     /// is always `1` for this kind (`decode.rs`'s `compile_stages`).
     Modal { num_modes: usize },
+    /// Swaps the domain for its as-built copy (`ModelSession::pristine`); `steps` is `0`.
+    Reset,
     Transient {
         algorithm: Algorithm,
         convergence: ConvergenceTest,
@@ -342,6 +344,11 @@ where
     },
     Transient {
         analysis: TransientAnalysis<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        steps_remaining: u32,
+    },
+    /// The restored domain, handed to the next stage by `finish_current_stage`.
+    Reset {
+        domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
         steps_remaining: u32,
     },
 }
@@ -381,6 +388,41 @@ pub struct StepOutcome {
     pub recorder_batches: Vec<RecorderBatch>,
 }
 
+/// One computed mode of a finished `Modal` stage. `shape` is node-major over every node in the
+/// input's node-table order (`shape[node * ndf + dof]`, fixed DOFs `0.0`), M-normalized and
+/// sign-fixed so its largest-magnitude entry is positive. `participation[d]` is the modal
+/// participation factor `phi^T M r_d` for global translation direction `d`, and `mass_ratio[d]`
+/// the effective modal mass `participation^2` as a fraction of `ModalStageResult::total_mass[d]`.
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct ModeResult {
+    /// Natural circular frequency, rad/time.
+    pub frequency: f64,
+    pub shape: Vec<f64>,
+    pub participation: Vec<f64>,
+    pub mass_ratio: Vec<f64>,
+}
+
+/// Everything a finished `Modal` stage computed.
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct ModalStageResult {
+    pub stage_index: usize,
+    pub stage_id: String,
+    /// DOFs per node (the stride of `ModeResult::shape`).
+    pub ndf: usize,
+    pub modes: Vec<ModeResult>,
+    /// `r_d^T M r_d` per translation direction `d`: the mass the mass ratios are relative to.
+    pub total_mass: Vec<f64>,
+}
+
+/// `Session::modal_results`'s payload: every `Modal` stage that has finished so far, in order.
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct ModalResultsReport {
+    pub stages: Vec<ModalStageResult>,
+}
+
 /// One recorder's new samples from a single `advance()` call. `first_sample` plus
 /// `samples.len()` gives the sample range this batch covers, so a caller can retry a failed
 /// persist without renumbering — the "each `advance()` batch deterministic and identifies its
@@ -412,6 +454,14 @@ impl Session {
         }
     }
 
+    /// Every `Modal` stage finished so far (see `ModalStageResult`).
+    pub fn modal_results(&self) -> ModalResultsReport {
+        match self {
+            Session::Planar(session) => session.modal_results(),
+            Session::Spatial(session) => session.modal_results(),
+        }
+    }
+
     /// The `AnalysisSequence` stage id `advance` is currently in (or, once
     /// `done`, the id of whichever stage stopped it) — for surfacing which
     /// stage an `error` belongs to, matching pysees-handoff.md's "the run
@@ -435,6 +485,14 @@ where
     E::Load: Clone,
 {
     domain: Option<Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>>,
+    // Node handles in input node-table order, for `ModeResult::shape`.
+    node_ids: Vec<NId>,
+    modal_results: Vec<ModalStageResult>,
+    // The domain as built, kept only when a `Reset` stage exists.
+    pristine: Option<Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>>,
+    // Every `holdPatternsAfter` freeze applied so far, in order, so a `Reset` can re-apply them.
+    holds: Vec<(LoadPatternId, f64)>,
+    record_initial: bool,
     stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
     current_stage: usize,
     runner: Option<StageRunner<NDIM, NDOF, ELEMENT_DOF, NId, E>>,
@@ -481,13 +539,24 @@ where
 {
     pub(super) fn new(
         domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        node_ids: Vec<NId>,
         stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
         recorders: Vec<ResolvedRecorder<NId, E::Id>>,
+        record_initial: bool,
     ) -> Self {
+        let pristine = stages
+            .iter()
+            .any(|stage| matches!(stage.kind, CompiledStageKind::Reset))
+            .then(|| domain.clone());
         let current_batch = vec![Vec::new(); recorders.len()];
         let recorder_sample_counts = vec![0; recorders.len()];
         Self {
             domain: Some(domain),
+            node_ids,
+            modal_results: Vec::new(),
+            pristine,
+            holds: Vec::new(),
+            record_initial,
             stages,
             current_stage: 0,
             runner: None,
@@ -497,6 +566,12 @@ where
             continuation: None,
             current_batch,
             recorder_sample_counts,
+        }
+    }
+
+    pub fn modal_results(&self) -> ModalResultsReport {
+        ModalResultsReport {
+            stages: self.modal_results.clone(),
         }
     }
 
@@ -597,6 +672,31 @@ where
     fn start_current_stage(&mut self) {
         let stage = &self.stages[self.current_stage];
         let mut domain = self.domain.take().expect("domain held between stages");
+        if matches!(stage.kind, CompiledStageKind::Reset) {
+            // As-built domain plus every load an earlier stage had registered (loads are
+            // registered when their stage starts, so the pristine copy has none), and the freezes
+            // (`loadConst`) already applied: like OpenSees' `reset`, this reverts the state but not
+            // which patterns are held constant, so a held pattern is applied in full from the
+            // first step after the reset.
+            domain = self.pristine.clone().expect("kept for Reset stages");
+            for earlier in &self.stages[..self.current_stage] {
+                for &(pattern, node, dof, value) in &earlier.pending_nodal_loads {
+                    domain.add_nodal_load(pattern, node, dof, value);
+                }
+                for (pattern, element, load) in &earlier.pending_element_loads {
+                    domain.add_element_load(*pattern, *element, load.clone());
+                }
+            }
+            for &(pattern, factor) in &self.holds {
+                domain.hold_pattern_constant(pattern, factor);
+            }
+            self.runner = Some(StageRunner::Reset {
+                domain,
+                steps_remaining: 0,
+            });
+            self.load_factor = 0.0;
+            return;
+        }
         for &(pattern, node, dof, value) in &stage.pending_nodal_loads {
             domain.add_nodal_load(pattern, node, dof, value);
         }
@@ -647,6 +747,7 @@ where
                 }
                 Err(error) => self.error = Some(error.into()),
             },
+            CompiledStageKind::Reset => unreachable!("handled above"),
             CompiledStageKind::Transient {
                 algorithm,
                 convergence,
@@ -668,6 +769,14 @@ where
             },
         }
         self.load_factor = 0.0;
+        if self.record_initial
+            && matches!(
+                self.stages[self.current_stage].kind,
+                CompiledStageKind::Static { .. } | CompiledStageKind::Transient { .. }
+            )
+        {
+            self.record_sample();
+        }
     }
 
     fn steps_remaining(&self) -> u32 {
@@ -676,6 +785,9 @@ where
                 steps_remaining, ..
             }
             | StageRunner::Modal {
+                steps_remaining, ..
+            }
+            | StageRunner::Reset {
                 steps_remaining, ..
             }
             | StageRunner::Transient {
@@ -719,6 +831,7 @@ where
             } => {
                 *steps_remaining -= 1;
             }
+            StageRunner::Reset { .. } => {}
         }
         self.record_sample();
         Ok(())
@@ -737,20 +850,100 @@ where
                 hold_patterns_after,
                 ..
             } => hold_patterns_after.clone(),
-            CompiledStageKind::Modal { .. } | CompiledStageKind::Transient { .. } => Vec::new(),
+            CompiledStageKind::Modal { .. }
+            | CompiledStageKind::Transient { .. }
+            | CompiledStageKind::Reset => Vec::new(),
         };
         let load_factor = self.load_factor;
 
         let mut domain = match self.runner.take().expect("stage running") {
             StageRunner::Static { analysis, .. } => analysis.into_domain(),
-            StageRunner::Modal { domain, .. } => domain,
+            StageRunner::Modal { mut domain, modes, .. } => {
+                let result = self.modal_stage_result(&mut domain, &modes);
+                self.modal_results.push(result);
+                domain
+            }
             StageRunner::Transient { analysis, .. } => analysis.into_domain(),
+            StageRunner::Reset { domain, .. } => domain,
         };
         for pattern in hold_patterns_after {
             domain.hold_pattern_constant(pattern, load_factor);
+            self.holds.push((pattern, load_factor));
         }
         self.domain = Some(domain);
         self.current_stage += 1;
+    }
+
+    fn modal_stage_result(
+        &self,
+        domain: &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        modes: &[Mode],
+    ) -> ModalStageResult {
+        let mass = domain.assemble_mass_diagonal();
+        // Influence vector per global translation direction: 1 on every free equation a node's
+        // translation DOF maps to. (A rigid-diaphragm slave's translation is not exactly 1 on
+        // its retained equation, so ratios in models using one are approximate.)
+        let influence: Vec<Vec<f64>> = (0..NDIM)
+            .map(|direction| {
+                let mut r = vec![0.0; mass.len()];
+                for &node in &self.node_ids {
+                    if let Some(eq) = domain.equation_of(node, direction) {
+                        r[eq] = 1.0;
+                    }
+                }
+                r
+            })
+            .collect();
+        let total_mass: Vec<f64> = influence
+            .iter()
+            .map(|r| r.iter().zip(mass.iter()).map(|(r, m)| r * r * m).sum())
+            .collect();
+        let modes = modes
+            .iter()
+            .map(|mode| {
+                let sign = mode
+                    .shape
+                    .iter()
+                    .copied()
+                    .fold(0.0_f64, |best, v| if v.abs() > best.abs() { v } else { best })
+                    .signum();
+                let sign = if sign == 0.0 { 1.0 } else { sign };
+                let mut shape = Vec::with_capacity(self.node_ids.len() * NDOF);
+                for &node in &self.node_ids {
+                    for dof in 0..NDOF {
+                        shape.push(
+                            domain
+                                .equation_of(node, dof)
+                                .map_or(0.0, |eq| sign * mode.shape[eq]),
+                        );
+                    }
+                }
+                let participation: Vec<f64> = influence
+                    .iter()
+                    .map(|r| {
+                        sign * (0..mass.len()).map(|i| mode.shape[i] * mass[i] * r[i]).sum::<f64>()
+                    })
+                    .collect();
+                let mass_ratio = participation
+                    .iter()
+                    .zip(&total_mass)
+                    .map(|(g, total)| if *total > 0.0 { g * g / total } else { 0.0 })
+                    .collect();
+                ModeResult {
+                    frequency: mode.frequency,
+                    shape,
+                    participation,
+                    mass_ratio,
+                }
+            })
+            .collect();
+        ModalStageResult {
+            stage_index: self.current_stage,
+            stage_id: self.stages[self.current_stage].id.clone(),
+            ndf: NDOF,
+            modes,
+            total_mass,
+        }
     }
 
     fn record_sample(&mut self) {
@@ -834,6 +1027,7 @@ where
                     }
                 }
             }
+            StageRunner::Reset { .. } => {}
             StageRunner::Modal { domain, modes, .. } => {
                 for (recorder, batch) in self.recorders.iter().zip(self.current_batch.iter_mut()) {
                     let ResolvedRecorder::ModeShape { mode, node, dof } = *recorder else {

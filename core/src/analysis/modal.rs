@@ -48,9 +48,9 @@ pub struct Mode {
 /// near-singular `K` for buckling analysis) is a natural extension, not
 /// implemented until something actually needs it.
 ///
-/// `M` (lumped, `Node::mass`) must be diagonal and strictly positive on
-/// every free DOF — a real physical requirement of modal analysis, not an
-/// implementation gap.
+/// `M` (lumped, `Node::mass`) must be diagonal and non-negative, with at
+/// least `num_modes` strictly positive entries; massless DOFs are
+/// statically condensed.
 ///
 /// Generic over the same kinematic profile as `Domain`/`Analysis` (see
 /// `Domain`'s doc comment) — the Lanczos recurrence and mass-normalization
@@ -77,10 +77,13 @@ where
             free_dofs: n,
         });
     }
-    for i in 0..n {
-        if mass[i] <= 0.0 {
-            return Err(AnalysisError::SingularSystem);
-        }
+    // Massless DOFs (typically rotations with no rotational inertia) are
+    // allowed: `K^-1 * M` is then rank-deficient, which only removes the
+    // infinite-frequency modes, and the recovered shapes statically condense
+    // those DOFs. Negative mass, or fewer massive DOFs than requested modes,
+    // cannot produce the modes asked for.
+    if mass.iter().any(|&m| m < 0.0) || mass.iter().filter(|&&m| m > 0.0).count() < num_modes {
+        return Err(AnalysisError::SingularSystem);
     }
 
     let (k, _resistance) = domain.assemble_tangent_and_resistance(domain.committed_time());

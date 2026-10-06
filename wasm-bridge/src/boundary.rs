@@ -52,6 +52,17 @@ impl WasmSession {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    /// Frequencies, mode shapes and participation of every `Modal` stage finished so far
+    /// (`{ stages: ModalStageResult[] }`); empty until a modal stage completes. Read it after
+    /// `advance` reports `done`, or whenever a stage has completed.
+    #[wasm_bindgen(js_name = modalResults)]
+    pub fn modal_results(&self) -> Result<Ts<input_v1::ModalResultsReport>, JsValue> {
+        self.0
+            .modal_results()
+            .into_ts()
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     /// The `AnalysisSequence` stage id `advance` is currently in (or, once
     /// done, whichever stage stopped it) — `undefined` once every stage has
     /// completed.

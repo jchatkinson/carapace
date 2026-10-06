@@ -207,10 +207,22 @@ Stages run in order.
 |---|---|
 | `static` | `id`, `steps`, `integrator`, `algorithm`, `convergence?`, `holdPatternsAfter: number[]` |
 | `modal` | `id`, `modes` |
+| `reset` | `id` |
 | `transient` | `id`, `steps`, `dt`, `damping: { alphaM, betaK }`, `groundMotions: GroundMotionSpec[]`, `algorithm?`, `convergence?` |
 
 `GroundMotionSpec`: `{ direction, series: TimeSeriesSpec, scaleFactor }`.
 `direction` is `0` for x, `1` for y, and `2` for z (3D only).
+
+`reset` reverts the model to its as-built state (OpenSees `reset`): displacements,
+velocities and all element/material history return to their starting values and time to
+`0`. Like OpenSees it does not undo `holdPatternsAfter` freezes: a held pattern stays
+applied at its frozen factor, so the next stage sees that load in full from its first
+step (patterns that were not held ramp again from `0`). It takes no steps and records
+nothing.
+
+`header.recordInitial` (optional, default `false`): record one sample of every supported
+recorder at the start of each `static`/`transient` stage, before its first step, at
+load factor/time `0`: the stage's initial conditions, i.e. step 0 of that analysis.
 
 ### Integrators
 
@@ -281,6 +293,28 @@ The caller accumulates batches; there is no "history so far" accessor.
 `bifurcationSuspected`, `displacementScale`, `rotationScale`, `stop`
 (`{ reason, landedExactly, overshoot }`, where `reason` is
 `"displacementTarget" | "loadFactorTarget" | "loadFactorZeroCrossing" | "chordLength" | "stepCount"`).
+
+### Modal results: `modalResults()`
+
+A `modal` stage records nothing in the step timeline. After it finishes,
+`session.modalResults()` returns `{ stages: ModalStageResult[] }` (every modal
+stage finished so far, in order; empty until one completes):
+
+`ModalStageResult`: `{ stageIndex, stageId, ndf, modes: ModeResult[], totalMass: number[] }`.
+`totalMass[d]` is the total mass `rᵀMr` in global translation direction `d`.
+
+`ModeResult`: `{ frequency, shape, participation, massRatio }`, ascending
+frequency.
+- `frequency`: circular frequency ω in rad/time (period `T = 2π/ω`).
+- `shape`: node-major over every node in input node-table order,
+  `shape[node * ndf + dof]`; fixed DOFs are `0`. Mass-normalized (`φᵀMφ = 1`)
+  and sign-fixed so the largest-magnitude entry is positive.
+- `participation[d]`: `φᵀ M r_d`. `massRatio[d]`: `participation[d]² / totalMass[d]`.
+  Models with rigid diaphragms get approximate ratios (a slave node's
+  translation is not exactly 1 on its retained equation).
+
+Massless DOFs (e.g. rotations with no rotational inertia) are statically
+condensed; at least `modes` DOFs must carry mass.
 
 ### `AnalysisErrorDetail` (`kind`)
 

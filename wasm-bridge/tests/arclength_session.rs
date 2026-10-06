@@ -31,6 +31,7 @@ fn empty_input(space: u8) -> CarapaceInputV1 {
             schema_version: 1,
             space,
             engine_version: "test".to_string(),
+            record_initial: false,
         },
         nodes: NodeTable::default(),
         materials: Vec::new(),

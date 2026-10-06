@@ -270,7 +270,7 @@ pub(super) fn decode_spatial(input: CarapaceInputV1) -> Result<SpatialSession, D
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;
 
-    Ok(SpatialSession::new(domain, stages, recorders))
+    Ok(SpatialSession::new(domain, node_ids, stages, recorders, input.header.record_initial))
 }
 
 fn add_nodes(domain: &mut Domain3, table: &super::tables3::NodeTable3) -> Vec<Node3Id> {

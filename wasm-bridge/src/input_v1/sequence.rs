@@ -356,6 +356,13 @@ pub enum StageSpec {
     /// `steps: 1` for it). `modes` is the number of lowest-frequency modes
     /// to compute (`1..=free_dof_count`).
     Modal { id: String, modes: u32 },
+    /// Reverts the model to its initial state (OpenSees `reset`): displacements, velocities and
+    /// every element/material history return to their as-built values and time to `0`. Like
+    /// OpenSees, it does not undo `holdPatternsAfter` freezes (`loadConst`): a held pattern
+    /// stays applied at its frozen factor, so a later stage sees that load in full from its
+    /// first step; patterns that were not held ramp again from `0`. Load patterns and their
+    /// loads stay defined. Takes no steps and records nothing.
+    Reset { id: String },
     /// Newmark-beta time-history analysis (`core::TransientAnalysis`,
     /// fixed at the unconditionally-stable "average acceleration"
     /// parameters — see its own doc comment). `steps` fixed-size `dt`
@@ -382,6 +389,7 @@ impl StageSpec {
         match self {
             StageSpec::Static { id, .. }
             | StageSpec::Modal { id, .. }
+            | StageSpec::Reset { id }
             | StageSpec::Transient { id, .. } => id,
         }
     }
