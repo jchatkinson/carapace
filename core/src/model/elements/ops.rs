@@ -157,6 +157,15 @@ impl std::ops::Index<usize> for ElementForce {
     }
 }
 
+/// One integration point's committed strain and stress, for continuum
+/// elements. Plane elements report `[x, y, xy]` with engineering shear
+/// (`PlaneMaterial`'s convention).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GaussResponse {
+    pub strain: [f64; 3],
+    pub stress: [f64; 3],
+}
+
 /// What `Domain`'s generic assembly/state plumbing needs from an element
 /// catalog. A trait rather than a shared enum because `Element` (2D) and
 /// `Element3` (3D) hold different variant sets, and a single enum would
@@ -194,6 +203,12 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
     fn validate(&self, _nodes: &NodeView<'_, NDIM, NDOF, NId>) -> Result<(), &'static str> {
         Ok(())
     }
+
+    /// Caches geometry-only quantities (shape-function derivatives, areas)
+    /// once the model is final; called by `Domain::validate` after `validate`
+    /// succeeds. Must be idempotent, and every method must give the same
+    /// answer whether or not it has been called (the default does nothing).
+    fn prepare(&mut self, _nodes: &NodeView<'_, NDIM, NDOF, NId>) {}
 
     /// Tangent and internal resisting force at the current nodal state.
     /// `load` is the effective element load at the pseudo-time being
@@ -246,6 +261,15 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         nodes: &NodeView<'_, NDIM, NDOF, NId>,
         load: Option<&Self::Load>,
     ) -> ElementForce;
+
+    /// Every Gauss point's committed strain and stress; `None` for every
+    /// element that is not a continuum element.
+    fn gauss_responses(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+    ) -> Option<Vec<GaussResponse>> {
+        None
+    }
 
     /// Every integration point's per-fiber `(strain, stress)`; `None` for
     /// every element that is not fiber-discretized.

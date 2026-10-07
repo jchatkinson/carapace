@@ -8,13 +8,15 @@ use super::{
 
 mod ops;
 pub use ops::{
-    two_node_dofs, DofMask, DofRef, ElementForce, ElementOps, NodeList, NodeView, TangentSink,
-    VectorSink, MAX_ELEMENT_NODES,
+    two_node_dofs, DofMask, DofRef, ElementForce, ElementOps, GaussResponse, NodeList, NodeView,
+    TangentSink, VectorSink, MAX_ELEMENT_NODES,
 };
 
 mod disp_beam_column;
 mod elastic_beam_column;
 mod force_beam_column;
+mod plane_common;
+mod tri3;
 mod truss;
 mod uniform_load;
 mod zero_length;
@@ -22,6 +24,7 @@ mod zero_length;
 pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
+pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
 pub use zero_length::{
     Friction, Friction3, Orientation, OrientationError, ZeroLength, ZeroLength3, ZeroLengthSection,
@@ -48,11 +51,24 @@ pub enum Element {
     ElasticBeamColumn(ElasticBeamColumn),
     DispBeamColumn(DispBeamColumn),
     ForceBeamColumn(ForceBeamColumn),
+    Tri3(Tri3),
 }
 
+const CONTINUUM: &str = "continuum elements assemble through ElementOps, not the two-node path";
+
 impl Element {
-    pub fn nodes(&self) -> [NodeId; 2] {
+    /// The nodes this element connects, in local order.
+    pub fn nodes(&self) -> NodeList<NodeId> {
         match self {
+            Element::Tri3(t) => t.nodes.into_iter().collect(),
+            _ => self.pair().into_iter().collect(),
+        }
+    }
+
+    /// The two end nodes of a two-node element.
+    fn pair(&self) -> [NodeId; 2] {
+        match self {
+            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
             Element::Truss(t) => [t.node_i, t.node_j],
             Element::ZeroLength(z) => [z.node_i, z.node_j],
             Element::ZeroLengthSection(z) => [z.node_i, z.node_j],
@@ -84,6 +100,7 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j, load),
+            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -147,6 +164,7 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_mass(node_i, node_j),
+            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -163,6 +181,7 @@ impl Element {
             Element::ElasticBeamColumn(_) => {}
             Element::DispBeamColumn(b) => b.commit(node_i, node_j),
             Element::ForceBeamColumn(b) => b.commit(node_i, node_j, load),
+            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -178,6 +197,7 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.local_force(node_i, node_j),
             Element::DispBeamColumn(b) => b.local_force(node_i, node_j),
             Element::ForceBeamColumn(b) => b.local_force(),
+            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -189,7 +209,8 @@ impl Element {
             Element::Truss(_)
             | Element::ZeroLength(_)
             | Element::ZeroLengthSection(_)
-            | Element::ElasticBeamColumn(_) => None,
+            | Element::ElasticBeamColumn(_)
+            | Element::Tri3(_) => None,
         }
     }
 }
@@ -199,7 +220,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     type Id = ElementId;
 
     fn nodes(&self) -> NodeList<NodeId> {
-        Element::nodes(self).into_iter().collect()
+        Element::nodes(self)
     }
 
     fn dof_mask(&self) -> DofMask {
@@ -211,6 +232,31 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::ElasticBeamColumn(_)
             | Element::DispBeamColumn(_)
             | Element::ForceBeamColumn(_) => DofMask::all(NDF),
+            Element::Tri3(t) => t.dof_mask(),
+        }
+    }
+
+    fn validate(&self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> Result<(), &'static str> {
+        match self {
+            Element::Tri3(t) => t.validate(nodes),
+            _ => Ok(()),
+        }
+    }
+
+    fn prepare(&mut self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) {
+        match self {
+            Element::Tri3(t) => t.prepare(nodes),
+            _ => {}
+        }
+    }
+
+    fn gauss_responses(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> Option<Vec<GaussResponse>> {
+        match self {
+            Element::Tri3(t) => Some(t.gauss_responses(nodes)),
+            _ => None,
         }
     }
 
@@ -220,7 +266,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         load: Option<&ElementLoad>,
         sink: &mut S,
     ) {
-        let [i, j] = Element::nodes(self);
+        if let Element::Tri3(t) = self {
+            return t.assemble_tangent(nodes, sink);
+        }
+        let [i, j] = Element::pair(self);
         let (k, r) = Element::form_tangent_and_resistance(self, nodes.get(i), nodes.get(j), load);
         sink.add(&two_node_dofs::<_, ELEMENT_DOF>(i, j, NDF), &k, &r);
     }
@@ -231,7 +280,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         load: Option<&ElementLoad>,
         sink: &mut S,
     ) {
-        let [i, j] = Element::nodes(self);
+        if let Element::Tri3(_) = self {
+            return; // continuum loads arrive with step 3.6
+        }
+        let [i, j] = Element::pair(self);
         let v = Element::form_load_vector(self, nodes.get(i), nodes.get(j), load);
         sink.add(&two_node_dofs::<_, ELEMENT_DOF>(i, j, NDF), &v);
     }
@@ -241,7 +293,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         sink: &mut S,
     ) {
-        let [i, j] = Element::nodes(self);
+        if let Element::Tri3(t) = self {
+            return t.assemble_mass(nodes, sink);
+        }
+        let [i, j] = Element::pair(self);
         let v = Element::form_mass(self, nodes.get(i), nodes.get(j));
         sink.add(&two_node_dofs::<_, ELEMENT_DOF>(i, j, NDF), &v);
     }
@@ -251,16 +306,25 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         load: Option<&ElementLoad>,
     ) {
-        let [i, j] = Element::nodes(self);
+        if let Element::Tri3(t) = self {
+            return t.commit(nodes);
+        }
+        let [i, j] = Element::pair(self);
         Element::commit(self, nodes.get(i), nodes.get(j), load)
     }
 
     fn local_force_width(&self) -> usize {
-        ELEMENT_DOF
+        match self {
+            Element::Tri3(_) => 6,
+            _ => ELEMENT_DOF,
+        }
     }
 
     fn local_force(&self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> ElementForce {
-        let [i, j] = Element::nodes(self);
+        if let Element::Tri3(t) = self {
+            return t.local_force(nodes);
+        }
+        let [i, j] = Element::pair(self);
         Element::local_force(self, nodes.get(i), nodes.get(j)).into()
     }
 
@@ -269,7 +333,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         load: Option<&ElementLoad>,
     ) -> ElementForce {
-        let [i, j] = Element::nodes(self);
+        if let Element::Tri3(_) = self {
+            return SVector::<f64, 6>::zeros().into();
+        }
+        let [i, j] = Element::pair(self);
         Element::form_local_load_vector(self, nodes.get(i), nodes.get(j), load).into()
     }
 
@@ -277,7 +344,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         &self,
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
     ) -> Option<Vec<Vec<(f64, f64)>>> {
-        let [i, j] = Element::nodes(self);
+        if let Element::Tri3(_) = self {
+            return None;
+        }
+        let [i, j] = Element::pair(self);
         Element::fiber_responses(self, nodes.get(i), nodes.get(j))
     }
 }
@@ -626,6 +696,30 @@ mod mask_conformance {
 
     fn steel() -> Material {
         Material::Elastic { e: 200_000.0 }
+    }
+
+    /// A skew four-node patch with a generic nonzero displacement, for the continuum elements.
+    fn nodes_plane() -> (SlotMap<NodeId, Node>, [NodeId; 4]) {
+        let mut nodes = SlotMap::with_key();
+        let coords = [[0.0, 0.0], [2.0, 0.2], [2.3, 1.7], [-0.1, 1.4]];
+        let ids = coords.map(|c| {
+            let mut node = Node::new(c);
+            node.displacement = [0.01 * (c[1] + 1.0), -0.02 * (c[0] + 0.5), 0.003];
+            nodes.insert(node)
+        });
+        (nodes, ids)
+    }
+
+    #[test]
+    fn continuum_elements_declare_exactly_the_translations_they_stiffen() {
+        let (nodes, [a, b, c, _d]) = nodes_plane();
+        let material = || crate::model::PlaneMaterial::plane_stress(30e3, 0.2).unwrap();
+        check(
+            "Tri3",
+            &Element::Tri3(Tri3::new(a, b, c, 0.5, material())),
+            &nodes,
+            true,
+        );
     }
 
     #[test]

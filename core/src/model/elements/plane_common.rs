@@ -1,0 +1,61 @@
+//! Helpers shared by the 2D continuum elements (`Tri3`, `Quad4`): DOF
+//! layout, nodal displacement and coordinate gathering, and the strain-
+//! displacement matrix.
+
+use nalgebra::{SMatrix, SVector};
+
+use super::{DofRef, NodeView};
+use crate::model::{NodeId, NDF, PLANAR_NDIM};
+
+pub(super) type PlaneView<'a> = NodeView<'a, PLANAR_NDIM, NDF, NodeId>;
+
+/// `[(n0, ux), (n0, uy), (n1, ux), ...]`; `N` must be `2 * NN`.
+pub(super) fn plane_dofs<const NN: usize, const N: usize>(
+    nodes: &[NodeId; NN],
+) -> [DofRef<NodeId>; N] {
+    debug_assert_eq!(N, 2 * NN);
+    std::array::from_fn(|a| (nodes[a / 2], (a % 2) as u8))
+}
+
+pub(super) fn plane_coords<const NN: usize>(
+    nodes: &[NodeId; NN],
+    view: &PlaneView<'_>,
+) -> [[f64; 2]; NN] {
+    std::array::from_fn(|i| view.get(nodes[i]).coords)
+}
+
+/// The element's nodal translations, `[ux0, uy0, ux1, ...]`.
+pub(super) fn plane_displacement<const NN: usize, const N: usize>(
+    nodes: &[NodeId; NN],
+    view: &PlaneView<'_>,
+) -> SVector<f64, N> {
+    SVector::from_fn(|a, _| view.get(nodes[a / 2]).displacement[a % 2])
+}
+
+/// `B` (strain `[eps_x, eps_y, gamma_xy]` per nodal translation) from the
+/// physical shape-function derivatives `[dN/dx, dN/dy]`.
+pub(super) fn b_matrix<const NN: usize, const N: usize>(dx: &[[f64; 2]; NN]) -> SMatrix<f64, 3, N> {
+    debug_assert_eq!(N, 2 * NN);
+    let mut b = SMatrix::<f64, 3, N>::zeros();
+    for (i, d) in dx.iter().enumerate() {
+        b[(0, 2 * i)] = d[0];
+        b[(1, 2 * i + 1)] = d[1];
+        b[(2, 2 * i)] = d[1];
+        b[(2, 2 * i + 1)] = d[0];
+    }
+    b
+}
+
+pub(super) fn check_section(
+    thickness: f64,
+    density: f64,
+    material: &crate::model::PlaneMaterial,
+) -> Result<(), &'static str> {
+    if !thickness.is_finite() || thickness <= 0.0 {
+        return Err("thickness must be positive");
+    }
+    if !density.is_finite() || density < 0.0 {
+        return Err("density must be non-negative");
+    }
+    material.validate().map_err(|error| error.message())
+}

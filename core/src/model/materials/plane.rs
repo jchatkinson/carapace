@@ -60,15 +60,21 @@ pub enum PlaneMaterialError {
     NotPositiveDefinite,
 }
 
-impl fmt::Display for PlaneMaterialError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl PlaneMaterialError {
+    pub fn message(&self) -> &'static str {
+        match self {
             PlaneMaterialError::InvalidModulus => "a modulus is not finite and positive",
             PlaneMaterialError::InvalidPoissonRatio => "Poisson ratio is out of range",
             PlaneMaterialError::NotPositiveDefinite => {
                 "the constitutive matrix is not symmetric positive definite"
             }
-        })
+        }
+    }
+}
+
+impl fmt::Display for PlaneMaterialError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message())
     }
 }
 

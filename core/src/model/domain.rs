@@ -10,9 +10,9 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, LoadPatternId, LoadSeries,
-    ModelError, Node, Node3Id, NodeId, NodeView, SparseMatrix, TangentSink, VectorSink, NDF,
-    PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LoadPatternId,
+    LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView, SparseMatrix, TangentSink, VectorSink,
+    NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -238,6 +238,12 @@ where
     /// fiber)` indices against that same order.
     pub fn element_fiber_responses(&self, id: E::Id) -> Option<Vec<Vec<(f64, f64)>>> {
         self.elements[id].fiber_responses(&self.node_view())
+    }
+
+    /// Every Gauss point's committed strain and stress at `id` — `None` for
+    /// every element kind that is not a continuum element.
+    pub fn element_gauss_responses(&self, id: E::Id) -> Option<Vec<GaussResponse>> {
+        self.elements[id].gauss_responses(&self.node_view())
     }
 
     /// Support/equilibrium reaction at `(node, dof)`: net internal element
@@ -516,14 +522,15 @@ where
         if let Some(error) = self.constraint_error {
             return Err(error);
         }
-        let view = self.node_view();
-        for (index, (_, element)) in self.elements.iter().enumerate() {
+        let view = NodeView::new(&self.nodes);
+        for (index, (_, element)) in self.elements.iter_mut().enumerate() {
             element
                 .validate(&view)
                 .map_err(|reason| ModelError::InvalidElement {
                     element: index,
                     reason,
                 })?;
+            element.prepare(&view);
         }
         for (index, (id, _)) in self.nodes.iter().enumerate() {
             for dof in 0..NDOF {
