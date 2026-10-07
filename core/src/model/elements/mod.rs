@@ -16,6 +16,7 @@ mod disp_beam_column;
 mod elastic_beam_column;
 mod force_beam_column;
 mod plane_common;
+mod quad4;
 mod tri3;
 mod truss;
 mod uniform_load;
@@ -24,6 +25,7 @@ mod zero_length;
 pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
+pub use quad4::Quad4;
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
 pub use zero_length::{
@@ -52,6 +54,7 @@ pub enum Element {
     DispBeamColumn(DispBeamColumn),
     ForceBeamColumn(ForceBeamColumn),
     Tri3(Tri3),
+    Quad4(Quad4),
 }
 
 const CONTINUUM: &str = "continuum elements assemble through ElementOps, not the two-node path";
@@ -61,6 +64,7 @@ impl Element {
     pub fn nodes(&self) -> NodeList<NodeId> {
         match self {
             Element::Tri3(t) => t.nodes.into_iter().collect(),
+            Element::Quad4(q) => q.nodes.into_iter().collect(),
             _ => self.pair().into_iter().collect(),
         }
     }
@@ -68,7 +72,7 @@ impl Element {
     /// The two end nodes of a two-node element.
     fn pair(&self) -> [NodeId; 2] {
         match self {
-            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
             Element::Truss(t) => [t.node_i, t.node_j],
             Element::ZeroLength(z) => [z.node_i, z.node_j],
             Element::ZeroLengthSection(z) => [z.node_i, z.node_j],
@@ -100,7 +104,7 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j, load),
-            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -164,7 +168,7 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_mass(node_i, node_j),
-            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -181,7 +185,7 @@ impl Element {
             Element::ElasticBeamColumn(_) => {}
             Element::DispBeamColumn(b) => b.commit(node_i, node_j),
             Element::ForceBeamColumn(b) => b.commit(node_i, node_j, load),
-            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -197,7 +201,7 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.local_force(node_i, node_j),
             Element::DispBeamColumn(b) => b.local_force(node_i, node_j),
             Element::ForceBeamColumn(b) => b.local_force(),
-            Element::Tri3(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
         }
     }
 
@@ -210,7 +214,8 @@ impl Element {
             | Element::ZeroLength(_)
             | Element::ZeroLengthSection(_)
             | Element::ElasticBeamColumn(_)
-            | Element::Tri3(_) => None,
+            | Element::Tri3(_)
+            | Element::Quad4(_) => None,
         }
     }
 }
@@ -233,12 +238,14 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             | Element::DispBeamColumn(_)
             | Element::ForceBeamColumn(_) => DofMask::all(NDF),
             Element::Tri3(t) => t.dof_mask(),
+            Element::Quad4(q) => q.dof_mask(),
         }
     }
 
     fn validate(&self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> Result<(), &'static str> {
         match self {
             Element::Tri3(t) => t.validate(nodes),
+            Element::Quad4(q) => q.validate(nodes),
             _ => Ok(()),
         }
     }
@@ -246,6 +253,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     fn prepare(&mut self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) {
         match self {
             Element::Tri3(t) => t.prepare(nodes),
+            Element::Quad4(q) => q.prepare(nodes),
             _ => {}
         }
     }
@@ -256,6 +264,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     ) -> Option<Vec<GaussResponse>> {
         match self {
             Element::Tri3(t) => Some(t.gauss_responses(nodes)),
+            Element::Quad4(q) => Some(q.gauss_responses(nodes)),
             _ => None,
         }
     }
@@ -266,8 +275,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         load: Option<&ElementLoad>,
         sink: &mut S,
     ) {
-        if let Element::Tri3(t) = self {
-            return t.assemble_tangent(nodes, sink);
+        match self {
+            Element::Tri3(t) => return t.assemble_tangent(nodes, sink),
+            Element::Quad4(q) => return q.assemble_tangent(nodes, sink),
+            _ => {}
         }
         let [i, j] = Element::pair(self);
         let (k, r) = Element::form_tangent_and_resistance(self, nodes.get(i), nodes.get(j), load);
@@ -280,7 +291,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         load: Option<&ElementLoad>,
         sink: &mut S,
     ) {
-        if let Element::Tri3(_) = self {
+        if let Element::Tri3(_) | Element::Quad4(_) = self {
             return; // continuum loads arrive with step 3.6
         }
         let [i, j] = Element::pair(self);
@@ -293,8 +304,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         sink: &mut S,
     ) {
-        if let Element::Tri3(t) = self {
-            return t.assemble_mass(nodes, sink);
+        match self {
+            Element::Tri3(t) => return t.assemble_mass(nodes, sink),
+            Element::Quad4(q) => return q.assemble_mass(nodes, sink),
+            _ => {}
         }
         let [i, j] = Element::pair(self);
         let v = Element::form_mass(self, nodes.get(i), nodes.get(j));
@@ -306,8 +319,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         load: Option<&ElementLoad>,
     ) {
-        if let Element::Tri3(t) = self {
-            return t.commit(nodes);
+        match self {
+            Element::Tri3(t) => return t.commit(nodes),
+            Element::Quad4(q) => return q.commit(nodes),
+            _ => {}
         }
         let [i, j] = Element::pair(self);
         Element::commit(self, nodes.get(i), nodes.get(j), load)
@@ -316,13 +331,16 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     fn local_force_width(&self) -> usize {
         match self {
             Element::Tri3(_) => 6,
+            Element::Quad4(_) => 8,
             _ => ELEMENT_DOF,
         }
     }
 
     fn local_force(&self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> ElementForce {
-        if let Element::Tri3(t) = self {
-            return t.local_force(nodes);
+        match self {
+            Element::Tri3(t) => return t.local_force(nodes),
+            Element::Quad4(q) => return q.local_force(nodes),
+            _ => {}
         }
         let [i, j] = Element::pair(self);
         Element::local_force(self, nodes.get(i), nodes.get(j)).into()
@@ -333,8 +351,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         load: Option<&ElementLoad>,
     ) -> ElementForce {
-        if let Element::Tri3(_) = self {
-            return SVector::<f64, 6>::zeros().into();
+        match self {
+            Element::Tri3(_) => return SVector::<f64, 6>::zeros().into(),
+            Element::Quad4(_) => return SVector::<f64, 8>::zeros().into(),
+            _ => {}
         }
         let [i, j] = Element::pair(self);
         Element::form_local_load_vector(self, nodes.get(i), nodes.get(j), load).into()
@@ -344,7 +364,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         &self,
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
     ) -> Option<Vec<Vec<(f64, f64)>>> {
-        if let Element::Tri3(_) = self {
+        if let Element::Tri3(_) | Element::Quad4(_) = self {
             return None;
         }
         let [i, j] = Element::pair(self);
@@ -712,11 +732,17 @@ mod mask_conformance {
 
     #[test]
     fn continuum_elements_declare_exactly_the_translations_they_stiffen() {
-        let (nodes, [a, b, c, _d]) = nodes_plane();
+        let (nodes, [a, b, c, d]) = nodes_plane();
         let material = || crate::model::PlaneMaterial::plane_stress(30e3, 0.2).unwrap();
         check(
             "Tri3",
             &Element::Tri3(Tri3::new(a, b, c, 0.5, material())),
+            &nodes,
+            true,
+        );
+        check(
+            "Quad4",
+            &Element::Quad4(Quad4::new([a, b, c, d], 0.5, material())),
             &nodes,
             true,
         );
