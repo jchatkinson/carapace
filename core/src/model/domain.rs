@@ -554,7 +554,54 @@ where
                 }
             }
         }
-        self.validate_constraint_state()
+        self.validate_constraint_state()?;
+        self.validate_element_mass_on_constraints()
+    }
+
+    /// Element mass (continuum and frame elements with a density) landing on a DOF that
+    /// is constrained to several unknowns cannot go on a diagonal mass vector; report it
+    /// as a structured error instead of letting `assemble_mass_diagonal` panic.
+    fn validate_element_mass_on_constraints(&self) -> Result<(), ModelError> {
+        if self.constraints.is_empty() {
+            return Ok(());
+        }
+        struct Probe<'a, const NDIM: usize, const NDOF: usize, NId, E>
+        where
+            NId: Key,
+            E: ElementOps<NDIM, NDOF, NId>,
+        {
+            domain: &'a Domain<NDIM, NDOF, NId, E>,
+            offender: Option<(NId, usize)>,
+        }
+        impl<const NDIM: usize, const NDOF: usize, NId, E> VectorSink<NId> for Probe<'_, NDIM, NDOF, NId, E>
+        where
+            NId: Key,
+            E: ElementOps<NDIM, NDOF, NId>,
+        {
+            fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+                for (a, &(node, slot)) in dofs.iter().enumerate() {
+                    let terms = self.domain.dof_terms(node, slot as usize);
+                    if v[a] != 0.0 && terms.as_slice().len() > 1 && self.offender.is_none() {
+                        self.offender = Some((node, slot as usize));
+                    }
+                }
+            }
+        }
+        let view = self.node_view();
+        let mut probe = Probe {
+            domain: self,
+            offender: None,
+        };
+        for element in self.elements.values() {
+            element.assemble_mass(&view, &mut probe);
+        }
+        match probe.offender {
+            Some((node, dof)) => Err(ModelError::MassOnConstrainedDof {
+                node: self.node_index(node),
+                dof,
+            }),
+            None => Ok(()),
+        }
     }
 
     fn node_index(&self, id: NId) -> usize {
