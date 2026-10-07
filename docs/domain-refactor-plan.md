@@ -423,7 +423,7 @@ changes and no dead code); `NodeView` landed here. The old per-element dispatch 
 and `Element3` (`form_tangent_and_resistance`, ...) are now private and the `ElementOps` impls call
 them, so concrete element files were not touched. `Domain::reaction` only evaluates elements that
 touch the node (as before). Result: dump identical to baseline, 243 tests pass, native elastic
-30x6 about 5% slower and wasm within noise (see [refactor-baseline.md](refactor-baseline.md)).
+30x6 about 5% slower and wasm within noise (recorded in docs/refactor-baseline.md, since removed).
 
 **1.3 DOF activation (behavior change).** *Done; deviations below.*
 Implement section 2.2's activation rule on top of the `DofTable`: activation pass
@@ -525,7 +525,7 @@ from `validate` (so `TransientAnalysis::new` returns it); element lumped mass on
 (`assemble_mass_diagonal` called directly) still panics, as before.
 (6) Rigid-link wire tables and the general `linearConstraints` table are Phase 2 (2.1).
 
-**1.5 Phase 1 gate.** *Done; results in [refactor-baseline.md](refactor-baseline.md).* `cargo test --workspace`; `refactor_snapshot` identical;
+**1.5 Phase 1 gate.** *Done; results were in docs/refactor-baseline.md, since removed.* `cargo test --workspace`; `refactor_snapshot` identical;
 `benchmark_frame` within a few percent of the Phase 0 baseline in both native and
 wasm; `comparison/` harness outputs unchanged; wasm size noted. Then: delete
 `refactor_snapshot.rs` (or fold into existing tests) and the baseline note.
