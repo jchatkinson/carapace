@@ -1,4 +1,5 @@
 mod constraint;
+pub mod continuum;
 mod dof_table;
 mod domain;
 mod elements;
