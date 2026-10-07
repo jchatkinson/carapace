@@ -4,7 +4,9 @@
 
 use std::time::Instant;
 
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
+};
 use carapace_core::model::{Domain, Element, Node, PlaneMaterial, Quad4, Quad4Formulation};
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -14,8 +16,12 @@ fn median(mut v: Vec<f64>) -> f64 {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let n: usize = args.first().map_or(70, |a| a.parse().expect("N must be an integer"));
-    let reps: usize = args.get(1).map_or(5, |a| a.parse().expect("reps must be an integer"));
+    let n: usize = args
+        .first()
+        .map_or(70, |a| a.parse().expect("N must be an integer"));
+    let reps: usize = args
+        .get(1)
+        .map_or(5, |a| a.parse().expect("reps must be an integer"));
     let enhanced = args.get(2).is_some_and(|a| a == "enhanced");
 
     let setup = Instant::now();
@@ -33,10 +39,19 @@ fn main() {
         grid.push(row);
     }
     let material = PlaneMaterial::plane_stress(200_000.0, 0.3).unwrap();
-    let formulation = if enhanced { Quad4Formulation::Enhanced } else { Quad4Formulation::Full };
+    let formulation = if enhanced {
+        Quad4Formulation::Enhanced
+    } else {
+        Quad4Formulation::Full
+    };
     for j in 0..n {
         for i in 0..n {
-            let nodes = [grid[j][i], grid[j][i + 1], grid[j + 1][i + 1], grid[j + 1][i]];
+            let nodes = [
+                grid[j][i],
+                grid[j][i + 1],
+                grid[j + 1][i + 1],
+                grid[j + 1][i],
+            ];
             domain.add_element(Element::Quad4(
                 Quad4::new(nodes, 1.0, material.clone()).with_formulation(formulation),
             ));
@@ -48,8 +63,14 @@ fn main() {
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })
-        .algorithm(Algorithm::Newton { tangent: TangentStrategy::Current, line_search: None })
-        .test(ConvergenceTest::NormDispIncr { tol: 1e-9, max_iter: 10 })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormDispIncr {
+            tol: 1e-9,
+            max_iter: 10,
+        })
         .build(domain);
     let setup_ms = setup.elapsed().as_secs_f64() * 1e3;
 
@@ -68,7 +89,12 @@ fn main() {
         }
     }
     let m: Vec<f64> = phases.into_iter().map(median).collect();
-    println!("{n}x{n} Quad4 ({}), {} DOF, {triplets} triplets, {} Newton iterations, tip uy {tip:.6e}", if enhanced { "enhanced" } else { "full" }, 2 * n * (n + 1), result.iterations);
+    println!(
+        "{n}x{n} Quad4 ({}), {} DOF, {triplets} triplets, {} Newton iterations, tip uy {tip:.6e}",
+        if enhanced { "enhanced" } else { "full" },
+        2 * n * (n + 1),
+        result.iterations
+    );
     println!("setup {setup_ms:.1} ms, full step {step_ms:.1} ms");
     println!("per assembly+solve (median of {reps}): elements {:.1} ms, matrix {:.1} ms, first factor {:.1} ms, repeat factor {:.1} ms, solve {:.1} ms", m[0], m[1], m[2], m[3], m[4]);
 }
