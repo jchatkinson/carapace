@@ -77,6 +77,9 @@ Only `header` is required.
 | `elasticBeamColumns2d` / `elasticBeamColumns3d` | `ElasticBeamColumn2dTable` / `ElasticBeamColumn3dTable` | 2D / 3D |
 | `dispBeamColumns2d` / `dispBeamColumns3d` | `FiberBeamColumn2dTable` / `FiberBeamColumn3dTable` | 2D / 3D |
 | `forceBeamColumns2d` / `forceBeamColumns3d` | `FiberBeamColumn2dTable` / `FiberBeamColumn3dTable` | 2D / 3D |
+| `planeMaterials` | `PlaneMaterialSpec[]` | 2D (arena for `triangles`/`quads`) |
+| `triangles` | `TriangleTable` | 2D |
+| `quads` | `QuadTable` | 2D |
 | `zeroLengths` | `ZeroLengthTable` | both |
 | `zeroLengthSections` | `ZeroLengthSectionTable` | both |
 | `equalDofs` | `EqualDofTable` | both |
@@ -149,6 +152,8 @@ where present, a `density` array for mass.
 | `FiberBeamColumn2dTable` (disp and force) | `fiberSection` (index into `FiberTable.sectionOffsets`), `integration: IntegrationSpec[]`, `corotational: boolean[]` |
 | `FiberBeamColumn3dTable` (disp and force) | `g`, `j` (decoupled elastic torsion), `vecXz: [x,y,z][]`, `fiberSection`, `integration` |
 | `ZeroLengthTable` (2D and 3D) | `materials: [row, dof, material][]` (sparse), `friction?: FrictionRow[]`, `orient?: OrientRow[]` |
+| `TriangleTable` (2D) | `nodeIds` (stride 3, counter-clockwise), `thickness`, `material` (index into `planeMaterials`), `density` |
+| `QuadTable` (2D) | `nodeIds` (stride 4, counter-clockwise), `thickness`, `material`, `density`, `formulation: ("full" \| "enhanced")[]` |
 | `ZeroLengthSectionTable` (2D and 3D) | `fiberSection`, `materials: [row, dof, material][]` for DOFs the section does not drive (`uy` in 2D; `uy`, `uz`, `rx` in 3D), `orient?: OrientRow[]` |
 
 Notes:
@@ -172,6 +177,20 @@ Notes:
   no 3D corotational transform. `vecXz` is a vector not parallel to the
   member axis; it fixes the local y/z orientation.
 - `IntegrationSpec`: `{ kind: "legendre" | "lobatto", points }`.
+- **Continuum elements** (`triangles` = `Tri3`, constant strain, one Gauss point; `quads` = `Quad4`,
+  bilinear, 2x2 Gauss points) carry only translations (`ux`, `uy`), so their nodes need no rotational
+  fixity. Nodes must be counter-clockwise; geometry is validated (coincident nodes, a clockwise
+  or degenerate triangle, a quad with a non-positive Jacobian at any corner) and reported as
+  `invalidModel`. `density` gives an exact lumped mass per translational DOF (a quad's masses are the
+  row sums of the consistent mass). `formulation: "enhanced"` selects Wilson-Taylor incompatible
+  modes, which relieve bending locking and need linear materials; it is not a mixed formulation and
+  makes no volumetric-locking guarantee. Mass-bearing continuum elements cannot touch a rigid-link or
+  diaphragm slave node (`invalidModel`: `massOnConstrainedDof`).
+- `PlaneMaterialSpec` (the `planeMaterials` arena; strain is `[eps_x, eps_y, gamma_xy]` with
+  engineering shear): `{ kind: "isotropic", e, nu, state: "planeStress" | "planeStrain" }`,
+  `{ kind: "orthotropic", ex, ey, nuXy, gXy, angle }` (plane stress; `angle` in radians
+  counter-clockwise from global x to material axis 1), `{ kind: "elasticMatrix", d: [d11, d12, d13,
+  d22, d23, d33] }` (packed symmetric `D`). Invalid constants are `invalidPlaneMaterial`.
 - 3D fiber elements have no `corotational` flag and no `transform` field.
 
 ### Fiber sections
@@ -219,7 +238,7 @@ handler (the session chooses it when the model has any).
   named by `elementKind`), `load`, `stage`.
   - `elementKind` (shared with recorders): `"truss" | "elasticBeamColumn2d" |
     "elasticBeamColumn3d" | "dispBeamColumn2d" | "dispBeamColumn3d" |
-    "forceBeamColumn2d" | "forceBeamColumn3d" | "zeroLength" | "zeroLengthSection"`.
+    "forceBeamColumn2d" | "forceBeamColumn3d" | "zeroLength" | "zeroLengthSection" | "tri3" | "quad4"`.
     A kind of the other profile is `elementKindNotInProfile`.
   - `load`: `{ kind: "uniform", wx, wy, wz? }`. Uniform force per length in the
     element's **local** axes: `wx` along the member axis, `wy`/`wz` transverse
@@ -227,6 +246,14 @@ handler (the session chooses it when the model has any).
     means 0; a nonzero value in 2D is `invalidRow`). The beam-column kinds accept
     element loads today; any other `elementKind` fails decode with
     `unsupportedElementLoad`. Several rows for the same element and pattern sum.
+  - Continuum loads (2D `tri3`/`quad4` only; a beam, truss or spring takes none of them, and a
+    continuum element takes no `uniform`, both `unsupportedElementLoad`):
+    `{ kind: "body", bx, by }` (force per unit volume, global axes),
+    `{ kind: "edgeTraction", edge, tx, ty }` (force per unit edge length, global axes) and
+    `{ kind: "edgePressure", edge, pressure }` (positive into the element along the inward
+    normal). Edge `k` joins local node `k` to node `k + 1` (a triangle has edges 0..3, a quad
+    0..4; past that is `invalidRow`). Body forces are integrated with the same weights as the
+    lumped mass, edges with a 2-point Gauss rule. Rows add up per element and pattern.
   - `elementForce` recorders report member end forces including the fixed-end
     effect of element loads (the free end of a loaded cantilever reports zero).
 
@@ -304,6 +331,7 @@ the load (3D: `wx, wy, wz`; 2D: 16 components, `[wx, wy, bx, by, t0x, t0y, p0, .
 | `elementForce`, `elementLoad` | `elementKind`, `elementIndex`, `component` |
 | `modeShape` | `mode`, `node`, `dof` |
 | `fiber` | `elementKind`, `elementIndex`, `point`, `fiber`, `quantity: "strain" \| "stress"` |
+| `gaussPoint` | `elementKind` (`tri3`/`quad4`), `elementIndex`, `point` (`tri3`: 0; `quad4`: 0..4 in node order of the 2x2 rule), `quantity: "strain" \| "stress"`, `component` (0..3 = x, y, xy; engineering shear for strain). The enhanced quad reports the recovered values including the internal modes. Static and transient stages only. |
 
 ## Results: `StepOutcome`
 
@@ -379,6 +407,8 @@ condensed; at least `modes` DOFs must carry mass.
 | `unknownConstraintRow` | `table`, `row` |
 | `tableNotInProfile` | `table` (a 2D/3D formulation table of the other profile is not empty) |
 | `elementKindNotInProfile` | `table` (an element kind of the other profile in a load or recorder) |
+| `invalidGaussPoint` | `recorder`, `point`, `count` (the element's Gauss-point count, 0 for a kind without any) |
+| `invalidPlaneMaterial` | `index`, `reason` |
 | `invalidRecorderComponent` | `recorder` (index), `component`, `width` |
 | `invalidRow` | `table`, `row`, `reason` (a row shape that is wrong for the profile or its sparse encoding) |
 | `invalidOrientation` | `table`, `row` |

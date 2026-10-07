@@ -293,6 +293,74 @@ pub struct NodalLoadTable {
     pub stage: Vec<u32>,
 }
 
+/// A plane (2D continuum) material, referenced by `triangles`/`quads` rows
+/// through the `planeMaterials` arena. Strain is `[eps_x, eps_y, gamma_xy]`
+/// with engineering shear.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PlaneMaterialSpec {
+    /// Isotropic linear elastic.
+    Isotropic {
+        e: f64,
+        nu: f64,
+        state: PlaneStateSpec,
+    },
+    /// Orthotropic plane stress; `angle` is the counter-clockwise angle in
+    /// radians from global x to material axis 1.
+    Orthotropic {
+        ex: f64,
+        ey: f64,
+        nu_xy: f64,
+        g_xy: f64,
+        angle: f64,
+    },
+    /// A symmetric positive-definite `D`, packed upper triangle row by row:
+    /// `[d11, d12, d13, d22, d23, d33]`.
+    ElasticMatrix { d: [f64; 6] },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaneStateSpec {
+    PlaneStress,
+    PlaneStrain,
+}
+
+/// 3-node constant-strain triangles (2D models only). `nodeIds` has stride 3
+/// (counter-clockwise); `material` indexes `planeMaterials`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct TriangleTable {
+    pub node_ids: Vec<u32>,
+    pub thickness: Vec<f64>,
+    pub material: Vec<u32>,
+    pub density: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum Quad4FormulationSpec {
+    Full,
+    /// Wilson-Taylor incompatible modes; linear materials only.
+    Enhanced,
+}
+
+/// 4-node bilinear quadrilaterals (2D models only). `nodeIds` has stride 4
+/// (counter-clockwise); `material` indexes `planeMaterials`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct QuadTable {
+    pub node_ids: Vec<u32>,
+    pub thickness: Vec<f64>,
+    pub material: Vec<u32>,
+    pub density: Vec<f64>,
+    pub formulation: Vec<Quad4FormulationSpec>,
+}
+
 /// Every element formulation, 2D and 3D. A kind that does not belong to the
 /// model's `ndm` is `DecodeError::ElementKindNotInProfile`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
@@ -307,10 +375,12 @@ pub enum ElementKind {
     ForceBeamColumn3d,
     ZeroLength,
     ZeroLengthSection,
+    Tri3,
+    Quad4,
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 9] = [
+    pub const ALL: [ElementKind; 11] = [
         ElementKind::Truss,
         ElementKind::ElasticBeamColumn2d,
         ElementKind::ElasticBeamColumn3d,
@@ -320,6 +390,8 @@ impl ElementKind {
         ElementKind::ForceBeamColumn3d,
         ElementKind::ZeroLength,
         ElementKind::ZeroLengthSection,
+        ElementKind::Tri3,
+        ElementKind::Quad4,
     ];
 
     /// The kind's table name as `DecodeError`s report it (snake_case).
@@ -334,6 +406,8 @@ impl ElementKind {
             ElementKind::ForceBeamColumn3d => "force_beam_columns_3d",
             ElementKind::ZeroLength => "zero_lengths",
             ElementKind::ZeroLengthSection => "zero_length_sections",
+            ElementKind::Tri3 => "triangles",
+            ElementKind::Quad4 => "quads",
         }
     }
 
@@ -344,7 +418,9 @@ impl ElementKind {
             ElementKind::Truss | ElementKind::ZeroLength | ElementKind::ZeroLengthSection => None,
             ElementKind::ElasticBeamColumn2d
             | ElementKind::DispBeamColumn2d
-            | ElementKind::ForceBeamColumn2d => Some(2),
+            | ElementKind::ForceBeamColumn2d
+            | ElementKind::Tri3
+            | ElementKind::Quad4 => Some(2),
             ElementKind::ElasticBeamColumn3d
             | ElementKind::DispBeamColumn3d
             | ElementKind::ForceBeamColumn3d => Some(3),
@@ -355,11 +431,30 @@ impl ElementKind {
         self.only_ndm().is_none_or(|only| only == ndm)
     }
 
-    /// Whether `core` applies an element load to this kind (the beam-columns).
+    /// The 2D continuum elements (they take body and edge loads).
+    pub fn is_continuum(self) -> bool {
+        matches!(self, ElementKind::Tri3 | ElementKind::Quad4)
+    }
+
+    /// Number of edges of a continuum element (zero for every other kind).
+    pub fn edge_count(self) -> u8 {
+        match self {
+            ElementKind::Tri3 => 3,
+            ElementKind::Quad4 => 4,
+            _ => 0,
+        }
+    }
+
+    /// Whether `core` applies a beam `Uniform` load to this kind (the beam-columns).
     pub fn accepts_uniform_load(self) -> bool {
-        !matches!(
+        matches!(
             self,
-            ElementKind::Truss | ElementKind::ZeroLength | ElementKind::ZeroLengthSection
+            ElementKind::ElasticBeamColumn2d
+                | ElementKind::ElasticBeamColumn3d
+                | ElementKind::DispBeamColumn2d
+                | ElementKind::DispBeamColumn3d
+                | ElementKind::ForceBeamColumn2d
+                | ElementKind::ForceBeamColumn3d
         )
     }
 }
@@ -388,6 +483,14 @@ pub enum ElementLoadSpec {
         #[tsify(optional)]
         wz: Option<f64>,
     },
+    /// Body force per unit volume in global axes (continuum elements, 2D).
+    Body { bx: f64, by: f64 },
+    /// Traction per unit length of edge `edge` in global axes; edge `k` joins
+    /// local node `k` to `k + 1` (continuum elements, 2D).
+    EdgeTraction { edge: u8, tx: f64, ty: f64 },
+    /// Pressure on edge `edge`, positive into the element along the inward
+    /// normal (continuum elements, 2D).
+    EdgePressure { edge: u8, pressure: f64 },
 }
 
 /// Identity multi-point constraints (`core::Domain::equal_dof`'s doc

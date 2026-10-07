@@ -269,6 +269,13 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         load: Option<&Self::Load>,
     ) -> ElementForce;
 
+    /// How many Gauss points `gauss_responses` reports (zero for elements that
+    /// are not continuum elements); the bound a Gauss-point recorder's `point`
+    /// is checked against.
+    fn gauss_point_count(&self) -> usize {
+        0
+    }
+
     /// Every Gauss point's committed strain and stress; `None` for every
     /// element that is not a continuum element.
     fn gauss_responses(

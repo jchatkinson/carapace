@@ -44,6 +44,18 @@ pub enum DecodeError {
         component: u8,
         width: u32,
     },
+    /// A Gauss-point recorder names a point the element does not have (`count`
+    /// is the element's Gauss-point count, zero for a non-continuum kind).
+    InvalidGaussPoint {
+        recorder: u32,
+        point: u32,
+        count: u32,
+    },
+    /// A plane material's constants are unusable.
+    InvalidPlaneMaterial {
+        index: u32,
+        reason: &'static str,
+    },
     /// A row's shape is wrong for the profile or its sparse encoding (a
     /// friction row with the wrong number of shear DOFs, a 2D `orient` row
     /// with `yp`, `fibers.z` not parallel to `y`, malformed offsets, ...).

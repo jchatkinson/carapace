@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use tables::{
     ElasticBeamColumn2dTable, ElasticBeamColumn3dTable, ElementLoadTable, EqualDofTable,
     FiberBeamColumn2dTable, FiberBeamColumn3dTable, FiberTable, LinearConstraintTable,
-    LoadPatternTable, NodalLoadTable, NodeTable, RigidDiaphragmTable, RigidLinkTable, TrussTable,
-    ZeroLengthSectionTable, ZeroLengthTable,
+    LoadPatternTable, NodalLoadTable, NodeTable, PlaneMaterialSpec, QuadTable, RigidDiaphragmTable,
+    RigidLinkTable, TriangleTable, TrussTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 
 /// Small structured-clone header fields — everything else in
@@ -108,6 +108,16 @@ pub struct CarapaceInputV1 {
     #[serde(default)]
     #[tsify(optional)]
     pub equal_dofs: EqualDofTable,
+    /// Arena of plane materials for `triangles`/`quads` (2D models only).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub plane_materials: Vec<PlaneMaterialSpec>,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub triangles: TriangleTable,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub quads: QuadTable,
     #[serde(default)]
     #[tsify(optional)]
     pub rigid_diaphragms: RigidDiaphragmTable,

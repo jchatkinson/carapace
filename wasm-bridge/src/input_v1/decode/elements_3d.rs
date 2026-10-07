@@ -16,7 +16,8 @@ use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::session::Session3;
 use crate::input_v1::tables::{
-    Axis3Spec, ElementKind, TransformSpec3, ZeroLengthSectionTable, ZeroLengthTable,
+    Axis3Spec, ElementKind, ElementLoadSpec, TransformSpec3, ZeroLengthSectionTable,
+    ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -35,6 +36,15 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
         (
             "force_beam_columns_2d",
             input.force_beam_columns_2d.node_i.is_empty(),
+        ),
+        ("plane_materials", input.plane_materials.is_empty()),
+        (
+            "triangles",
+            input.triangles.thickness.is_empty() && input.triangles.node_ids.is_empty(),
+        ),
+        (
+            "quads",
+            input.quads.thickness.is_empty() && input.quads.node_ids.is_empty(),
         ),
     ])?;
     check_fibers(&input.fibers, NDM)?;
@@ -158,8 +168,13 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
     );
 
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    finish(domain, &input, node_ids, elements, |wx, wy, wz| {
-        ElementLoad3::Uniform { wx, wy, wz }
+    finish(domain, &input, node_ids, elements, |spec| match *spec {
+        ElementLoadSpec::Uniform { wx, wy, wz } => Some(ElementLoad3::Uniform {
+            wx,
+            wy,
+            wz: wz.unwrap_or(0.0),
+        }),
+        _ => None,
     })
 }
 

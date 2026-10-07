@@ -472,14 +472,14 @@ where
 
 /// Everything after the elements: load patterns, per-stage nodal and element
 /// loads, stage compilation, recorder resolution, model validation, and the
-/// session. `make_load(wx, wy, wz)` builds the profile's element load (`wz` is
-/// `0` in 2D, where a nonzero one is rejected).
+/// session. `make_load(spec)` builds the profile's element load from a wire load, or
+/// `None` when the profile has no such load (a 3D model's continuum loads).
 pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     mut domain: Domain<NDIM, NDOF, NId, E>,
     input: &CarapaceInputV1,
     node_ids: Vec<NId>,
     elements: ElementIds<E::Id>,
-    make_load: impl Fn(f64, f64, f64) -> E::Load,
+    make_load: impl Fn(&ElementLoadSpec) -> Option<E::Load>,
 ) -> Result<ModelSession<NDIM, NDOF, NId, E>, DecodeError>
 where
     NId: Key + Copy,
@@ -539,27 +539,52 @@ where
                 table: kind.table(),
             });
         }
-        if !kind.accepts_uniform_load() {
+        let spec = loads.load[i];
+        let carried = match spec {
+            ElementLoadSpec::Uniform { .. } => kind.accepts_uniform_load(),
+            ElementLoadSpec::Body { .. }
+            | ElementLoadSpec::EdgeTraction { .. }
+            | ElementLoadSpec::EdgePressure { .. } => kind.is_continuum(),
+        };
+        if !carried {
             return Err(DecodeError::UnsupportedElementLoad {
                 element_kind: kind.table(),
             });
         }
-        let element_id = elements.get(kind, loads.element_index[i], ndm)?;
-        let ElementLoadSpec::Uniform { wx, wy, wz } = loads.load[i];
-        if ndm == 2 && wz.is_some_and(|wz| wz != 0.0) {
+        let edge = match spec {
+            ElementLoadSpec::EdgeTraction { edge, .. }
+            | ElementLoadSpec::EdgePressure { edge, .. } => Some(edge),
+            _ => None,
+        };
+        if edge.is_some_and(|edge| edge >= kind.edge_count()) {
             return Err(invalid_row(
                 "element_loads",
                 i,
-                "wz is only valid in a 3D model",
+                "edge is past the element's last edge",
             ));
         }
+        let element_id = elements.get(kind, loads.element_index[i], ndm)?;
+        if ndm == 2 {
+            if let ElementLoadSpec::Uniform { wz: Some(wz), .. } = spec {
+                if wz != 0.0 {
+                    return Err(invalid_row(
+                        "element_loads",
+                        i,
+                        "wz is only valid in a 3D model",
+                    ));
+                }
+            }
+        }
+        let load = make_load(&spec).ok_or(DecodeError::UnsupportedElementLoad {
+            element_kind: kind.table(),
+        })?;
         element_loads_by_stage
             .get_mut(loads.stage[i] as usize)
             .ok_or(DecodeError::UnknownStageIndex {
                 table: "element_loads",
                 row: i as u32,
             })?
-            .push((pattern, element_id, make_load(wx, wy, wz.unwrap_or(0.0))));
+            .push((pattern, element_id, load));
     }
 
     let stages = compile_stages(
@@ -657,6 +682,30 @@ where
                     fiber,
                     response: quantity,
                 },
+                RecorderSpec::GaussPoint {
+                    element_kind,
+                    element_index,
+                    point,
+                    quantity,
+                    component,
+                } => {
+                    let element = elements.get(element_kind, element_index, ndm)?;
+                    let count = domain.element_gauss_point_count(element);
+                    if point as usize >= count {
+                        return Err(DecodeError::InvalidGaussPoint {
+                            recorder: index as u32,
+                            point,
+                            count: count as u32,
+                        });
+                    }
+                    component_within(component, 3)?;
+                    ResolvedRecorder::GaussPoint {
+                        element,
+                        point,
+                        quantity,
+                        component,
+                    }
+                }
             })
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;

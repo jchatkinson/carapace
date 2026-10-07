@@ -418,6 +418,14 @@ pub enum FiberResponseKind {
     Stress,
 }
 
+/// Whether a [`RecorderSpec::GaussPoint`] reads strain or stress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum GaussQuantity {
+    Strain,
+    Stress,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
     tag = "response",
@@ -493,6 +501,20 @@ pub enum RecorderSpec {
         point: u32,
         fiber: u32,
         quantity: FiberResponseKind,
+    },
+    /// One component of the strain or stress at one Gauss point of a continuum
+    /// element (`tri3`: 1 point, `quad4`: 4, in `core`'s Gauss-point order).
+    /// `component` is `0..3` = `x, y, xy` (engineering shear for strain). Valid
+    /// during `Static` and `Transient` stages; records nothing during `Modal`.
+    /// `point` past the element's Gauss-point count (or any point of a
+    /// non-continuum kind) is `DecodeError::InvalidGaussPoint`; `component`
+    /// past 2 is `InvalidRecorderComponent`.
+    GaussPoint {
+        element_kind: ElementKind,
+        element_index: u32,
+        point: u32,
+        quantity: GaussQuantity,
+        component: u8,
     },
 }
 

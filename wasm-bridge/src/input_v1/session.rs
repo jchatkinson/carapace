@@ -27,7 +27,7 @@ use serde::Serialize;
 use slotmap::Key;
 
 use super::error::ModelErrorDetail;
-use super::sequence::FiberResponseKind;
+use super::sequence::{FiberResponseKind, GaussQuantity};
 
 /// Shared by `record_sample`'s `Static`/`Transient` arms: resolves a
 /// `ResolvedRecorder::Fiber` against whatever `element`'s current fiber
@@ -53,6 +53,27 @@ where
         FiberResponseKind::Strain => strain,
         FiberResponseKind::Stress => stress,
     })
+}
+
+fn gauss_value<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    element: E::Id,
+    point: u32,
+    quantity: GaussQuantity,
+    component: u8,
+) -> Option<f64>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    let response = *domain
+        .element_gauss_responses(element)?
+        .get(point as usize)?;
+    let values = match quantity {
+        GaussQuantity::Strain => response.strain,
+        GaussQuantity::Stress => response.stress,
+    };
+    values.get(component as usize).copied()
 }
 
 /// `AnalysisError`'s fields, restated so `advance`'s result doesn't need to
@@ -297,6 +318,14 @@ pub enum ResolvedRecorder<NId, EId> {
         point: u32,
         fiber: u32,
         response: super::sequence::FiberResponseKind,
+    },
+    /// Valid during `Static`/`Transient` (`RecorderSpec::GaussPoint`'s doc
+    /// comment); skipped during `Modal`.
+    GaussPoint {
+        element: EId,
+        point: u32,
+        quantity: super::sequence::GaussQuantity,
+        component: u8,
     },
 }
 
@@ -992,6 +1021,12 @@ where
                             fiber,
                             response,
                         } => fiber_value(analysis.domain(), element, point, fiber, response),
+                        ResolvedRecorder::GaussPoint {
+                            element,
+                            point,
+                            quantity,
+                            component,
+                        } => gauss_value(analysis.domain(), element, point, quantity, component),
                         ResolvedRecorder::NodeVel { .. }
                         | ResolvedRecorder::NodeAccel { .. }
                         | ResolvedRecorder::ModeShape { .. } => None,
@@ -1034,6 +1069,12 @@ where
                             fiber,
                             response,
                         } => fiber_value(analysis.domain(), element, point, fiber, response),
+                        ResolvedRecorder::GaussPoint {
+                            element,
+                            point,
+                            quantity,
+                            component,
+                        } => gauss_value(analysis.domain(), element, point, quantity, component),
                         ResolvedRecorder::ModeShape { .. } => None,
                     };
                     if let Some(value) = value {

@@ -271,6 +271,14 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         }
     }
 
+    fn gauss_point_count(&self) -> usize {
+        match self {
+            Element::Tri3(_) => 1,
+            Element::Quad4(_) => 4,
+            _ => 0,
+        }
+    }
+
     fn gauss_responses(
         &self,
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,

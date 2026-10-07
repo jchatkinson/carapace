@@ -240,6 +240,11 @@ where
         self.elements[id].fiber_responses(&self.node_view())
     }
 
+    /// Number of Gauss points of the continuum element `id` (zero for any other kind).
+    pub fn element_gauss_point_count(&self, id: E::Id) -> usize {
+        self.elements[id].gauss_point_count()
+    }
+
     /// Every Gauss point's committed strain and stress at `id` — `None` for
     /// every element kind that is not a continuum element.
     pub fn element_gauss_responses(&self, id: E::Id) -> Option<Vec<GaussResponse>> {

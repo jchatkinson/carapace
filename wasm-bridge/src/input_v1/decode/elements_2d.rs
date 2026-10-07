@@ -6,8 +6,8 @@
 
 use carapace_core::model::{
     DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad, Fiber,
-    FiberSection, ForceBeamColumn, Friction, GeomTransf, Material, NodeId, Truss, ZeroLength,
-    ZeroLengthSection,
+    FiberSection, ForceBeamColumn, Friction, GeomTransf, Material, NodeId, PlaneMaterial, Quad4,
+    Quad4Formulation, Tri3, Truss, ZeroLength, ZeroLengthSection,
 };
 
 use super::shared::{
@@ -19,7 +19,8 @@ use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::session::Session2;
 use crate::input_v1::tables::{
-    ElementKind, TransformSpec, ZeroLengthSectionTable, ZeroLengthTable,
+    ElementKind, ElementLoadSpec, PlaneMaterialSpec, PlaneStateSpec, Quad4FormulationSpec,
+    QuadTable, TransformSpec, TriangleTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -145,10 +146,164 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         )?,
     );
 
+    let plane_materials = resolve_plane_materials(&input.plane_materials)?;
+    elements.set(
+        ElementKind::Tri3,
+        add_triangles(&mut domain, &input.triangles, &node_at, &plane_materials)?,
+    );
+    elements.set(
+        ElementKind::Quad4,
+        add_quads(&mut domain, &input.quads, &node_at, &plane_materials)?,
+    );
+
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    finish(domain, &input, node_ids, elements, |wx, wy, _| {
-        ElementLoad::uniform(wx, wy)
+    finish(domain, &input, node_ids, elements, |spec| {
+        Some(match *spec {
+            ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
+            ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),
+            ElementLoadSpec::EdgeTraction { edge, tx, ty } => {
+                ElementLoad::edge_traction(edge as usize, tx, ty)
+            }
+            ElementLoadSpec::EdgePressure { edge, pressure } => {
+                ElementLoad::edge_pressure(edge as usize, pressure)
+            }
+        })
     })
+}
+
+fn resolve_plane_materials(specs: &[PlaneMaterialSpec]) -> Result<Vec<PlaneMaterial>, DecodeError> {
+    specs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            match *spec {
+                PlaneMaterialSpec::Isotropic {
+                    e,
+                    nu,
+                    state: PlaneStateSpec::PlaneStress,
+                } => PlaneMaterial::plane_stress(e, nu),
+                PlaneMaterialSpec::Isotropic {
+                    e,
+                    nu,
+                    state: PlaneStateSpec::PlaneStrain,
+                } => PlaneMaterial::plane_strain(e, nu),
+                PlaneMaterialSpec::Orthotropic {
+                    ex,
+                    ey,
+                    nu_xy,
+                    g_xy,
+                    angle,
+                } => PlaneMaterial::orthotropic(ex, ey, nu_xy, g_xy, angle),
+                PlaneMaterialSpec::ElasticMatrix { d } => PlaneMaterial::elastic_matrix(d),
+            }
+            .map_err(|error| DecodeError::InvalidPlaneMaterial {
+                index: index as u32,
+                reason: error.message(),
+            })
+        })
+        .collect()
+}
+
+/// Checks that every per-row array of a continuum table has `rows` entries
+/// (`node_ids` has `rows * nodes_per_row`).
+fn check_continuum_lengths(
+    table: &'static str,
+    rows: usize,
+    lengths: &[usize],
+) -> Result<(), DecodeError> {
+    if lengths.iter().any(|&len| len != rows) {
+        return Err(DecodeError::InvalidRow {
+            table,
+            row: 0,
+            reason: "every per-row array must have one entry per element",
+        });
+    }
+    Ok(())
+}
+
+fn plane_material_at<'a>(
+    materials: &'a [PlaneMaterial],
+    table: &'static str,
+    row: u32,
+) -> Result<&'a PlaneMaterial, DecodeError> {
+    materials
+        .get(row as usize)
+        .ok_or(DecodeError::UnknownMaterialIndex { table, row })
+}
+
+fn add_triangles(
+    domain: &mut Domain,
+    table: &TriangleTable,
+    node_at: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+    materials: &[PlaneMaterial],
+) -> Result<Vec<ElementId>, DecodeError> {
+    const TABLE: &str = "triangles";
+    let rows = table.thickness.len();
+    if table.node_ids.len() != 3 * rows {
+        return Err(DecodeError::InvalidRow {
+            table: TABLE,
+            row: 0,
+            reason: "nodeIds must have stride 3",
+        });
+    }
+    check_continuum_lengths(TABLE, rows, &[table.material.len(), table.density.len()])?;
+    (0..rows)
+        .map(|i| {
+            let n = |k: usize| node_at(table.node_ids[3 * i + k], TABLE);
+            let element = Tri3::new(
+                n(0)?,
+                n(1)?,
+                n(2)?,
+                table.thickness[i],
+                plane_material_at(materials, TABLE, table.material[i])?.clone(),
+            )
+            .with_density(table.density[i]);
+            Ok(domain.add_element(Element::Tri3(element)))
+        })
+        .collect()
+}
+
+fn add_quads(
+    domain: &mut Domain,
+    table: &QuadTable,
+    node_at: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+    materials: &[PlaneMaterial],
+) -> Result<Vec<ElementId>, DecodeError> {
+    const TABLE: &str = "quads";
+    let rows = table.thickness.len();
+    if table.node_ids.len() != 4 * rows {
+        return Err(DecodeError::InvalidRow {
+            table: TABLE,
+            row: 0,
+            reason: "nodeIds must have stride 4",
+        });
+    }
+    check_continuum_lengths(
+        TABLE,
+        rows,
+        &[
+            table.material.len(),
+            table.density.len(),
+            table.formulation.len(),
+        ],
+    )?;
+    (0..rows)
+        .map(|i| {
+            let n = |k: usize| node_at(table.node_ids[4 * i + k], TABLE);
+            let formulation = match table.formulation[i] {
+                Quad4FormulationSpec::Full => Quad4Formulation::Full,
+                Quad4FormulationSpec::Enhanced => Quad4Formulation::Enhanced,
+            };
+            let element = Quad4::new(
+                [n(0)?, n(1)?, n(2)?, n(3)?],
+                table.thickness[i],
+                plane_material_at(materials, TABLE, table.material[i])?.clone(),
+            )
+            .with_density(table.density[i])
+            .with_formulation(formulation);
+            Ok(domain.add_element(Element::Quad4(element)))
+        })
+        .collect()
 }
 
 fn add_zero_lengths(

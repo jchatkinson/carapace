@@ -260,4 +260,31 @@ badComponent.trusses = { nodeI: [0], nodeJ: [1], area: [1], material: [0], densi
 const componentError = expectThrow(() => decodeInput(badComponent)) as DecodeError;
 assert(componentError.kind === "invalidRecorderComponent" && componentError.width === 16, "recorder component bound");
 
-console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, configurable static/transient solvers, arc length, legacy inputs, errors.");
+// Continuum elements: a two-quad patch under an edge traction, Gauss-point stress crossing the boundary.
+const continuum = emptyInput(2);
+continuum.nodes = { coords: [0, 0, 1, 0, 2, 0, 0, 1, 1, 1, 2, 1], fixed: [3, 0, 0, 3, 0, 0], massNodeIndex: [], mass: [] };
+continuum.planeMaterials = [{ kind: "isotropic", e: 1000, nu: 0, state: "planeStress" }];
+continuum.quads = { nodeIds: [0, 1, 4, 3, 1, 2, 5, 4], thickness: [1, 1], material: [0, 0], density: [0, 0], formulation: ["full", "enhanced"] };
+continuum.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
+continuum.elementLoads = { pattern: [0], elementKind: ["quad4"], elementIndex: [1], load: [{ kind: "edgeTraction", edge: 1, tx: 1, ty: 0 }], stage: [0] };
+continuum.sequence = {
+  stages: [{ kind: "static", id: "pull", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: "linear", holdPatternsAfter: [] }],
+  recorders: [{ response: "gaussPoint", elementKind: "quad4", elementIndex: 0, point: 2, quantity: "stress", component: 0 }],
+};
+{
+  const session = decodeInput(continuum);
+  try {
+    const outcome = session.advance(1);
+    assert(outcome.error === undefined, "continuum run");
+    // Uniform tension of 1 per unit length over unit height: sigma_x = 1 everywhere.
+    assert(Math.abs(outcome.recorderBatches[0].samples[0][1] - 1) < 1e-9, "quad stress");
+  } finally { session.free(); }
+}
+const gaussError = expectThrow(() => decodeInput({
+  ...continuum, sequence: { ...continuum.sequence!, recorders: [{ response: "gaussPoint", elementKind: "quad4", elementIndex: 0, point: 4, quantity: "strain", component: 0 }] },
+})) as DecodeError;
+assert(gaussError.kind === "invalidGaussPoint" && gaussError.count === 4, "gauss point bound");
+const planeError = expectThrow(() => decodeInput({ ...continuum, planeMaterials: [{ kind: "isotropic", e: -1, nu: 0, state: "planeStress" }] })) as DecodeError;
+assert(planeError.kind === "invalidPlaneMaterial", "plane material validation");
+
+console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, configurable static/transient solvers, arc length, legacy inputs, errors.");
