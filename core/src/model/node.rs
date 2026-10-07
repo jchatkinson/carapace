@@ -71,8 +71,6 @@ pub struct Node<const NDIM: usize = PLANAR_NDIM, const NDOF: usize = 3> {
     /// Lumped nodal mass per DOF — a user-assigned point mass, additive with
     /// any element-consistent lumped mass.
     pub mass: [f64; NDOF],
-    /// Equation number for each free DOF, assigned by the owning domain.
-    pub(crate) equation: [Option<usize>; NDOF],
 }
 
 /// Explicit planar node specialization, useful where a profile must be named
@@ -92,7 +90,6 @@ impl<const NDIM: usize, const NDOF: usize> Node<NDIM, NDOF> {
             velocity: [0.0; NDOF],
             acceleration: [0.0; NDOF],
             mass: [0.0; NDOF],
-            equation: [None; NDOF],
         }
     }
 

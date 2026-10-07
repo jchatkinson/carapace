@@ -366,9 +366,9 @@ Ordered so every commit builds and passes: `DofTable` lands with every DOF activ
 before `Node.equation` goes away; the trait change carries its dependent signature
 changes with it; activation (the behavior change) is its own commit.
 
-**1.1 `DofTable` and `NodeView` (structure only, every DOF still active).**
-Add the `DofTable` owned by `Domain` and `NodeView<NDIM, NDOF, NId>` (a thin
-read-only wrapper over the node store with `get(id)`). The table reproduces today's
+**1.1 `DofTable` (structure only, every DOF still active).** *Done.*
+Add the `DofTable` owned by `Domain` (`NodeView`, a thin read-only wrapper over the
+node store, moved to 1.2 where it is first used, to avoid dead code in between). The table reproduces today's
 numbering exactly (all slots active, node-insertion order, same identity/affine
 handling), is the only source of equation numbers, and replaces `Node.equation` in
 the same commit (`equation_of`, `rotational_equations`, `direction_incidence`,

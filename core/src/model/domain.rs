@@ -1,9 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use faer::sparse::Triplet;
 use nalgebra::{DVector, SVector};
 use slotmap::{Key, SlotMap};
 
+use super::dof_table::{DofEntry, DofTable};
 use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
@@ -149,12 +150,10 @@ pub struct Domain<
     /// committed state without a time of their own (modal) evaluate element
     /// loads at.
     committed_time: f64,
-    /// Resolved (at `number_dofs` time) affine terms for every
-    /// `AffineConstraint`-covered `(node, dof)` — see `AffineConstraint`'s
-    /// doc comment. Empty for every domain that only uses `equal_dof`/
-    /// planar `rigid_diaphragm` (both stay on the `mp_constraints` identity
-    /// fast path, which never touches this map at all).
-    dof_transform: HashMap<(NId, usize), Vec<(usize, f64)>>,
+    /// How every node DOF maps onto the free-DOF system (equation number,
+    /// or resolved affine terms for `AffineConstraint`-covered DOFs),
+    /// rebuilt by `number_dofs`.
+    dofs: DofTable<NId, NDOF>,
 }
 
 /// `Domain`'s spatial instantiation — six-DOF `Node3`/`Element3`. See
@@ -184,7 +183,7 @@ where
             default_pattern: self.default_pattern,
             num_free_dofs: self.num_free_dofs,
             committed_time: self.committed_time,
-            dof_transform: self.dof_transform.clone(),
+            dofs: self.dofs.clone(),
         }
     }
 }
@@ -225,7 +224,7 @@ where
             default_pattern,
             num_free_dofs: 0,
             committed_time: 0.0,
-            dof_transform: HashMap::new(),
+            dofs: DofTable::default(),
         }
     }
 
@@ -477,7 +476,10 @@ where
     /// `gather_displacement`/`scatter_state`'s broader internal-state
     /// surface just for that one lookup.
     pub fn equation_of(&self, node: NId, dof: usize) -> Option<usize> {
-        self.nodes[node].equation[dof]
+        match self.dofs.entry(node, dof) {
+            DofEntry::Free(eq) => Some(eq),
+            DofEntry::Fixed | DofEntry::Affine { .. } => None,
+        }
     }
 
     /// `true` for every free-DOF equation that is a rotation (local DOF
@@ -489,9 +491,9 @@ where
     /// translation scales.
     pub(crate) fn rotational_equations(&self) -> Vec<bool> {
         let mut rotational = vec![false; self.num_free_dofs];
-        for (_, node) in self.nodes.iter() {
+        for (id, _) in self.nodes.iter() {
             for dof in NDIM..NDOF {
-                if let Some(eq) = node.equation[dof] {
+                if let DofEntry::Free(eq) = self.dofs.entry(id, dof) {
                     rotational[eq] = true;
                 }
             }
@@ -534,23 +536,22 @@ where
             )
             .collect();
 
+        let mut table = DofTable::<NId, NDOF>::for_nodes(self.nodes.keys());
         let mut next = 0;
-        for (id, node) in self.nodes.iter_mut() {
+        for (id, node) in self.nodes.iter() {
             for dof in 0..NDOF {
-                node.equation[dof] = if node.fixed[dof] || constrained_dofs.contains(&(id, dof)) {
-                    None
-                } else {
-                    let eq = next;
-                    next += 1;
-                    Some(eq)
-                };
+                if node.fixed[dof] || constrained_dofs.contains(&(id, dof)) {
+                    continue;
+                }
+                table.set(id, dof, DofEntry::Free(next));
+                next += 1;
             }
         }
 
         for constraint in &self.mp_constraints {
-            let retained_eq = self.nodes[constraint.retained].equation;
             for &dof in &constraint.dofs {
-                self.nodes[constraint.constrained].equation[dof] = retained_eq[dof];
+                let retained = table.entry(constraint.retained, dof);
+                table.set(constraint.constrained, dof, retained);
             }
         }
 
@@ -564,28 +565,30 @@ where
         // a retained dof that's itself affine-constrained (chained
         // diaphragms) is rejected, since that would need transform
         // composition this crate doesn't implement.
-        self.dof_transform.clear();
         for constraint in &self.affine_constraints {
+            let retained_node = &self.nodes[constraint.retained];
             for (dof, terms) in &constraint.ties {
-                let retained_node = &self.nodes[constraint.retained];
                 let resolved: Vec<(usize, f64)> = terms
                     .iter()
-                    .filter_map(|&(retained_dof, coeff)| match retained_node.equation[retained_dof] {
-                        Some(eq) => Some((eq, coeff)),
-                        None if retained_node.fixed[retained_dof] => None,
-                        None => panic!(
-                            "rigid_diaphragm: the retained node's translation and rotation-about-normal dofs must \
-                             each be either free or fixed, not themselves multi-point-constrained — a diaphragm's \
-                             retained node can't itself be another diaphragm's slave (chained diaphragms aren't \
-                             supported)"
-                        ),
+                    .filter_map(|&(retained_dof, coeff)| {
+                        match table.entry(constraint.retained, retained_dof) {
+                            DofEntry::Free(eq) => Some((eq, coeff)),
+                            _ if retained_node.fixed[retained_dof] => None,
+                            _ => panic!(
+                                "rigid_diaphragm: the retained node's translation and rotation-about-normal dofs must \
+                                 each be either free or fixed, not themselves multi-point-constrained — a diaphragm's \
+                                 retained node can't itself be another diaphragm's slave (chained diaphragms aren't \
+                                 supported)"
+                            ),
+                        }
                     })
                     .collect();
-                self.dof_transform
-                    .insert((constraint.constrained, *dof), resolved);
+                let entry = table.push_terms(&resolved);
+                table.set(constraint.constrained, *dof, entry);
             }
         }
 
+        self.dofs = table;
         self.num_free_dofs = next;
         next
     }
@@ -617,12 +620,10 @@ where
     /// dofs, and affine-tied (rigid-diaphragm) dofs uniformly rather than
     /// three separate code paths.
     fn dof_terms(&self, node_id: NId, dof: usize) -> DofTerms {
-        if let Some(eq) = self.nodes[node_id].equation[dof] {
-            DofTerms::single(eq)
-        } else if let Some(terms) = self.dof_transform.get(&(node_id, dof)) {
-            DofTerms::from_slice(terms)
-        } else {
-            DofTerms::empty()
+        match self.dofs.entry(node_id, dof) {
+            DofEntry::Free(eq) => DofTerms::single(eq),
+            DofEntry::Affine { start, len } => DofTerms::from_slice(self.dofs.terms(start, len)),
+            DofEntry::Fixed => DofTerms::empty(),
         }
     }
 
@@ -856,8 +857,8 @@ where
     /// not every step (like `mass` itself).
     pub(crate) fn direction_incidence(&self, dof_direction: usize) -> DVector<f64> {
         let mut incidence = DVector::<f64>::zeros(self.num_free_dofs);
-        for (_, node) in self.nodes.iter() {
-            if let Some(eq) = node.equation[dof_direction] {
+        for (id, _) in self.nodes.iter() {
+            if let DofEntry::Free(eq) = self.dofs.entry(id, dof_direction) {
                 incidence[eq] = 1.0;
             }
         }
@@ -897,16 +898,22 @@ where
     /// coefficients, no offset term), so it holds identically for an
     /// increment as it does for an absolute displacement.
     pub(crate) fn apply_displacement_increment(&mut self, du: &DVector<f64>) {
-        for (_, node) in self.nodes.iter_mut() {
+        for (id, node) in self.nodes.iter_mut() {
             for dof in 0..NDOF {
-                if let Some(eq) = node.equation[dof] {
-                    node.displacement[dof] += du[eq];
+                match self.dofs.entry(id, dof) {
+                    DofEntry::Free(eq) => node.displacement[dof] += du[eq],
+                    DofEntry::Affine { start, len } => {
+                        let delta: f64 = self
+                            .dofs
+                            .terms(start, len)
+                            .iter()
+                            .map(|&(eq, coeff)| coeff * du[eq])
+                            .sum();
+                        node.displacement[dof] += delta;
+                    }
+                    DofEntry::Fixed => {}
                 }
             }
-        }
-        for (&(node_id, dof), terms) in self.dof_transform.iter() {
-            let delta: f64 = terms.iter().map(|&(eq, coeff)| coeff * du[eq]).sum();
-            self.nodes[node_id].displacement[dof] += delta;
         }
     }
 
@@ -924,9 +931,9 @@ where
     }
     fn gather(&self, get: impl Fn(&Node<NDIM, NDOF>, usize) -> f64) -> DVector<f64> {
         let mut v = DVector::<f64>::zeros(self.num_free_dofs);
-        for (_, node) in self.nodes.iter() {
+        for (id, node) in self.nodes.iter() {
             for dof in 0..NDOF {
-                if let Some(eq) = node.equation[dof] {
+                if let DofEntry::Free(eq) = self.dofs.entry(id, dof) {
                     v[eq] = get(node, dof);
                 }
             }
@@ -941,26 +948,28 @@ where
     /// `v`/`a` the same way — the linear relation holds identically for
     /// displacement, velocity, and acceleration.
     pub(crate) fn scatter_state(&mut self, u: &DVector<f64>, v: &DVector<f64>, a: &DVector<f64>) {
-        for (_, node) in self.nodes.iter_mut() {
+        for (id, node) in self.nodes.iter_mut() {
             for dof in 0..NDOF {
-                if let Some(eq) = node.equation[dof] {
-                    node.displacement[dof] = u[eq];
-                    node.velocity[dof] = v[eq];
-                    node.acceleration[dof] = a[eq];
+                match self.dofs.entry(id, dof) {
+                    DofEntry::Free(eq) => {
+                        node.displacement[dof] = u[eq];
+                        node.velocity[dof] = v[eq];
+                        node.acceleration[dof] = a[eq];
+                    }
+                    DofEntry::Affine { start, len } => {
+                        let (mut du, mut dv, mut da) = (0.0, 0.0, 0.0);
+                        for &(eq, coeff) in self.dofs.terms(start, len) {
+                            du += coeff * u[eq];
+                            dv += coeff * v[eq];
+                            da += coeff * a[eq];
+                        }
+                        node.displacement[dof] = du;
+                        node.velocity[dof] = dv;
+                        node.acceleration[dof] = da;
+                    }
+                    DofEntry::Fixed => {}
                 }
             }
-        }
-        for (&(node_id, dof), terms) in self.dof_transform.iter() {
-            let (mut du, mut dv, mut da) = (0.0, 0.0, 0.0);
-            for &(eq, coeff) in terms {
-                du += coeff * u[eq];
-                dv += coeff * v[eq];
-                da += coeff * a[eq];
-            }
-            let node = &mut self.nodes[node_id];
-            node.displacement[dof] = du;
-            node.velocity[dof] = dv;
-            node.acceleration[dof] = da;
         }
     }
 
@@ -1181,5 +1190,82 @@ mod domain3_tests {
         let axial_disp = node.displacement[SpatialDof::Ux as usize] * 3.0 / 5.0
             + node.displacement[SpatialDof::Uy as usize] * 4.0 / 5.0;
         assert!((axial_disp - expected_elongation).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod numbering_tests {
+    use super::*;
+    use crate::model::{Material, Node3, SpatialDof, Truss, ZeroLength3};
+
+    /// Equation numbers are assigned to free, unconstrained DOFs in node
+    /// insertion order; an identity-tied DOF shares its retained DOF's
+    /// equation; a fixed retained DOF leaves its tied DOF without one.
+    #[test]
+    fn identity_ties_alias_equations_and_fixed_retained_dofs_drop_out() {
+        let mut domain = Domain::new();
+        let a = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+        let b = domain.add_node(Node::new([1.0, 0.0]).fix(2));
+        let c = domain.add_node(Node::new([2.0, 0.0]).fix(1).fix(2));
+        let d = domain.add_node(Node::new([3.0, 0.0]).fix(2));
+        domain.add_element(Element::Truss(Truss::new(a, b, 1.0, Material::Elastic { e: 1.0 })));
+        domain.equal_dof(b, c, &[0]);
+        // `a` is fully fixed, so `d`'s tied DOF has no equation.
+        domain.equal_dof(a, d, &[1]);
+
+        assert_eq!(domain.number_dofs(), 3);
+        assert_eq!(domain.equation_of(a, 0), None);
+        assert_eq!(domain.equation_of(b, 0), Some(0));
+        assert_eq!(domain.equation_of(b, 1), Some(1));
+        assert_eq!(domain.equation_of(c, 0), Some(0), "tied dof shares the retained equation");
+        assert_eq!(domain.equation_of(c, 1), None);
+        assert_eq!(domain.equation_of(d, 0), Some(2));
+        assert_eq!(domain.equation_of(d, 1), None);
+        assert_eq!(domain.dof_terms(c, 0).iter().copied().collect::<Vec<_>>(), vec![(0, 1.0)]);
+        assert!(domain.dof_terms(d, 1).iter().next().is_none());
+    }
+
+    /// A 3D rigid diaphragm: the slave's in-plane translations are affine
+    /// in the master's translation and rotation about the normal, with the
+    /// lever-arm coefficients, and the slave has no equation of its own.
+    #[test]
+    fn rigid_diaphragm_slave_dofs_resolve_to_affine_terms() {
+        let fixed_but = |free: &[SpatialDof]| {
+            let mut node = Node3::new([0.0, 0.0, 0.0]);
+            for dof in [
+                SpatialDof::Ux, SpatialDof::Uy, SpatialDof::Uz,
+                SpatialDof::Rx, SpatialDof::Ry, SpatialDof::Rz,
+            ] {
+                if !free.iter().any(|f| *f as usize == dof as usize) {
+                    node = node.fix(dof as usize);
+                }
+            }
+            node
+        };
+        let mut domain = Domain3::new();
+        let master = domain.add_node(fixed_but(&[SpatialDof::Ux, SpatialDof::Uz, SpatialDof::Ry]));
+        let mut slave_node = fixed_but(&[SpatialDof::Ux, SpatialDof::Uz]);
+        slave_node.coords = [2.0, 0.0, 3.0];
+        let slave = domain.add_node(slave_node);
+        let ground = domain.add_node(fixed_but(&[]));
+        domain.add_element(Element3::ZeroLength3(
+            ZeroLength3::new(ground, slave).with_material(0, Material::Elastic { e: 1.0 }),
+        ));
+        domain.rigid_diaphragm(master, &[slave]);
+
+        assert_eq!(domain.number_dofs(), 3);
+        let (ux, uz, ry) = (
+            domain.equation_of(master, SpatialDof::Ux as usize).unwrap(),
+            domain.equation_of(master, SpatialDof::Uz as usize).unwrap(),
+            domain.equation_of(master, SpatialDof::Ry as usize).unwrap(),
+        );
+        assert_eq!(domain.equation_of(slave, SpatialDof::Ux as usize), None);
+        // Normal Y: a = Z, b = X, so u_c[Z] = u_r[Z] - theta_Y * (x_c - x_r)
+        // and u_c[X] = u_r[X] + theta_Y * (z_c - z_r).
+        let terms = |dof: SpatialDof| {
+            domain.dof_terms(slave, dof as usize).iter().copied().collect::<Vec<_>>()
+        };
+        assert_eq!(terms(SpatialDof::Ux), vec![(ux, 1.0), (ry, 3.0)]);
+        assert_eq!(terms(SpatialDof::Uz), vec![(uz, 1.0), (ry, -2.0)]);
     }
 }

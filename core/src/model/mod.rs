@@ -1,3 +1,4 @@
+mod dof_table;
 mod domain;
 mod elements;
 mod fiber_section;
