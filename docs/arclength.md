@@ -152,7 +152,7 @@ for rotations, `W_ii = 1/theta_*^2`; `beta = 1/lambda_*`, with all three
 scales finite and strictly positive. Require explicit model scales; do not
 mix lengths and radians in an unweighted Euclidean norm or guess units.
 `s` is consequently dimensionless. Users can omit the rotation scale only
-when there are no independent rotational DOFs. Allow per-equation overrides
+when there are no independent rotational DOFs (with DOF activation, a truss- or membrane-only model has none). Allow per-equation overrides
 later if needed for highly heterogeneous models.
 
 A poorly chosen `beta` is the most common practical failure of spherical

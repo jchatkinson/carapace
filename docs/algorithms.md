@@ -125,7 +125,7 @@ derivations and verification are in [arclength.md](arclength.md).
 | Field | Meaning |
 | --- | --- |
 | `initialRadius`, `minRadius?`, `maxRadius?` | Dimensionless radius; omitted bounds default to `initialRadius` (fixed radius) |
-| `scales` | `{ kind: "explicit", displacement, rotation?, load }` (rotation required when the model has rotational DOFs) or `{ kind: "auto", load }` (translation/rotation scales from the first elastic tangent) |
+| `scales` | `{ kind: "explicit", displacement, rotation?, load }` (rotation required only when rotational DOFs are active: a model of trusses and membranes has none, so it can be omitted) or `{ kind: "auto", load }` (translation/rotation scales from the first elastic tangent) |
 | `direction?` | `"increasing"` (default) or `"decreasing"` initial load direction |
 | `predictor?` | `"secant"` (default; the tangent is still used after a cutback or sharp turn) or `"tangent"` |
 | `seed?` | `{ components: [{ node, dof, value }], load }` orienting a singular first tangent |

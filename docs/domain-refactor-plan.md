@@ -769,7 +769,7 @@ OpenSees uses its own enhanced-strain variant; agreement is expected on rectangl
 recorded with its cause, not silently loosened). This is the independent oracle; the
 closed-form tests above are the analytical one.
 
-**Phase 3 as built** (see [refactor-baseline.md](refactor-baseline.md) for results). 3.1-3.9 landed as
+**Phase 3 as built** (gate results were recorded in docs/refactor-baseline.md, removed in Phase 5; see git history before that commit). 3.1-3.9 landed as
 planned, with these differences. (1) `physical_derivatives`/`Jacobian` are 2D-only; the "reusable by a 3D
 shell" generality was not built. (2) `prepare` caches `B`/`detJ*w` (and the condensed enhanced matrices) in an
 `Option`; every method falls back to recomputation, so an element works before `Domain::validate`. (3) A
@@ -928,3 +928,10 @@ Comments from the first review, and what was done with each:
 Not adopted, with reasons: none of the comments was rejected outright. The two
 deliberate deviations are the initial-state rule (reject, not project) and gating
 element-stiffness caching behind a measurement.
+
+**Phase 4 and 5 as built.** The 4.1 benchmark showed sparse LU at about 85% of an iteration (100 x 100
+Quad4, 20,200 DOF), matrix construction about 9% and element kernels about 5%, so neither gated option in
+4.3 was adopted (numbers: `core/examples/benchmark_continuum.rs`, `comparison/wasm_continuum.mjs`; full
+table in the history of `docs/refactor-baseline.md`). Solver changes (tangent reuse on linear problems, a
+symmetric factorization) were deliberately left out. In Phase 5 the baseline document was removed; the
+`baseline_dump` example and `comparison/check_refactor.sh` remain as a regression check.

@@ -49,31 +49,25 @@ embedded rebar, solved by incremental Newton-Raphson.
 
 ## Gaps in Carapace
 
-1. **The element framework is two-node only.** `ElementOps::nodes()` returns
-   `[NId; 2]`, `domain.rs` destructures `[id_i, id_j]` at 9 sites, and the
-   element DOF count is a const generic tied to two nodes. A 4-node Q4 does
-   not fit.
-   Recommended: a separate `membranes` store on `Domain` (planar profile
-   only), assembled beside `elements`. Each of the 9 sites gets a membrane
-   counterpart (assembly, commit, load, mass, recorders). Retrofitting the
-   trait to N nodes is cleaner but a larger blast radius.
-2. **No plane-stress material catalog.** `Material` is uniaxial. A
-   3-component `PlaneStressMaterial` is needed. The CSFM law is stateless, so
+1. **Element framework: resolved.** Elements now have a variable node list and push their own
+   contribution through sinks; Quad4/Tri3 exist (see [architecture.md](architecture.md) and
+   [domain-refactor-plan.md](domain-refactor-plan.md)). No separate `membranes` store is needed.
+2. **Plane material seam exists; the CSFM law does not.** `PlaneMaterial` provides the 3-component
+   trial/commit seam (per-Gauss-point copies), with elastic variants only. A
+   `PlaneStressMaterial` for the CSFM law is still needed. The CSFM law is stateless, so
    Carapace's trial/commit model fits trivially, and the catalog can grow
    history later.
-3. **No general multi-point constraints, and none are needed.** Carapace has
-   identity ties and a rigid diaphragm (at most 2 terms, one retained node).
-   CalcsApp binds rebar nodes by MPC slave elimination. In Rust, skip that:
-   a bar segment's axial strain is a linear function of its host element's
-   nodal DOFs, so it contributes directly to the host membrane's stiffness and
-   internal force. No extra DOFs, no constraints.
-4. **Nodes carry `rz`.** Planar nodes are `(ux, uy, rz)`. Membrane nodes would
+3. **Constraints: resolved for the general case, still not needed for rebar.** General linear
+   multi-point constraints and `rigid_link` now exist ([architecture.md](architecture.md)). Embedded
+   bars should still contribute directly to the host membrane's stiffness (a bar segment's axial strain
+   is linear in the host element's nodal DOFs), with no extra DOFs or constraints.
+4. **Nodes carry `rz` (resolved).** DOF activation leaves `rz` inactive on membrane-only nodes and lets a beam and a membrane share a node. Original note: Planar nodes are `(ux, uy, rz)`. Membrane nodes would
    fix `rz`, which costs nothing, but a frame element cannot share a membrane
    node (there is no drilling DOF). Open question: keep planar nodes with `rz`
    fixed, or add a 2-DOF node profile.
-5. **Wasm input and results.** New `CarapaceInputV1` tables for membranes,
-   plane-stress materials and embedded bars, plus Gauss-point results
-   (principal strains/stresses, kc2, bar stress). Mechanical work; the fiber
+5. **Wasm input and results: partly resolved.** `planeMaterials`, `triangles`, `quads` and
+   `gaussPoint` recorders (strain, stress) exist. Still missing: embedded bars and CSFM-specific
+   results (principal strains/stresses, kc2, bar stress). Mechanical work; the fiber
    response recorder (`element_fiber_responses`) is the template.
 
 ## Risks and notes

@@ -3,6 +3,8 @@
 > Archived planning document; preserved for historical rationale. It is not a
 > current specification or implementation instruction. See [README](../../README.md)
 > and the current [results-storage documentation](../results-storage-indexeddb.md).
+>
+> The statement below that planar must not be represented as spatial is superseded: see [architecture.md](../architecture.md) for the current profile design (DOF activation lets planar and spatial share one engine).
 
 Carapace is currently a planar frame engine: global coordinates `[x, y]`,
 node DOFs `[ux, uy, rz]`, and two-node element matrices of order 6. `pysees`

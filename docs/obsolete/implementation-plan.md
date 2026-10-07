@@ -3,6 +3,8 @@
 > Archived planning document; preserved for historical rationale. It is not a
 > current specification or implementation instruction. See [README](../../README.md)
 > and the current [results-storage documentation](../results-storage-indexeddb.md).
+>
+> For the current structure (variable-node elements, DOF activation, general constraints) see [architecture.md](../architecture.md).
 
 This document is the source of truth for Carapace's design and roadmap. It exists
 so a coding session with no prior context can pick up the project and continue

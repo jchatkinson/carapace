@@ -15,8 +15,9 @@ for why a direct C++-to-wasm port wasn't the path taken.
 
 Both a 2D (`ux, uy, rz`) and 3D (`ux, uy, uz, rx, ry, rz`) execution
 profile exist side by side as one generic implementation (const-generic
-over `NDIM`/`NDOF`/`ELEMENT_DOF`), not a hand-duplicated second engine —
-see each element/section entry below for which profile(s) it covers.
+over `NDIM`/`NDOF`), not a hand-duplicated second engine — see each
+element/section entry below for which profile(s) it covers. The structure and
+how to extend it are described in [`docs/architecture.md`](docs/architecture.md).
 
 **Elements**
 - [x] Truss (2D + 3D)
@@ -26,6 +27,9 @@ see each element/section entry below for which profile(s) it covers.
   transforms (2D + 3D)
 - [x] DispBeamColumn — fiber-discretized, displacement-based (2D uniaxial,
   3D biaxial)
+- [x] Tri3 (constant strain) and Quad4 (full 2x2 or enhanced incompatible-mode)
+  plane-stress/plane-strain continuum elements (2D), with isotropic and orthotropic
+  `PlaneMaterial`s, body, edge-traction and edge-pressure loads, and Gauss-point recorders
 - [x] ZeroLengthSection — fiber section with optional independent springs (2D + 3D)
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)
@@ -91,9 +95,10 @@ see each element/section entry below for which profile(s) it covers.
 
 **Constraints**
 - [x] `equal_dof` (2D + 3D)
+- [x] General linear multi-point constraints (`u_slave = sum coeff * u_master`, chains
+  resolved) and `rigid_link` (full rigid-body coupling with lever arm), 2D + 3D
 - [x] Rigid diaphragm — 2D (identity alias) and 3D (true affine constraint
   with lever-arm coupling, not identity aliasing)
-- [ ] Chained/nested rigid diaphragms
 
 **wasm / browser boundary**
 - [x] `CarapaceInputV1` wire format: input decoding plus a stepped
@@ -149,6 +154,7 @@ carapace/
 ├── wasm-bridge/     # carapace-wasm: input decoding, session API, and JS adapter
 │   └── src/verification.rs # milestone examples for wasm/Node verification
 └── docs/
+    ├── architecture.md             # domain model, element interface, how to extend
     ├── algorithms.md               # current solver API and JS configuration
     ├── arclength.md                # arc-length continuation design record
     ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
