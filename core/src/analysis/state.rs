@@ -1,8 +1,8 @@
 use slotmap::Key;
 
 use crate::model::{
-    Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
-    SPATIAL_NDF, SPATIAL_NDIM,
+    Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_NDF,
+    SPATIAL_NDIM,
 };
 
 use super::arclength::{integrator_change_invalidates, ArcState};
@@ -24,14 +24,13 @@ use super::{
 pub struct Analysis<
     const NDIM: usize = PLANAR_NDIM,
     const NDOF: usize = NDF,
-    const ELEMENT_DOF: usize = { crate::model::ELEMENT_DOF },
     NId = NodeId,
     E = Element,
 > where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
-    pub(crate) domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+    pub(crate) domain: Domain<NDIM, NDOF, NId, E>,
     /// Only actually consulted at `AnalysisBuilder<Ready>::build` time (to
     /// reject `Plain` against a domain with multi-point constraints) —
     /// kept here rather than dropped after `build` so `Analysis` still
@@ -80,14 +79,13 @@ pub struct StepResult {
     pub arc: Option<ArcStepInfo>,
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
-    Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> Analysis<NDIM, NDOF, NId, E>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
-    pub fn domain(&self) -> &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
+    pub fn domain(&self) -> &Domain<NDIM, NDOF, NId, E> {
         &self.domain
     }
 
@@ -100,7 +98,7 @@ where
     /// whichever pattern(s) should stop ramping (e.g. gravity) before the
     /// next phase starts — see implementation-plan's load-pattern/phase-
     /// composition milestone.
-    pub fn into_domain(self) -> Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
+    pub fn into_domain(self) -> Domain<NDIM, NDOF, NId, E> {
         self.domain
     }
 
@@ -112,7 +110,7 @@ where
     /// Granting mutable access discards arc-length continuation history and
     /// cached factorizations: the caller may change loads or the model, so
     /// the next arc step re-validates equilibrium and load sensitivity.
-    pub fn domain_mut(&mut self) -> &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
+    pub fn domain_mut(&mut self) -> &mut Domain<NDIM, NDOF, NId, E> {
         self.arc = None;
         self.cached_factorization = None;
         &mut self.domain
@@ -223,8 +221,13 @@ where
         // `Combined`'s per-equation reference (committed and predicted
         // external force, committed internal force), frozen for the step.
         let committed_forces = matches!(self.test, ConvergenceTest::Combined { .. }).then(|| {
-            let (_k, internal) = self.domain.assemble_tangent_and_resistance(self.load_factor);
-            (self.domain.assemble_reference_load(self.load_factor), internal)
+            let (_k, internal) = self
+                .domain
+                .assemble_tangent_and_resistance(self.load_factor);
+            (
+                self.domain.assemble_reference_load(self.load_factor),
+                internal,
+            )
         });
         let (predicted_load_factor, predictor) =
             self.integrator
@@ -271,7 +274,12 @@ where
                     |domain, load_factor| domain.form_tangent_and_residual(load_factor),
                     |domain, k, current_factorization, du_bar, load_factor, _iteration| {
                         let (delta_lambda, du) = integrator.correct(
-                            domain, solver, k, current_factorization, du_bar, load_factor,
+                            domain,
+                            solver,
+                            k,
+                            current_factorization,
+                            du_bar,
+                            load_factor,
                         )?;
                         Ok((du, delta_lambda))
                     },
@@ -295,4 +303,4 @@ where
 
 /// `Analysis`'s spatial instantiation — see `Domain3`'s doc comment for why
 /// this is a type alias rather than a hand-duplicated struct.
-pub type Analysis3 = Analysis<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id, Element3>;
+pub type Analysis3 = Analysis<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;

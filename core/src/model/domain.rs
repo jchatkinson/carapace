@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use faer::sparse::Triplet;
-use nalgebra::{DVector, SVector};
+use nalgebra::{DVector, SMatrix, SVector};
 use slotmap::{Key, SlotMap};
 
 use super::dof_table::{DofEntry, DofTable};
@@ -9,8 +9,9 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, Element, Element3, ElementOps, LoadPatternId, LoadSeries, Node, Node3Id, NodeId,
-    SparseMatrix, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, LoadPatternId, LoadSeries, Node,
+    Node3Id, NodeId, NodeView, SparseMatrix, TangentSink, VectorSink, NDF, PLANAR_NDIM,
+    SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// A multi-point constraint tying `dofs` of `constrained` exactly to the
@@ -132,12 +133,11 @@ impl DofTerms {
 pub struct Domain<
     const NDIM: usize = PLANAR_NDIM,
     const NDOF: usize = NDF,
-    const ELEMENT_DOF: usize = { super::ELEMENT_DOF },
     NId = NodeId,
     E = Element,
 > where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
     nodes: SlotMap<NId, Node<NDIM, NDOF>>,
     elements: SlotMap<E::Id, E>,
@@ -159,18 +159,17 @@ pub struct Domain<
 /// `Domain`'s spatial instantiation — six-DOF `Node3`/`Element3`. See
 /// `Domain`'s doc comment for why this is a type alias over one generic
 /// implementation rather than a hand-duplicated struct.
-pub type Domain3 = Domain<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id, Element3>;
+pub type Domain3 = Domain<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;
 
 /// Manual rather than `#[derive(Clone)]`: the derive macro only adds `E:
 /// Clone`, not `E::Load: Clone` (it can't see through the associated type),
 /// so it under-constrains this struct and fails to compile at every call
 /// site instead. `Analysis::step`'s snapshot-and-restore-on-failure needs
 /// this — see `Domain`'s doc comment.
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Clone
-    for Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> Clone for Domain<NDIM, NDOF, NId, E>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
     fn clone(&self) -> Self {
@@ -188,22 +187,20 @@ where
     }
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> Default
-    for Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> Default for Domain<NDIM, NDOF, NId, E>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
-    Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> Domain<NDIM, NDOF, NId, E>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
     /// A fresh, empty model — already carrying one `LoadPattern`
     /// (`default_pattern`, `LoadSeries::Linear { slope: 1.0 }`, unscaled)
@@ -240,14 +237,16 @@ where
         &self.nodes[id]
     }
 
+    fn node_view(&self) -> NodeView<'_, NDIM, NDOF, NId> {
+        NodeView::new(&self.nodes)
+    }
+
     /// An element's local nodal force at its current committed state — see
     /// `ElementOps::local_force`'s doc comment. Never called from the
     /// assembly hot loop (only from results recording), so looking the
     /// element and its nodes up here rather than caching anything is fine.
-    pub fn element_local_force(&self, id: E::Id) -> SVector<f64, ELEMENT_DOF> {
-        let element = &self.elements[id];
-        let [node_i, node_j] = element.nodes();
-        element.local_force(&self.nodes[node_i], &self.nodes[node_j])
+    pub fn element_local_force(&self, id: E::Id) -> ElementForce {
+        self.elements[id].local_force(&self.node_view())
     }
 
     /// Component `component` of the load `id` carries at `pseudo_time` — every
@@ -264,18 +263,17 @@ where
     /// (`k·d − Σ factor·f_eq`, OpenSees's `K·u + p0`), with every pattern's
     /// factor evaluated at `pseudo_time`. Identical to `element_local_force`
     /// for an element with no load.
-    pub fn element_end_force(&self, id: E::Id, pseudo_time: f64) -> SVector<f64, ELEMENT_DOF> {
+    pub fn element_end_force(&self, id: E::Id, pseudo_time: f64) -> ElementForce {
         let element = &self.elements[id];
-        let [id_i, id_j] = element.nodes();
-        let (node_i, node_j) = (&self.nodes[id_i], &self.nodes[id_j]);
-        let mut force = element.local_force(node_i, node_j);
+        let view = self.node_view();
+        let mut force = element.local_force(&view);
         for (_, pattern) in self.load_patterns.iter() {
             let factor = pattern.factor(pseudo_time);
             if factor == 0.0 {
                 continue;
             }
             if let Some(load) = pattern.element_load(id) {
-                force -= factor * element.form_local_load_vector(node_i, node_j, Some(load));
+                force.subtract_scaled(factor, &element.local_load_force(&view, Some(load)));
             }
         }
         force
@@ -289,9 +287,7 @@ where
     /// the element's constructor — a fiber recorder resolves its `(section,
     /// fiber)` indices against that same order.
     pub fn element_fiber_responses(&self, id: E::Id) -> Option<Vec<Vec<(f64, f64)>>> {
-        let element = &self.elements[id];
-        let [node_i, node_j] = element.nodes();
-        element.fiber_responses(&self.nodes[node_i], &self.nodes[node_j])
+        self.elements[id].fiber_responses(&self.node_view())
     }
 
     /// Support/equilibrium reaction at `(node, dof)`: net internal element
@@ -316,30 +312,17 @@ where
     /// velocity/acceleration are always exactly zero and contribute nothing
     /// to its reaction regardless of profile or excitation.
     pub fn reaction(&self, node: NId, dof: usize, pseudo_time: f64) -> f64 {
-        let local_index_at = |id_i: NId, id_j: NId| -> Option<usize> {
-            if id_i == node {
-                Some(dof)
-            } else if id_j == node {
-                Some(NDOF + dof)
-            } else {
-                None
-            }
-        };
-
+        let view = self.node_view();
         let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
-        let mut resistance = 0.0;
+        let touches = |element: &E| element.nodes().contains(&node);
+
+        let mut resistance = PickDof::new(node, dof);
         for (element_id, element) in self.elements.iter() {
-            let [id_i, id_j] = element.nodes();
-            let Some(a) = local_index_at(id_i, id_j) else {
+            if !touches(element) {
                 continue;
-            };
+            }
             let load = effective_element_load(&active, element_id);
-            let (_k_local, r_local) = element.form_tangent_and_resistance(
-                &self.nodes[id_i],
-                &self.nodes[id_j],
-                load.as_ref(),
-            );
-            resistance += r_local[a];
+            element.assemble_tangent(&view, load.as_ref(), &mut resistance);
         }
 
         let mut applied = 0.0;
@@ -355,20 +338,16 @@ where
                 let Some(element_load) = pattern.element_load(element_id) else {
                     continue;
                 };
-                let [id_i, id_j] = element.nodes();
-                let Some(a) = local_index_at(id_i, id_j) else {
+                if !touches(element) {
                     continue;
-                };
-                let load_local = element.form_load_vector(
-                    &self.nodes[id_i],
-                    &self.nodes[id_j],
-                    Some(element_load),
-                );
-                applied += factor * load_local[a];
+                }
+                let mut load = PickDof::new(node, dof);
+                element.assemble_load(&view, Some(element_load), &mut load);
+                applied += factor * load.total;
             }
         }
 
-        resistance - applied
+        resistance.total - applied
     }
 
     /// Imposes `value` as the displacement of a *fixed* (single-point
@@ -390,9 +369,7 @@ where
 
     /// Whether `prescribe_displacement` would accept these arguments.
     pub fn can_prescribe(&self, node: NId, dof: usize, value: f64) -> bool {
-        value.is_finite()
-            && dof < NDOF
-            && self.nodes.get(node).is_some_and(|n| n.fixed[dof])
+        value.is_finite() && dof < NDOF && self.nodes.get(node).is_some_and(|n| n.fixed[dof])
     }
 
     /// `Domain::new()`'s always-present pattern — see its doc comment.
@@ -641,45 +618,19 @@ where
         let n = self.num_free_dofs;
         let mut mass = DVector::<f64>::zeros(n);
 
-        let accumulate = |mass: &mut DVector<f64>, terms: DofTerms, value: f64| {
-            if value == 0.0 {
-                return;
-            }
-            match terms.len {
-                0 => {}
-                1 => {
-                    let (eq, coeff) = terms.terms[0];
-                    mass[eq] += coeff * coeff * value;
-                }
-                _ => panic!(
-                    "assemble_mass_diagonal: nonzero mass on a rigid-diaphragm-affine-constrained dof isn't \
-                     supported — the lumped mass diagonal can't represent the rotational inertia this would \
-                     induce at the retained node; assign mass at the retained node (or an unconstrained node) \
-                     instead"
-                ),
-            }
-        };
-
         for (id, node) in self.nodes.iter() {
             for dof in 0..NDOF {
-                accumulate(&mut mass, self.dof_terms(id, dof), node.mass[dof]);
+                accumulate_mass(&mut mass, self.dof_terms(id, dof), node.mass[dof]);
             }
         }
 
+        let view = self.node_view();
+        let mut sink = MassSink {
+            domain: self,
+            mass: &mut mass,
+        };
         for (_, element) in self.elements.iter() {
-            let [id_i, id_j] = element.nodes();
-            let node_i = &self.nodes[id_i];
-            let node_j = &self.nodes[id_j];
-            let mass_local = element.form_mass(node_i, node_j);
-
-            for a in 0..ELEMENT_DOF {
-                let (node_id, dof) = if a < NDOF {
-                    (id_i, a)
-                } else {
-                    (id_j, a - NDOF)
-                };
-                accumulate(&mut mass, self.dof_terms(node_id, dof), mass_local[a]);
-            }
+            element.assemble_mass(&view, &mut sink);
         }
 
         mass
@@ -699,45 +650,18 @@ where
         pseudo_time: f64,
     ) -> (Vec<Triplet<usize, usize, f64>>, DVector<f64>) {
         let n = self.num_free_dofs;
-        let mut triplets = Vec::new();
-        let mut resistance = DVector::<f64>::zeros(n);
         let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
-
+        let view = self.node_view();
+        let mut sink = TripletSink {
+            domain: self,
+            triplets: Vec::new(),
+            resistance: DVector::<f64>::zeros(n),
+        };
         for (element_id, element) in self.elements.iter() {
-            let [id_i, id_j] = element.nodes();
-            let node_i = &self.nodes[id_i];
-            let node_j = &self.nodes[id_j];
             let load = effective_element_load(&active, element_id);
-            let (k_local, r_local) =
-                element.form_tangent_and_resistance(node_i, node_j, load.as_ref());
-
-            let mut dof_terms = [DofTerms::empty(); ELEMENT_DOF];
-            for (a, terms) in dof_terms.iter_mut().enumerate() {
-                let (node_id, dof) = if a < NDOF {
-                    (id_i, a)
-                } else {
-                    (id_j, a - NDOF)
-                };
-                *terms = self.dof_terms(node_id, dof);
-            }
-
-            for (a, terms_a) in dof_terms.iter().enumerate() {
-                for &(eq_a, coeff_a) in terms_a.iter() {
-                    resistance[eq_a] += coeff_a * r_local[a];
-                    for (b, terms_b) in dof_terms.iter().enumerate() {
-                        for &(eq_b, coeff_b) in terms_b.iter() {
-                            triplets.push(Triplet::new(
-                                eq_a,
-                                eq_b,
-                                coeff_a * coeff_b * k_local[(a, b)],
-                            ));
-                        }
-                    }
-                }
-            }
+            element.assemble_tangent(&view, load.as_ref(), &mut sink);
         }
-
-        (triplets, resistance)
+        (sink.triplets, sink.resistance)
     }
 
     /// Assemble the global tangent stiffness (sparse) and internal
@@ -807,25 +731,17 @@ where
                 }
             }
 
+            let view = self.node_view();
             for (element_id, element) in self.elements.iter() {
                 let Some(element_load) = pattern.element_load(element_id) else {
                     continue;
                 };
-                let [id_i, id_j] = element.nodes();
-                let node_i = &self.nodes[id_i];
-                let node_j = &self.nodes[id_j];
-                let load_local = element.form_load_vector(node_i, node_j, Some(element_load));
-
-                for a in 0..ELEMENT_DOF {
-                    let (node_id, dof) = if a < NDOF {
-                        (id_i, a)
-                    } else {
-                        (id_j, a - NDOF)
-                    };
-                    for &(eq, coeff) in self.dof_terms(node_id, dof).iter() {
-                        load[eq] += coeff * factor * load_local[a];
-                    }
-                }
+                let mut sink = LoadSink {
+                    domain: self,
+                    factor,
+                    load: &mut load,
+                };
+                element.assemble_load(&view, Some(element_load), &mut sink);
             }
         }
 
@@ -877,13 +793,13 @@ where
     pub(crate) fn commit(&mut self, pseudo_time: f64) {
         self.committed_time = pseudo_time;
         let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        // `self.nodes`, `self.elements` and `self.load_patterns` are
+        // disjoint fields, so the node view can borrow `nodes` while
+        // `elements` is iterated mutably.
+        let view = NodeView::new(&self.nodes);
         for (element_id, element) in self.elements.iter_mut() {
-            let [id_i, id_j] = element.nodes();
             let load = effective_element_load(&active, element_id);
-            // `self.nodes`, `self.elements` and `self.load_patterns` are
-            // disjoint fields, so borrowing the others immutably while
-            // iterating `elements` mutably is fine.
-            element.commit(&self.nodes[id_i], &self.nodes[id_j], load.as_ref());
+            element.commit(&view, load.as_ref());
         }
     }
 
@@ -1018,6 +934,159 @@ where
         let k_eff = SparseMatrix::try_new_from_triplets(n, n, &eff_triplets)
             .expect("equation numbers are always in [0, num_free_dofs)");
         (k_eff, resistance)
+    }
+}
+
+/// Adds a lumped-mass value on one node DOF to the diagonal mass vector.
+fn accumulate_mass(mass: &mut DVector<f64>, terms: DofTerms, value: f64) {
+    if value == 0.0 {
+        return;
+    }
+    match terms.len {
+        0 => {}
+        1 => {
+            let (eq, coeff) = terms.terms[0];
+            mass[eq] += coeff * coeff * value;
+        }
+        _ => panic!(
+            "assemble_mass_diagonal: nonzero mass on a rigid-diaphragm-affine-constrained dof isn't \
+             supported — the lumped mass diagonal can't represent the rotational inertia this would \
+             induce at the retained node; assign mass at the retained node (or an unconstrained node) \
+             instead"
+        ),
+    }
+}
+
+/// Scatters element tangents into triplets and element resistances into the
+/// free-DOF resistance vector, through each DOF's equation terms.
+struct TripletSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    domain: &'a Domain<NDIM, NDOF, NId, E>,
+    triplets: Vec<Triplet<usize, usize, f64>>,
+    resistance: DVector<f64>,
+}
+
+impl<const NDIM: usize, const NDOF: usize, NId, E> TangentSink<NId>
+    for TripletSink<'_, NDIM, NDOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    fn add<const N: usize>(
+        &mut self,
+        dofs: &[DofRef<NId>; N],
+        k: &SMatrix<f64, N, N>,
+        r: &SVector<f64, N>,
+    ) {
+        let dof_terms: [DofTerms; N] =
+            std::array::from_fn(|a| self.domain.dof_terms(dofs[a].0, dofs[a].1 as usize));
+        for (a, terms_a) in dof_terms.iter().enumerate() {
+            for &(eq_a, coeff_a) in terms_a.iter() {
+                self.resistance[eq_a] += coeff_a * r[a];
+                for (b, terms_b) in dof_terms.iter().enumerate() {
+                    for &(eq_b, coeff_b) in terms_b.iter() {
+                        self.triplets
+                            .push(Triplet::new(eq_a, eq_b, coeff_a * coeff_b * k[(a, b)]));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Scatters scaled element load vectors into the free-DOF load vector.
+struct LoadSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    domain: &'a Domain<NDIM, NDOF, NId, E>,
+    factor: f64,
+    load: &'a mut DVector<f64>,
+}
+
+impl<const NDIM: usize, const NDOF: usize, NId, E> VectorSink<NId>
+    for LoadSink<'_, NDIM, NDOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            for &(eq, coeff) in self.domain.dof_terms(node, slot as usize).iter() {
+                self.load[eq] += coeff * self.factor * v[a];
+            }
+        }
+    }
+}
+
+/// Scatters element lumped masses into the free-DOF mass diagonal.
+struct MassSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    domain: &'a Domain<NDIM, NDOF, NId, E>,
+    mass: &'a mut DVector<f64>,
+}
+
+impl<const NDIM: usize, const NDOF: usize, NId, E> VectorSink<NId>
+    for MassSink<'_, NDIM, NDOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            accumulate_mass(self.mass, self.domain.dof_terms(node, slot as usize), v[a]);
+        }
+    }
+}
+
+/// Picks out the entry of an element's resistance or load vector that
+/// belongs to one `(node, dof)` — what `Domain::reaction` needs, without
+/// involving equation numbers at all.
+struct PickDof<NId> {
+    node: NId,
+    dof: u8,
+    total: f64,
+}
+
+impl<NId> PickDof<NId> {
+    fn new(node: NId, dof: usize) -> Self {
+        PickDof {
+            node,
+            dof: dof as u8,
+            total: 0.0,
+        }
+    }
+}
+
+impl<NId: Key> TangentSink<NId> for PickDof<NId> {
+    fn add<const N: usize>(
+        &mut self,
+        dofs: &[DofRef<NId>; N],
+        _k: &SMatrix<f64, N, N>,
+        r: &SVector<f64, N>,
+    ) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if node == self.node && slot == self.dof {
+                self.total += r[a];
+            }
+        }
+    }
+}
+
+impl<NId: Key> VectorSink<NId> for PickDof<NId> {
+    fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if node == self.node && slot == self.dof {
+                self.total += v[a];
+            }
+        }
     }
 }
 
@@ -1208,7 +1277,12 @@ mod numbering_tests {
         let b = domain.add_node(Node::new([1.0, 0.0]).fix(2));
         let c = domain.add_node(Node::new([2.0, 0.0]).fix(1).fix(2));
         let d = domain.add_node(Node::new([3.0, 0.0]).fix(2));
-        domain.add_element(Element::Truss(Truss::new(a, b, 1.0, Material::Elastic { e: 1.0 })));
+        domain.add_element(Element::Truss(Truss::new(
+            a,
+            b,
+            1.0,
+            Material::Elastic { e: 1.0 },
+        )));
         domain.equal_dof(b, c, &[0]);
         // `a` is fully fixed, so `d`'s tied DOF has no equation.
         domain.equal_dof(a, d, &[1]);
@@ -1217,11 +1291,18 @@ mod numbering_tests {
         assert_eq!(domain.equation_of(a, 0), None);
         assert_eq!(domain.equation_of(b, 0), Some(0));
         assert_eq!(domain.equation_of(b, 1), Some(1));
-        assert_eq!(domain.equation_of(c, 0), Some(0), "tied dof shares the retained equation");
+        assert_eq!(
+            domain.equation_of(c, 0),
+            Some(0),
+            "tied dof shares the retained equation"
+        );
         assert_eq!(domain.equation_of(c, 1), None);
         assert_eq!(domain.equation_of(d, 0), Some(2));
         assert_eq!(domain.equation_of(d, 1), None);
-        assert_eq!(domain.dof_terms(c, 0).iter().copied().collect::<Vec<_>>(), vec![(0, 1.0)]);
+        assert_eq!(
+            domain.dof_terms(c, 0).iter().copied().collect::<Vec<_>>(),
+            vec![(0, 1.0)]
+        );
         assert!(domain.dof_terms(d, 1).iter().next().is_none());
     }
 
@@ -1233,8 +1314,12 @@ mod numbering_tests {
         let fixed_but = |free: &[SpatialDof]| {
             let mut node = Node3::new([0.0, 0.0, 0.0]);
             for dof in [
-                SpatialDof::Ux, SpatialDof::Uy, SpatialDof::Uz,
-                SpatialDof::Rx, SpatialDof::Ry, SpatialDof::Rz,
+                SpatialDof::Ux,
+                SpatialDof::Uy,
+                SpatialDof::Uz,
+                SpatialDof::Rx,
+                SpatialDof::Ry,
+                SpatialDof::Rz,
             ] {
                 if !free.iter().any(|f| *f as usize == dof as usize) {
                     node = node.fix(dof as usize);
@@ -1263,7 +1348,11 @@ mod numbering_tests {
         // Normal Y: a = Z, b = X, so u_c[Z] = u_r[Z] - theta_Y * (x_c - x_r)
         // and u_c[X] = u_r[X] + theta_Y * (z_c - z_r).
         let terms = |dof: SpatialDof| {
-            domain.dof_terms(slave, dof as usize).iter().copied().collect::<Vec<_>>()
+            domain
+                .dof_terms(slave, dof as usize)
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
         };
         assert_eq!(terms(SpatialDof::Ux), vec![(ux, 1.0), (ry, 3.0)]);
         assert_eq!(terms(SpatialDof::Uz), vec![(uz, 1.0), (ry, -2.0)]);

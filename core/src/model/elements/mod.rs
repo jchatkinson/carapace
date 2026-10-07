@@ -1,134 +1,16 @@
 use nalgebra::{SMatrix, SVector};
-use slotmap::{new_key_type, Key};
+use slotmap::new_key_type;
 
 use super::{
     ElementLoad, ElementLoad3, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_NDIM,
     SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
-/// What `Domain`'s generic assembly/state plumbing needs from an element
-/// catalog — `Element`/`Element3`'s shared shape, not their (genuinely
-/// different) physics. A trait rather than a shared enum: `Element` and
-/// `Element3` hold different variant sets (`Truss` vs `Truss3`, etc.) and a
-/// single enum spanning both would either duplicate every variant anyway or
-/// require `Box<dyn Trait>` — heap allocation and vtable dispatch in the
-/// hot assembly loop, which the spatial-architecture plan rules out for a
-/// browser/wasm target. `NDIM`/`NDOF`/`ELEMENT_DOF` are separate const
-/// generic parameters (not computed from each other) because stable Rust
-/// can't evaluate `2 * NDOF` inside a generic item (no `generic_const_exprs`
-/// yet) — the same reason top-level `ELEMENT_DOF`/`SPATIAL_ELEMENT_DOF`
-/// constants exist instead of inline expressions.
-pub trait ElementOps<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId: Copy> {
-    /// An element-load kind this catalog supports — `ElementLoad` for
-    /// `Element`, `ElementLoad3` for `Element3` (currently just a uniform
-    /// local-axis load on the beam-columns — `Truss` and `ZeroLength` don't
-    /// support element loads). `Add` so several loads on one
-    /// element in one pattern accumulate.
-    type Load: Copy
-        + super::ElementLoadComponents
-        + std::ops::Add<Output = Self::Load>
-        + std::ops::Mul<f64, Output = Self::Load>;
-
-    /// This catalog's own `Domain` element-store key (`ElementId`/
-    /// `Element3Id`) — an associated type rather than a further generic
-    /// parameter of `Domain` itself, so it's always determined by `E` and
-    /// never a separate, independently-unconstrained type variable: a
-    /// `Domain::add_element(element)` call pins `E` concretely from real
-    /// usage (the `Element`/`Element3` value passed in), but nothing in an
-    /// ordinary test ever *uses* the returned element ID for anything, so a
-    /// bare `EId` parameter with nothing forcing it — even with a default —
-    /// left `Domain::new()` unable to infer it.
-    type Id: Key;
-
-    fn nodes(&self) -> [NId; 2];
-
-    /// Tangent and internal resisting force at the current nodal state.
-    /// `load` is the *effective* element load at the pseudo-time being
-    /// assembled (every pattern's load on this element, each scaled by its
-    /// factor — `Domain::effective_element_load`). Only elements whose
-    /// internal state depends on the load itself (`ForceBeamColumn`, whose
-    /// section forces include the load's own contribution) read it; every
-    /// other element's resistance is load-independent and ignores it — their
-    /// loads enter only through `form_load_vector`.
-    fn form_tangent_and_resistance(
-        &self,
-        node_i: &Node<NDIM, NDOF>,
-        node_j: &Node<NDIM, NDOF>,
-        load: Option<&Self::Load>,
-    ) -> (
-        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
-        SVector<f64, ELEMENT_DOF>,
-    );
-
-    fn form_load_vector(
-        &self,
-        node_i: &Node<NDIM, NDOF>,
-        node_j: &Node<NDIM, NDOF>,
-        load: Option<&Self::Load>,
-    ) -> SVector<f64, ELEMENT_DOF>;
-
-    /// `form_load_vector`'s equivalent nodal load expressed in the same
-    /// element-local frame as `local_force` (fixed orientation for
-    /// `Linear`/`PDelta`, current chord for `Corotational`) — what
-    /// `Domain::element_end_force` subtracts from `local_force` so a loaded
-    /// member's reported end forces include the load's fixed-end effect.
-    fn form_local_load_vector(
-        &self,
-        _node_i: &Node<NDIM, NDOF>,
-        _node_j: &Node<NDIM, NDOF>,
-        _load: Option<&Self::Load>,
-    ) -> SVector<f64, ELEMENT_DOF> {
-        SVector::<f64, ELEMENT_DOF>::zeros()
-    }
-
-    fn form_mass(
-        &self,
-        node_i: &Node<NDIM, NDOF>,
-        node_j: &Node<NDIM, NDOF>,
-    ) -> SVector<f64, ELEMENT_DOF>;
-
-    /// `load` is the effective element load at the committed pseudo-time — see
-    /// `form_tangent_and_resistance`.
-    fn commit(
-        &mut self,
-        node_i: &Node<NDIM, NDOF>,
-        node_j: &Node<NDIM, NDOF>,
-        load: Option<&Self::Load>,
-    );
-
-    /// This element's local nodal force at its *current committed* state —
-    /// the pre-transform nodal force vector every concrete element already
-    /// computes as an intermediate step inside `form_tangent_and_resistance`
-    /// (`r_local`, before that method's final `t.transpose() * r_local`
-    /// step converts it to global), in the element's own axis frame (the
-    /// original fixed orientation for `Linear`/`PDelta`, the current
-    /// deformed chord for `Corotational`). For a straight two-node frame
-    /// element this is directly axial/shear/moment at each end; `Truss`/
-    /// `ZeroLength` have no separate local frame at all, so their value here
-    /// is just their resistance vector. This is what element-force
-    /// recording (results-storage) reads — see each concrete type's
-    /// `local_force` doc comment for why it's cached (`ForceBeamColumn`,
-    /// to avoid re-running its Newton state determination) or recomputed
-    /// fresh (every other element, all cheap closed-form/direct
-    /// evaluations) — never anything that mutates state, so safe to call
-    /// any time after a step, like `form_tangent_and_resistance`.
-    fn local_force(
-        &self,
-        node_i: &Node<NDIM, NDOF>,
-        node_j: &Node<NDIM, NDOF>,
-    ) -> SVector<f64, ELEMENT_DOF>;
-
-    /// Every integration point's per-fiber `(strain, stress)` — `None` for
-    /// every element kind that isn't fiber-discretized (`Truss`/
-    /// `ZeroLength`/`ZeroLengthSection`/`ElasticBeamColumn`; only
-    /// `DispBeamColumn`/`ForceBeamColumn` and their spatial counterparts
-    /// have one). See `Domain::element_fiber_responses`'s doc comment.
-    fn fiber_responses(
-        &self,
-        node_i: &Node<NDIM, NDOF>,
-        node_j: &Node<NDIM, NDOF>,
-    ) -> Option<Vec<Vec<(f64, f64)>>>;
-}
+mod ops;
+pub use ops::{
+    two_node_dofs, DofMask, DofRef, ElementForce, ElementOps, NodeList, NodeView, TangentSink,
+    VectorSink, MAX_ELEMENT_NODES,
+};
 
 mod disp_beam_column;
 mod elastic_beam_column;
@@ -186,7 +68,7 @@ impl Element {
     /// `[ux_i, uy_i, rz_i, ux_j, uy_j, rz_j]`; the caller
     /// (`Domain::form_tangent_and_residual`) scatters these into the global
     /// system using each node's equation numbers.
-    pub fn form_tangent_and_resistance(
+    fn form_tangent_and_resistance(
         &self,
         node_i: &Node,
         node_j: &Node,
@@ -211,7 +93,7 @@ impl Element {
     /// this element (§3.4) — e.g. a beam-column's distributed transverse
     /// load. Zero when `load` is `None`, and for elements with no
     /// element-load support at all (`Truss`, `ZeroLength`).
-    pub fn form_load_vector(
+    fn form_load_vector(
         &self,
         node_i: &Node,
         node_j: &Node,
@@ -232,7 +114,7 @@ impl Element {
     }
 
     /// See `ElementOps::form_local_load_vector`'s doc comment.
-    pub fn form_local_load_vector(
+    fn form_local_load_vector(
         &self,
         node_i: &Node,
         node_j: &Node,
@@ -257,7 +139,7 @@ impl Element {
     /// (`length`) so it needs both nodes. Zero for `ZeroLength` (a spring/
     /// connector, not a mass-bearing member) and for any element with the
     /// default `density = 0.0`.
-    pub fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+    fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         match self {
             Element::Truss(t) => t.form_mass(node_i, node_j),
             Element::ZeroLength(_) => SVector::<f64, ELEMENT_DOF>::zeros(),
@@ -273,7 +155,7 @@ impl Element {
     /// place a `Material` ever mutates. A no-op for `ElasticBeamColumn`
     /// (no `Material` — its response is closed-form, §3.1) and for any
     /// `ZeroLength` direction with no material assigned.
-    pub fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
+    fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
         match self {
             Element::Truss(t) => t.commit(node_i, node_j),
             Element::ZeroLength(z) => z.commit(node_i, node_j),
@@ -288,7 +170,7 @@ impl Element {
     /// local force is cached at `commit` time (its own `local_force()`
     /// takes no node arguments — reading the cache, not recomputing);
     /// every other variant recomputes fresh from `node_i`/`node_j`.
-    pub fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
+    fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
         match self {
             Element::Truss(t) => t.local_force(node_i, node_j),
             Element::ZeroLength(z) => z.local_force(node_i, node_j),
@@ -300,7 +182,7 @@ impl Element {
     }
 
     /// See `ElementOps::fiber_responses`'s doc comment.
-    pub fn fiber_responses(&self, node_i: &Node, node_j: &Node) -> Option<Vec<Vec<(f64, f64)>>> {
+    fn fiber_responses(&self, node_i: &Node, node_j: &Node) -> Option<Vec<Vec<(f64, f64)>>> {
         match self {
             Element::DispBeamColumn(b) => Some(b.fiber_responses(node_i, node_j)),
             Element::ForceBeamColumn(b) => Some(b.fiber_responses()),
@@ -312,61 +194,85 @@ impl Element {
     }
 }
 
-impl ElementOps<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId> for Element {
+impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     type Load = ElementLoad;
     type Id = ElementId;
 
-    fn nodes(&self) -> [NodeId; 2] {
-        Element::nodes(self)
+    fn nodes(&self) -> NodeList<NodeId> {
+        Element::nodes(self).into_iter().collect()
     }
 
-    fn form_tangent_and_resistance(
+    fn dof_mask(&self) -> DofMask {
+        DofMask::all(NDF)
+    }
+
+    fn assemble_tangent<S: TangentSink<NodeId>>(
         &self,
-        node_i: &Node,
-        node_j: &Node,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         load: Option<&ElementLoad>,
-    ) -> (
-        SMatrix<f64, ELEMENT_DOF, ELEMENT_DOF>,
-        SVector<f64, ELEMENT_DOF>,
+        sink: &mut S,
     ) {
-        Element::form_tangent_and_resistance(self, node_i, node_j, load)
+        let [i, j] = Element::nodes(self);
+        let (k, r) = Element::form_tangent_and_resistance(self, nodes.get(i), nodes.get(j), load);
+        sink.add(&two_node_dofs::<_, ELEMENT_DOF>(i, j, NDF), &k, &r);
     }
 
-    fn form_load_vector(
+    fn assemble_load<S: VectorSink<NodeId>>(
         &self,
-        node_i: &Node,
-        node_j: &Node,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         load: Option<&ElementLoad>,
-    ) -> SVector<f64, ELEMENT_DOF> {
-        Element::form_load_vector(self, node_i, node_j, load)
+        sink: &mut S,
+    ) {
+        let [i, j] = Element::nodes(self);
+        let v = Element::form_load_vector(self, nodes.get(i), nodes.get(j), load);
+        sink.add(&two_node_dofs::<_, ELEMENT_DOF>(i, j, NDF), &v);
     }
 
-    fn form_local_load_vector(
+    fn assemble_mass<S: VectorSink<NodeId>>(
         &self,
-        node_i: &Node,
-        node_j: &Node,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        sink: &mut S,
+    ) {
+        let [i, j] = Element::nodes(self);
+        let v = Element::form_mass(self, nodes.get(i), nodes.get(j));
+        sink.add(&two_node_dofs::<_, ELEMENT_DOF>(i, j, NDF), &v);
+    }
+
+    fn commit(
+        &mut self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
         load: Option<&ElementLoad>,
-    ) -> SVector<f64, ELEMENT_DOF> {
-        Element::form_local_load_vector(self, node_i, node_j, load)
+    ) {
+        let [i, j] = Element::nodes(self);
+        Element::commit(self, nodes.get(i), nodes.get(j), load)
     }
 
-    fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
-        Element::form_mass(self, node_i, node_j)
+    fn local_force_width(&self) -> usize {
+        ELEMENT_DOF
     }
 
-    fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
-        Element::commit(self, node_i, node_j, load)
+    fn local_force(&self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> ElementForce {
+        let [i, j] = Element::nodes(self);
+        Element::local_force(self, nodes.get(i), nodes.get(j)).into()
     }
 
-    fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
-        Element::local_force(self, node_i, node_j)
+    fn local_load_force(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        load: Option<&ElementLoad>,
+    ) -> ElementForce {
+        let [i, j] = Element::nodes(self);
+        Element::form_local_load_vector(self, nodes.get(i), nodes.get(j), load).into()
     }
 
-    fn fiber_responses(&self, node_i: &Node, node_j: &Node) -> Option<Vec<Vec<(f64, f64)>>> {
-        Element::fiber_responses(self, node_i, node_j)
+    fn fiber_responses(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> Option<Vec<Vec<(f64, f64)>>> {
+        let [i, j] = Element::nodes(self);
+        Element::fiber_responses(self, nodes.get(i), nodes.get(j))
     }
 }
-
 /// Spatial element catalog — `Domain3`'s counterpart to `Element`. Closed
 /// enum, `match`-based dispatch, same reasoning as `Element` (§2.1).
 #[derive(Debug, Clone)]
@@ -391,7 +297,7 @@ impl Element3 {
         }
     }
 
-    pub fn form_tangent_and_resistance(
+    fn form_tangent_and_resistance(
         &self,
         node_i: &Node3,
         node_j: &Node3,
@@ -416,7 +322,7 @@ impl Element3 {
     /// (`Truss3`, `ZeroLength3`, `DispBeamColumn3`, `ForceBeamColumn3` —
     /// matching their planar counterparts, see `ElementOps::Load`'s doc
     /// comment).
-    pub fn form_load_vector(
+    fn form_load_vector(
         &self,
         node_i: &Node3,
         node_j: &Node3,
@@ -437,7 +343,7 @@ impl Element3 {
     }
 
     /// See `ElementOps::form_local_load_vector`'s doc comment.
-    pub fn form_local_load_vector(
+    fn form_local_load_vector(
         &self,
         node_i: &Node3,
         node_j: &Node3,
@@ -458,7 +364,7 @@ impl Element3 {
     }
 
     /// This element's lumped-mass contribution — see `Element::form_mass`.
-    pub fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+    fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         match self {
             Element3::Truss3(t) => t.form_mass(node_i, node_j),
             Element3::ZeroLength3(_) => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
@@ -469,7 +375,7 @@ impl Element3 {
         }
     }
 
-    pub fn commit(&mut self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) {
+    fn commit(&mut self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) {
         match self {
             Element3::Truss3(t) => t.commit(node_i, node_j),
             Element3::ZeroLength3(z) => z.commit(node_i, node_j),
@@ -481,7 +387,7 @@ impl Element3 {
     }
 
     /// See `Element::local_force`'s doc comment.
-    pub fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
+    fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         match self {
             Element3::Truss3(t) => t.local_force(node_i, node_j),
             Element3::ZeroLength3(z) => z.local_force(node_i, node_j),
@@ -493,7 +399,7 @@ impl Element3 {
     }
 
     /// See `ElementOps::fiber_responses`'s doc comment.
-    pub fn fiber_responses(&self, node_i: &Node3, node_j: &Node3) -> Option<Vec<Vec<(f64, f64)>>> {
+    fn fiber_responses(&self, node_i: &Node3, node_j: &Node3) -> Option<Vec<Vec<(f64, f64)>>> {
         match self {
             Element3::DispBeamColumn3(b) => Some(b.fiber_responses(node_i, node_j)),
             Element3::ForceBeamColumn3(b) => Some(b.fiber_responses()),
@@ -505,57 +411,95 @@ impl Element3 {
     }
 }
 
-impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id> for Element3 {
+impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
     type Load = ElementLoad3;
     type Id = Element3Id;
 
-    fn nodes(&self) -> [Node3Id; 2] {
-        Element3::nodes(self)
+    fn nodes(&self) -> NodeList<Node3Id> {
+        Element3::nodes(self).into_iter().collect()
     }
 
-    fn form_tangent_and_resistance(
+    fn dof_mask(&self) -> DofMask {
+        DofMask::all(SPATIAL_NDF)
+    }
+
+    fn assemble_tangent<S: TangentSink<Node3Id>>(
         &self,
-        node_i: &Node3,
-        node_j: &Node3,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
         load: Option<&ElementLoad3>,
-    ) -> (
-        SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>,
-        SVector<f64, SPATIAL_ELEMENT_DOF>,
+        sink: &mut S,
     ) {
-        Element3::form_tangent_and_resistance(self, node_i, node_j, load)
+        let [i, j] = Element3::nodes(self);
+        let (k, r) = Element3::form_tangent_and_resistance(self, nodes.get(i), nodes.get(j), load);
+        sink.add(
+            &two_node_dofs::<_, SPATIAL_ELEMENT_DOF>(i, j, SPATIAL_NDF),
+            &k,
+            &r,
+        );
     }
 
-    fn form_load_vector(
+    fn assemble_load<S: VectorSink<Node3Id>>(
         &self,
-        node_i: &Node3,
-        node_j: &Node3,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
         load: Option<&ElementLoad3>,
-    ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
-        Element3::form_load_vector(self, node_i, node_j, load)
+        sink: &mut S,
+    ) {
+        let [i, j] = Element3::nodes(self);
+        let v = Element3::form_load_vector(self, nodes.get(i), nodes.get(j), load);
+        sink.add(
+            &two_node_dofs::<_, SPATIAL_ELEMENT_DOF>(i, j, SPATIAL_NDF),
+            &v,
+        );
     }
 
-    fn form_local_load_vector(
+    fn assemble_mass<S: VectorSink<Node3Id>>(
         &self,
-        node_i: &Node3,
-        node_j: &Node3,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+        sink: &mut S,
+    ) {
+        let [i, j] = Element3::nodes(self);
+        let v = Element3::form_mass(self, nodes.get(i), nodes.get(j));
+        sink.add(
+            &two_node_dofs::<_, SPATIAL_ELEMENT_DOF>(i, j, SPATIAL_NDF),
+            &v,
+        );
+    }
+
+    fn commit(
+        &mut self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
         load: Option<&ElementLoad3>,
-    ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
-        Element3::form_local_load_vector(self, node_i, node_j, load)
+    ) {
+        let [i, j] = Element3::nodes(self);
+        Element3::commit(self, nodes.get(i), nodes.get(j), load)
     }
 
-    fn form_mass(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
-        Element3::form_mass(self, node_i, node_j)
+    fn local_force_width(&self) -> usize {
+        SPATIAL_ELEMENT_DOF
     }
 
-    fn commit(&mut self, node_i: &Node3, node_j: &Node3, load: Option<&ElementLoad3>) {
-        Element3::commit(self, node_i, node_j, load)
+    fn local_force(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> ElementForce {
+        let [i, j] = Element3::nodes(self);
+        Element3::local_force(self, nodes.get(i), nodes.get(j)).into()
     }
 
-    fn local_force(&self, node_i: &Node3, node_j: &Node3) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
-        Element3::local_force(self, node_i, node_j)
+    fn local_load_force(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+        load: Option<&ElementLoad3>,
+    ) -> ElementForce {
+        let [i, j] = Element3::nodes(self);
+        Element3::form_local_load_vector(self, nodes.get(i), nodes.get(j), load).into()
     }
 
-    fn fiber_responses(&self, node_i: &Node3, node_j: &Node3) -> Option<Vec<Vec<(f64, f64)>>> {
-        Element3::fiber_responses(self, node_i, node_j)
+    fn fiber_responses(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> Option<Vec<Vec<(f64, f64)>>> {
+        let [i, j] = Element3::nodes(self);
+        Element3::fiber_responses(self, nodes.get(i), nodes.get(j))
     }
 }

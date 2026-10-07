@@ -477,11 +477,10 @@ fn all_finite(v: &DVector<f64>) -> bool {
     v.iter().all(|x| x.is_finite())
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
-    Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> Analysis<NDIM, NDOF, NId, E>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
     /// One arc-length step (`Analysis::step` dispatches here). On any error
@@ -637,7 +636,7 @@ where
         let mut stop = None;
         let stop_criteria = &config.stop;
         if let Some(target) = stop_criteria.displacement {
-            let eq_value = |domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>| {
+            let eq_value = |domain: &Domain<NDIM, NDOF, NId, E>| {
                 domain.node(target.node).displacement[target.dof]
             };
             let before = start.node(target.node).displacement[target.dof];
@@ -941,7 +940,7 @@ where
     #[allow(clippy::too_many_arguments)]
     fn land_exactly(
         &mut self,
-        start: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        start: &Domain<NDIM, NDOF, NId, E>,
         state: &ArcState,
         config: &ArcLength<NId>,
         context: &StepContext<'_>,
@@ -951,7 +950,7 @@ where
         before: f64,
         after: f64,
         target: f64,
-        value_of: &impl Fn(&Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>) -> f64,
+        value_of: &impl Fn(&Domain<NDIM, NDOF, NId, E>) -> f64,
     ) -> bool {
         self.retake_until(
             start,
@@ -971,7 +970,7 @@ where
     #[allow(clippy::too_many_arguments)]
     fn land_exactly_on_load(
         &mut self,
-        start: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        start: &Domain<NDIM, NDOF, NId, E>,
         state: &ArcState,
         config: &ArcLength<NId>,
         context: &StepContext<'_>,
@@ -1000,7 +999,7 @@ where
     #[allow(clippy::too_many_arguments)]
     fn retake_until(
         &mut self,
-        start: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        start: &Domain<NDIM, NDOF, NId, E>,
         state: &ArcState,
         config: &ArcLength<NId>,
         context: &StepContext<'_>,
@@ -1010,7 +1009,7 @@ where
         before: f64,
         after: f64,
         target: f64,
-        value_of: &impl Fn(&Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>, f64) -> f64,
+        value_of: &impl Fn(&Domain<NDIM, NDOF, NId, E>, f64) -> f64,
     ) -> bool {
         let tolerance = LANDING_TOLERANCE * (after - before).abs().max(f64::MIN_POSITIVE);
         if (after - target).abs() <= tolerance {
@@ -1186,8 +1185,8 @@ fn det_sign_from(factor: &BorderedFactorization, n: usize) -> Option<i8> {
 /// backtracking until force equilibrium, the constraint, and any
 /// correction criteria all hold at the accepted state.
 #[allow(clippy::too_many_arguments)]
-fn attempt<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>(
-    domain: &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+fn attempt<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &mut Domain<NDIM, NDOF, NId, E>,
     bordered: &mut BorderedSolver,
     state: &ArcState,
     config: &ArcLength<NId>,
@@ -1198,7 +1197,7 @@ fn attempt<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, 
 ) -> Result<Accepted, ArcFailure>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
     let n = context.q_n.len();
     let t = context.predictor;
@@ -1249,7 +1248,7 @@ where
         }
         sum
     };
-    let evaluate = |domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>, lambda: f64| {
+    let evaluate = |domain: &Domain<NDIM, NDOF, NId, E>, lambda: f64| {
         let (k, internal) = domain.assemble_tangent_and_resistance(lambda);
         let residual = domain.assemble_reference_load(lambda) - internal;
         (k, residual)

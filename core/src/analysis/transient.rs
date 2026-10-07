@@ -2,14 +2,13 @@ use nalgebra::DVector;
 use slotmap::Key;
 
 use crate::model::{
-    Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
-    SPATIAL_NDF, SPATIAL_NDIM,
+    Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_NDF,
+    SPATIAL_NDIM,
 };
 
 use super::{
-    convergence::ForceTolerance, iterate_to_equilibrium, Algorithm, AnalysisError,
-    ConvergenceTest, GroundMotion,
-    RayleighDamping, SparseFactorization, SparseSolver,
+    convergence::ForceTolerance, iterate_to_equilibrium, Algorithm, AnalysisError, ConvergenceTest,
+    GroundMotion, RayleighDamping, SparseFactorization, SparseSolver,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -59,14 +58,13 @@ pub struct TransientStepResult {
 pub struct TransientAnalysis<
     const NDIM: usize = PLANAR_NDIM,
     const NDOF: usize = NDF,
-    const ELEMENT_DOF: usize = { crate::model::ELEMENT_DOF },
     NId = NodeId,
     E = Element,
 > where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
-    domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+    domain: Domain<NDIM, NDOF, NId, E>,
     mass: DVector<f64>,
     damping: RayleighDamping,
     dt: f64,
@@ -92,14 +90,12 @@ pub struct TransientAnalysis<
 /// `TransientAnalysis`'s spatial instantiation — see `Domain3`'s doc
 /// comment for why this is a type alias rather than a hand-duplicated
 /// struct.
-pub type TransientAnalysis3 =
-    TransientAnalysis<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id, Element3>;
+pub type TransientAnalysis3 = TransientAnalysis<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
-    TransientAnalysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> TransientAnalysis<NDIM, NDOF, NId, E>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
     /// Builds a transient analysis from a domain whose nodes may already
@@ -111,7 +107,7 @@ where
     /// `recompute_initial_acceleration`). `M` is diagonal, so this is a
     /// single elementwise division, no solve needed.
     pub fn new(
-        mut domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        mut domain: Domain<NDIM, NDOF, NId, E>,
         damping: RayleighDamping,
         dt: f64,
     ) -> Result<Self, AnalysisError> {
@@ -211,14 +207,14 @@ where
         force
     }
 
-    pub fn domain(&self) -> &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
+    pub fn domain(&self) -> &Domain<NDIM, NDOF, NId, E> {
         &self.domain
     }
 
     /// Ends this (dynamic) phase and hands back the `Domain` — symmetric
     /// with `Analysis::into_domain`, so a dynamic phase can itself be
     /// followed by another phase (static or dynamic).
-    pub fn into_domain(self) -> Domain<NDIM, NDOF, ELEMENT_DOF, NId, E> {
+    pub fn into_domain(self) -> Domain<NDIM, NDOF, NId, E> {
         self.domain
     }
 
@@ -340,7 +336,8 @@ where
                 // force and the committed internal force.
                 let force_tolerance = matches!(self.test, ConvergenceTest::Combined { .. })
                     .then(|| {
-                        let (_k, resistance) = self.domain.assemble_tangent_and_resistance(self.time);
+                        let (_k, resistance) =
+                            self.domain.assemble_tangent_and_resistance(self.time);
                         ForceTolerance::for_test(
                             &self.test,
                             &self.domain.rotational_equations(),
@@ -360,12 +357,8 @@ where
                     |domain, _scalar| {
                         let u_trial = domain.gather_displacement();
                         let (v_trial, a_trial) = newmark_state(&u_trial);
-                        let (k_eff, resistance) = domain.assemble_newmark_system(
-                            mass,
-                            mass_coeff,
-                            stiffness_coeff,
-                            time,
-                        );
+                        let (k_eff, resistance) =
+                            domain.assemble_newmark_system(mass, mass_coeff, stiffness_coeff, time);
                         let k_v = domain.multiply_stiffness(&v_trial, time);
 
                         let n = resistance.len();

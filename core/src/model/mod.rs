@@ -10,10 +10,11 @@ mod transform;
 
 pub use domain::{Domain, Domain3};
 pub use elements::{
-    DispBeamColumn, DispBeamColumn3, ElasticBeamColumn, ElasticBeamColumn3, Element, Element3,
-    Element3Id, ElementId, ElementOps, ForceBeamColumn, ForceBeamColumn3, Friction, Friction3,
-    Orientation, OrientationError, SpatialElementMatrix, SpatialElementVector, Truss, Truss3,
-    ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3,
+    two_node_dofs, DispBeamColumn, DispBeamColumn3, DofMask, DofRef, ElasticBeamColumn,
+    ElasticBeamColumn3, Element, Element3, Element3Id, ElementForce, ElementId, ElementOps,
+    ForceBeamColumn, ForceBeamColumn3, Friction, Friction3, NodeList, NodeView, Orientation,
+    OrientationError, SpatialElementMatrix, SpatialElementVector, TangentSink, Truss, Truss3,
+    VectorSink, ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3, MAX_ELEMENT_NODES,
 };
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
 pub use integration::BeamIntegration;

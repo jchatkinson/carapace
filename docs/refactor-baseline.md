@@ -79,3 +79,19 @@ still requires re-measuring in wasm because allocation behavior differs.
 3. Re-run the benchmarks above on the branch (native and wasm) and compare to the tables.
    Phase 1 target: within a few percent of baseline.
 4. Rebuild the wasm package and compare its size.
+
+## Results by step
+
+| Step | Dump vs baseline | Tests (`cargo test --workspace --release`) | Native perf vs baseline | Wasm perf / size vs baseline |
+|---|---|---|---|---|
+| 1.1 `DofTable` | identical (max relative diff 0) | 240 passed | elastic 30x6 about +2% (141.5 vs 138.5 ms) | not measured |
+| 1.2 element interface | identical (max relative diff 0) | 243 passed (3 new multi-node tests) | elastic 30x6 about +5% (147.6 vs 141.5 ms); elastic 10x3, fiber 10x3/15x4/20x5 within noise | elastic 30x6 166 ms (+1%), fiber 10x3 30.0 ms, fiber 20x5 172 ms (+2%, noisy); wasm 1,482,444 bytes (-0.9%) |
+
+Notes on 1.2:
+- The elastic 30x6 native gap (about 4-6 ms over 50 steps) is the one measurable cost of the sink
+  indirection and table lookup. Two attempts to remove it (caching the per-node table lookup within
+  an element; `#[inline]` on the hot helpers) had no effect and were reverted. Wasm shows no
+  significant gap, and Phase 4 (pattern-cached assembly, benchmark-gated) targets assembly cost
+  directly, so this is carried forward rather than chased now.
+- `cargo fmt` is not clean on the baseline for files unrelated to this work (for example
+  `benchmark_frame.rs`, `decode.rs`); commits only reformat files they otherwise change.

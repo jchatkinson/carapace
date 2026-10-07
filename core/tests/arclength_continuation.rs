@@ -11,8 +11,9 @@ use carapace_core::analysis::{
     LineSearch, LoadFactorTarget, StepResult, StopReason, TangentStrategy,
 };
 use carapace_core::model::{
-    Domain, Domain3, ElasticBeamColumn, Element, Element3, ElementOps, GeomTransf, LoadSeries,
-    Material, Node, Node3, NodeId, ZeroLength, ZeroLength3,
+    two_node_dofs, DofMask, Domain, Domain3, ElasticBeamColumn, Element, Element3, ElementForce,
+    ElementOps, GeomTransf, LoadSeries, Material, Node, Node3, NodeId, NodeList, NodeView,
+    TangentSink, VectorSink, ZeroLength, ZeroLength3,
 };
 use nalgebra::{SMatrix, SVector};
 use slotmap::new_key_type;
@@ -42,14 +43,14 @@ fn explicit(displacement: f64, load: f64) -> ArcScales {
     }
 }
 
-fn build<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>(
-    domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+fn build<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: Domain<NDIM, NDOF, NId, E>,
     integrator: Integrator<NId>,
     test: ConvergenceTest,
-) -> Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+) -> Analysis<NDIM, NDOF, NId, E>
 where
     NId: slotmap::Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
     let handler = if domain.has_mp_constraints() {
@@ -223,21 +224,17 @@ impl std::ops::Mul<f64> for NoLoad {
     }
 }
 
-impl ElementOps<2, 3, 6, NodeId> for TestElement {
-    type Load = NoLoad;
-    type Id = ExpId;
-
-    fn nodes(&self) -> [NodeId; 2] {
+impl TestElement {
+    fn pair(&self) -> [NodeId; 2] {
         match self {
             TestElement::Exp { nodes, .. } | TestElement::Linear { nodes, .. } => *nodes,
         }
     }
 
-    fn form_tangent_and_resistance(
+    fn tangent_and_resistance(
         &self,
         node_i: &Node,
         node_j: &Node,
-        _: Option<&NoLoad>,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
         let u = node_j.displacement[0] - node_i.displacement[0];
         let (force, tangent) = match *self {
@@ -254,27 +251,66 @@ impl ElementOps<2, 3, 6, NodeId> for TestElement {
         r[3] = force;
         (kmat, r)
     }
+}
 
-    fn form_load_vector(&self, _: &Node, _: &Node, _: Option<&NoLoad>) -> SVector<f64, 6> {
-        SVector::zeros()
+/// A user-defined catalog: the element interface is not tied to the crate's
+/// own elements.
+impl ElementOps<2, 3, NodeId> for TestElement {
+    type Load = NoLoad;
+    type Id = ExpId;
+
+    fn nodes(&self) -> NodeList<NodeId> {
+        self.pair().into_iter().collect()
     }
 
-    fn form_mass(&self, _: &Node, _: &Node) -> SVector<f64, 6> {
-        SVector::zeros()
+    fn dof_mask(&self) -> DofMask {
+        DofMask::all(3)
     }
 
-    fn commit(&mut self, _: &Node, _: &Node, _: Option<&NoLoad>) {}
-
-    fn local_force(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
-        self.form_tangent_and_resistance(node_i, node_j, None).1
+    fn assemble_tangent<S: TangentSink<NodeId>>(
+        &self,
+        nodes: &NodeView<'_, 2, 3, NodeId>,
+        _: Option<&NoLoad>,
+        sink: &mut S,
+    ) {
+        let [i, j] = self.pair();
+        let (k, r) = self.tangent_and_resistance(nodes.get(i), nodes.get(j));
+        sink.add(&two_node_dofs::<_, 6>(i, j, 3), &k, &r);
     }
 
-    fn fiber_responses(&self, _: &Node, _: &Node) -> Option<Vec<Vec<(f64, f64)>>> {
+    fn assemble_load<S: VectorSink<NodeId>>(
+        &self,
+        _: &NodeView<'_, 2, 3, NodeId>,
+        _: Option<&NoLoad>,
+        _: &mut S,
+    ) {
+    }
+
+    fn assemble_mass<S: VectorSink<NodeId>>(&self, _: &NodeView<'_, 2, 3, NodeId>, _: &mut S) {}
+
+    fn commit(&mut self, _: &NodeView<'_, 2, 3, NodeId>, _: Option<&NoLoad>) {}
+
+    fn local_force_width(&self) -> usize {
+        6
+    }
+
+    fn local_force(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> ElementForce {
+        let [i, j] = self.pair();
+        self.tangent_and_resistance(nodes.get(i), nodes.get(j))
+            .1
+            .into()
+    }
+
+    fn local_load_force(&self, _: &NodeView<'_, 2, 3, NodeId>, _: Option<&NoLoad>) -> ElementForce {
+        SVector::<f64, 6>::zeros().into()
+    }
+
+    fn fiber_responses(&self, _: &NodeView<'_, 2, 3, NodeId>) -> Option<Vec<Vec<(f64, f64)>>> {
         None
     }
 }
 
-type TestDomain = Domain<2, 3, 6, NodeId, TestElement>;
+type TestDomain = Domain<2, 3, NodeId, TestElement>;
 
 #[test]
 fn exactly_singular_tangent_needs_a_seed_and_then_continues_past_the_peak() {

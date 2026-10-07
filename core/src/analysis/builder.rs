@@ -118,13 +118,13 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
     /// This is a model-construction error, not a runtime condition, so it's
     /// caught here rather than threaded through `Result` (§2.8 is about
     /// real runtime failure, not misuse of the builder).
-    pub fn build<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
+    pub fn build<const NDIM: usize, const NDOF: usize, E>(
         self,
-        mut domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
-    ) -> Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>
+        mut domain: Domain<NDIM, NDOF, NId, E>,
+    ) -> Analysis<NDIM, NDOF, NId, E>
     where
         NId: Key,
-        E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+        E: ElementOps<NDIM, NDOF, NId>,
     {
         assert!(
             !(matches!(self.state.constraint_handler, ConstraintHandler::Plain) && domain.has_mp_constraints()),

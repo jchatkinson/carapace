@@ -380,7 +380,7 @@ the tree green because nothing is removed before its replacement exists.
 Tests: whole existing suite and `refactor_snapshot` identical; unit test that the
 table reproduces the old numbering on an identity-tied and an affine-tied model.
 
-**1.2 New `ElementOps`, sinks, and signature plumbing (one commit).**
+**1.2 New `ElementOps`, sinks, and signature plumbing (one commit).** *Done; deviations below.*
 Implement section 2.1: `DofMask`, `DofRef`, `NodeList`, `TangentSink`, `VectorSink`,
 `ElementForce`, `ModelError`, the new trait and the two catalog impls (every element
 returns the **full** mask for now, so behavior is unchanged). Rewrite in `domain.rs`:
@@ -414,6 +414,13 @@ New unit tests: a mock 3-node and a mock 4-node element in a test catalog (a sta
 against hand-computed values; `ElementForce` indexing; `local_force_width` matches the
 length of `local_force` for every element kind.
 Docs: doc comments on the trait (replace the `ElementOps` essay in `elements/mod.rs`).
+As built: `validate`, `prepare`, `accepts_load`, `ModelError` and the real `dof_mask` values moved to
+1.3 / 3.x, where they are first used (every element returns the full mask in 1.2, so no behavior
+changes and no dead code); `NodeView` landed here. The old per-element dispatch methods on `Element`
+and `Element3` (`form_tangent_and_resistance`, ...) are now private and the `ElementOps` impls call
+them, so concrete element files were not touched. `Domain::reaction` only evaluates elements that
+touch the node (as before). Result: dump identical to baseline, 243 tests pass, native elastic
+30x6 about 5% slower and wasm within noise (see [refactor-baseline.md](refactor-baseline.md)).
 
 **1.3 DOF activation (behavior change).**
 Implement section 2.2's activation rule on top of the `DofTable`: activation pass

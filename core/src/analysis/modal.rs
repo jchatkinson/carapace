@@ -60,13 +60,13 @@ pub struct Mode {
 /// so one implementation covers both `Domain`/`Domain3` — inferred from
 /// `domain`'s concrete type at each call site, same as
 /// `AnalysisBuilder::build`.
-pub fn modal_analysis<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>(
-    domain: &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+pub fn modal_analysis<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &mut Domain<NDIM, NDOF, NId, E>,
     num_modes: usize,
 ) -> Result<Vec<Mode>, AnalysisError>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
     let mass = domain.assemble_mass_diagonal();
     let n = domain.num_free_dofs();

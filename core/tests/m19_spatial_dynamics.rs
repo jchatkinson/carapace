@@ -5,7 +5,7 @@ use carapace_core::model::{
 
 /// Spatial counterpart to `m6_dynamics.rs`'s `truss_element_mass_matches_
 /// sdof_closed_form_frequency` — `modal_analysis`/`TransientAnalysis`
-/// generalized to the same `<NDIM, NDOF, ELEMENT_DOF, NId, E>` profile as
+/// generalized to the same `<NDIM, NDOF, NId, E>` profile as
 /// `Domain`/`Analysis` (see `spatial-architecture.md`'s "Spatial dynamics"
 /// milestone), run through the real `Domain3`/`Analysis3` stack rather than
 /// asserted by analogy. Every non-axial DOF at the free node is fixed, so

@@ -56,15 +56,15 @@ impl<NId: Copy> Integrator<NId> {
     /// (the first included) measures a true correction. That is what lets
     /// a linear step converge in one iteration instead of spending its
     /// first on the predictor and a second on proving `du` is small.
-    pub(crate) fn predict<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
+    pub(crate) fn predict<const NDIM: usize, const NDOF: usize, E>(
         &self,
-        domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        domain: &Domain<NDIM, NDOF, NId, E>,
         solver: &SparseSolver,
         current_pseudo_time: f64,
     ) -> Result<(f64, Option<DVector<f64>>), AnalysisError>
     where
         NId: Key,
-        E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+        E: ElementOps<NDIM, NDOF, NId>,
     {
         match self {
             Integrator::LoadControl { increment } => Ok((current_pseudo_time + increment, None)),
@@ -80,7 +80,10 @@ impl<NId: Copy> Integrator<NId> {
                 let sensitivity = domain.assemble_reference_load_sensitivity(current_pseudo_time);
                 let unit_response = solver.solve(&k, &sensitivity)?;
                 let delta_lambda = increment / unit_response[eq];
-                Ok((current_pseudo_time + delta_lambda, Some(unit_response * delta_lambda)))
+                Ok((
+                    current_pseudo_time + delta_lambda,
+                    Some(unit_response * delta_lambda),
+                ))
             }
             Integrator::ArcLength(_) => {
                 unreachable!("Analysis::step routes ArcLength to its continuation driver")
@@ -115,9 +118,9 @@ impl<NId: Copy> Integrator<NId> {
     /// `current_factorization`, when supplied, must factor `k`. An older
     /// Newton tangent must not be passed here: the load-sensitivity probe
     /// continues to use the current tangent even under tangent reuse.
-    pub(crate) fn correct<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, E>(
+    pub(crate) fn correct<const NDIM: usize, const NDOF: usize, E>(
         &self,
-        domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        domain: &Domain<NDIM, NDOF, NId, E>,
         solver: &SparseSolver,
         k: &SparseMatrix,
         current_factorization: Option<&SparseFactorization>,
@@ -126,7 +129,7 @@ impl<NId: Copy> Integrator<NId> {
     ) -> Result<(f64, DVector<f64>), AnalysisError>
     where
         NId: Key,
-        E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+        E: ElementOps<NDIM, NDOF, NId>,
     {
         match self {
             Integrator::LoadControl { .. } => Ok((0.0, du_bar)),

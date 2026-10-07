@@ -66,38 +66,29 @@ pub(crate) struct IterationOutcome {
 /// this iteration's operator, allowing additional right-hand sides to
 /// reuse it without accidentally using an older tangent.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn iterate_to_equilibrium<
-    const NDIM: usize,
-    const NDOF: usize,
-    const ELEMENT_DOF: usize,
-    NId,
-    E,
->(
+pub(crate) fn iterate_to_equilibrium<const NDIM: usize, const NDOF: usize, NId, E>(
     step: usize,
     algorithm: &Algorithm,
     test: &ConvergenceTest,
     solver: &SparseSolver,
     cached_factorization: &mut Option<SparseFactorization>,
-    domain: &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+    domain: &mut Domain<NDIM, NDOF, NId, E>,
     scalar0: f64,
-    mut form_system: impl FnMut(
-        &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
-        f64,
-    ) -> (SparseMatrix, DVector<f64>),
+    mut form_system: impl FnMut(&Domain<NDIM, NDOF, NId, E>, f64) -> (SparseMatrix, DVector<f64>),
     mut correct_du: impl FnMut(
-        &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        &Domain<NDIM, NDOF, NId, E>,
         &SparseMatrix,
         Option<&SparseFactorization>,
         DVector<f64>,
         f64,
         usize,
     ) -> Result<(DVector<f64>, f64), AnalysisError>,
-    mut after_increment: impl FnMut(&mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>),
+    mut after_increment: impl FnMut(&mut Domain<NDIM, NDOF, NId, E>),
     force_tolerance: Option<&ForceTolerance>,
 ) -> Result<(IterationOutcome, f64), AnalysisError>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
     test.validate()?;
     let (tangent, line_search, krylov_max_dimension) = match algorithm {

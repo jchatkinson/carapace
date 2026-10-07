@@ -4,7 +4,7 @@
 //! is driven by the caller via a step budget rather than run to completion
 //! inside one call, the mechanism cooperative cancellation is built on.
 //!
-//! `ModelSession<NDIM, NDOF, ELEMENT_DOF, NId, E>` is generic over the same
+//! `ModelSession<NDIM, NDOF, NId, E>` is generic over the same
 //! kinematic profile `core`'s own `Domain`/`Analysis` are generic over
 //! (`AnalysisBuilder::build` already infers that whole profile from its
 //! `domain` argument — see its doc comment) — the planar/spatial split only
@@ -20,8 +20,8 @@ use carapace_core::analysis::{
     StopReason, TransientAnalysis,
 };
 use carapace_core::model::{
-    Domain, Element, Element3, ElementOps, LoadPatternId, Node3Id, NodeId, ELEMENT_DOF, NDF,
-    PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
+    Domain, Element, Element3, ElementOps, LoadPatternId, Node3Id, NodeId, NDF, PLANAR_NDIM,
+    SPATIAL_NDF, SPATIAL_NDIM,
 };
 use serde::Serialize;
 use slotmap::Key;
@@ -35,8 +35,8 @@ use super::sequence::FiberResponseKind;
 /// is out of range for it — the same graceful-skip handling `ModeShape`'s
 /// out-of-range `mode` gets, since neither can be checked before the
 /// analysis actually runs.
-fn fiber_value<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>(
-    domain: &Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+fn fiber_value<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
     element: E::Id,
     point: u32,
     fiber: u32,
@@ -44,7 +44,7 @@ fn fiber_value<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, N
 ) -> Option<f64>
 where
     NId: Key,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId>,
+    E: ElementOps<NDIM, NDOF, NId>,
 {
     let responses = domain.element_fiber_responses(element)?;
     let &(strain, stress) = responses.get(point as usize)?.get(fiber as usize)?;
@@ -321,14 +321,14 @@ pub(super) enum CompiledStageKind<NId> {
     },
 }
 
-enum StageRunner<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
+enum StageRunner<const NDIM: usize, const NDOF: usize, NId, E>
 where
     NId: Key + Copy,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
     Static {
-        analysis: Analysis<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        analysis: Analysis<NDIM, NDOF, NId, E>,
         steps_remaining: u32,
     },
     /// `modal_analysis` already ran (in `start_current_stage`) by the time
@@ -338,17 +338,17 @@ where
     /// `Analysis::into_domain` does for the other two kinds) alongside the
     /// already-computed modes.
     Modal {
-        domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        domain: Domain<NDIM, NDOF, NId, E>,
         modes: Vec<Mode>,
         steps_remaining: u32,
     },
     Transient {
-        analysis: TransientAnalysis<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        analysis: TransientAnalysis<NDIM, NDOF, NId, E>,
         steps_remaining: u32,
     },
     /// The restored domain, handed to the next stage by `finish_current_stage`.
     Reset {
-        domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        domain: Domain<NDIM, NDOF, NId, E>,
         steps_remaining: u32,
     },
 }
@@ -474,28 +474,27 @@ impl Session {
     }
 }
 
-pub type PlanarSession = ModelSession<PLANAR_NDIM, NDF, ELEMENT_DOF, NodeId, Element>;
-pub type SpatialSession =
-    ModelSession<SPATIAL_NDIM, SPATIAL_NDF, SPATIAL_ELEMENT_DOF, Node3Id, Element3>;
+pub type PlanarSession = ModelSession<PLANAR_NDIM, NDF, NodeId, Element>;
+pub type SpatialSession = ModelSession<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;
 
-pub struct ModelSession<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
+pub struct ModelSession<const NDIM: usize, const NDOF: usize, NId, E>
 where
     NId: Key + Copy,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
-    domain: Option<Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>>,
+    domain: Option<Domain<NDIM, NDOF, NId, E>>,
     // Node handles in input node-table order, for `ModeResult::shape`.
     node_ids: Vec<NId>,
     modal_results: Vec<ModalStageResult>,
     // The domain as built, kept only when a `Reset` stage exists.
-    pristine: Option<Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>>,
+    pristine: Option<Domain<NDIM, NDOF, NId, E>>,
     // Every `holdPatternsAfter` freeze applied so far, in order, so a `Reset` can re-apply them.
     holds: Vec<(LoadPatternId, f64)>,
     record_initial: bool,
     stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
     current_stage: usize,
-    runner: Option<StageRunner<NDIM, NDOF, ELEMENT_DOF, NId, E>>,
+    runner: Option<StageRunner<NDIM, NDOF, NId, E>>,
     load_factor: f64,
     error: Option<AnalysisErrorDetail>,
     recorders: Vec<ResolvedRecorder<NId, E::Id>>,
@@ -511,11 +510,11 @@ where
     recorder_sample_counts: Vec<u32>,
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E> std::fmt::Debug
-    for ModelSession<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> std::fmt::Debug
+    for ModelSession<NDIM, NDOF, NId, E>
 where
     NId: Key + Copy,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
     // `Analysis` (inside `StageRunner`, held via `runner`/`domain`) doesn't
@@ -530,15 +529,14 @@ where
     }
 }
 
-impl<const NDIM: usize, const NDOF: usize, const ELEMENT_DOF: usize, NId, E>
-    ModelSession<NDIM, NDOF, ELEMENT_DOF, NId, E>
+impl<const NDIM: usize, const NDOF: usize, NId, E> ModelSession<NDIM, NDOF, NId, E>
 where
     NId: Key + Copy,
-    E: ElementOps<NDIM, NDOF, ELEMENT_DOF, NId> + Clone,
+    E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
     pub(super) fn new(
-        domain: Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        domain: Domain<NDIM, NDOF, NId, E>,
         node_ids: Vec<NId>,
         stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
         recorders: Vec<ResolvedRecorder<NId, E::Id>>,
@@ -858,7 +856,9 @@ where
 
         let mut domain = match self.runner.take().expect("stage running") {
             StageRunner::Static { analysis, .. } => analysis.into_domain(),
-            StageRunner::Modal { mut domain, modes, .. } => {
+            StageRunner::Modal {
+                mut domain, modes, ..
+            } => {
                 let result = self.modal_stage_result(&mut domain, &modes);
                 self.modal_results.push(result);
                 domain
@@ -876,7 +876,7 @@ where
 
     fn modal_stage_result(
         &self,
-        domain: &mut Domain<NDIM, NDOF, ELEMENT_DOF, NId, E>,
+        domain: &mut Domain<NDIM, NDOF, NId, E>,
         modes: &[Mode],
     ) -> ModalStageResult {
         let mass = domain.assemble_mass_diagonal();
@@ -905,7 +905,10 @@ where
                     .shape
                     .iter()
                     .copied()
-                    .fold(0.0_f64, |best, v| if v.abs() > best.abs() { v } else { best })
+                    .fold(
+                        0.0_f64,
+                        |best, v| if v.abs() > best.abs() { v } else { best },
+                    )
                     .signum();
                 let sign = if sign == 0.0 { 1.0 } else { sign };
                 let mut shape = Vec::with_capacity(self.node_ids.len() * NDOF);
@@ -921,7 +924,9 @@ where
                 let participation: Vec<f64> = influence
                     .iter()
                     .map(|r| {
-                        sign * (0..mass.len()).map(|i| mode.shape[i] * mass[i] * r[i]).sum::<f64>()
+                        sign * (0..mass.len())
+                            .map(|i| mode.shape[i] * mass[i] * r[i])
+                            .sum::<f64>()
                     })
                     .collect();
                 let mass_ratio = participation

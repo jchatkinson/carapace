@@ -59,7 +59,10 @@ impl<NId: Key, const NDOF: usize> DofTable<NId, NDOF> {
     }
 
     pub(crate) fn entry(&self, node: NId, dof: usize) -> DofEntry {
-        assert!(dof < NDOF, "DOF index {dof} out of range for a {NDOF}-DOF node");
+        assert!(
+            dof < NDOF,
+            "DOF index {dof} out of range for a {NDOF}-DOF node"
+        );
         match self.ordinal.get(node) {
             Some(&ordinal) => self.entries[ordinal * NDOF + dof],
             None => DofEntry::Fixed,
@@ -67,7 +70,10 @@ impl<NId: Key, const NDOF: usize> DofTable<NId, NDOF> {
     }
 
     pub(crate) fn set(&mut self, node: NId, dof: usize, entry: DofEntry) {
-        assert!(dof < NDOF, "DOF index {dof} out of range for a {NDOF}-DOF node");
+        assert!(
+            dof < NDOF,
+            "DOF index {dof} out of range for a {NDOF}-DOF node"
+        );
         let ordinal = self.ordinal[node];
         self.entries[ordinal * NDOF + dof] = entry;
     }
