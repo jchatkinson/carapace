@@ -769,6 +769,19 @@ OpenSees uses its own enhanced-strain variant; agreement is expected on rectangl
 recorded with its cause, not silently loosened). This is the independent oracle; the
 closed-form tests above are the analytical one.
 
+**Phase 3 as built** (see [refactor-baseline.md](refactor-baseline.md) for results). 3.1-3.9 landed as
+planned, with these differences. (1) `physical_derivatives`/`Jacobian` are 2D-only; the "reusable by a 3D
+shell" generality was not built. (2) `prepare` caches `B`/`detJ*w` (and the condensed enhanced matrices) in an
+`Option`; every method falls back to recomputation, so an element works before `Domain::validate`. (3) A
+`cfg(test)` stateful `PlaneMaterial::Probe` variant stands in for the "stateful test material". (4) The
+2D `ElementLoad` has 16 components (`[wx, wy, bx, by, t0x, t0y, p0, ...]`), so the 2D `elementLoad` recorder
+width went from 2 to 16. (5) `ElementOps` gained `accepts_load`, `prepare`, `gauss_point_count` and
+`gauss_responses`; trusses and springs accept no element load. (6) The plan's "locking persists" expectation for
+the enhanced quad was not reproduced (see the baseline document); no locking claim is made. (7) Element mass on
+a constrained slave is now a `ModelError` (was a panic). (8) 3.9 is `comparison/{wasm_panel.mjs,panel_compare.py}`
+rather than extensions of `opensees_frame.py`/`run_all.py`. (9) Wire: `RecorderSpec::GaussPoint`'s quantity is its own
+`GaussQuantity`, and the new errors are `InvalidGaussPoint` and `InvalidPlaneMaterial`.
+
 ### Phase 4: performance (benchmark-gated, native and wasm)
 
 **4.1 Measure first.** Add a `core/examples/benchmark_continuum.rs` (an N x N Q4 panel

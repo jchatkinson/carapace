@@ -166,3 +166,57 @@ interleaved rounds, medians of 3 runs each:
 Wasm timing is within noise (at most about 3%, and not consistently in one direction); the size
 saving is real but small, and the build is about 2.4 times slower. Native is where LTO closed the
 8% elastic gap (Phase 1 gate). The decision is still open and belongs to the project owner.
+
+## Phase 3 gate (continuum elements, steps 3.1-3.9)
+
+Correctness: `comparison/check_refactor.sh` reports all 1318 dump values and the cyclic material CSVs
+identical to the baseline (largest relative difference 0), so adding the elements and changing the 2D
+`ElementLoad` to an accumulator did not move any existing result. `cargo test --workspace` passes:
+364 passed, 0 failed, 1 ignored in debug (Phase 2: 289).
+
+Performance (same machine, medians of 5 native runs / 3 wasm runs):
+
+| Build | elastic 30x6 | fiber 20x5 | fiber 10x3 (wasm) |
+|---|---|---|---|
+| native, default release (Phase 1 gate: 150.4 / 152.6) | 137.5-142.9 ms (median 139.7) | 141.1-141.8 ms | |
+| wasm (Phase 2: 159-167 / 164 / 28.6-29.4) | 158.8-160.8 ms | | 28.1-29.4 ms |
+
+`carapace_wasm_bg.wasm`: 1,569,949 bytes (Phase 2: 1,442,744; +8.8%, the two elements, the enhanced
+formulation, plane materials and their decoding; +5.0% over the original 1,495,510).
+
+### Recorded results
+
+MacNeal-Harder cantilever (L = 6, depth 0.2, t = 0.1, E = 1e7, nu = 0.3, unit tip shear, 6 elements in a
+row; Timoshenko beam theory 0.10809). Regression values in `core/tests/continuum_quad4.rs`:
+
+| Mesh | Quad4 `full` | Quad4 `enhanced` |
+|---|---|---|
+| rectangles | 0.010088 | 0.107328 |
+| parallelograms | 0.002330 | 0.061063 |
+| trapezoids | 0.002135 | 0.066750 |
+
+Cross-check against OpenSees 3.8 (`comparison/panel_compare.py`, plane stress, same meshes and loads;
+relative to the largest value, displacements / reactions / Gauss stresses):
+
+| Case | Differences |
+|---|---|
+| `quad` vs `full`, `tri31` vs `tri3` (regular and distorted 6x2 strip, MacNeal-Harder meshes) | 1e-11 or better |
+| `enhancedQuad` vs `enhanced`, regular and distorted strip | about 5e-13 |
+| `enhancedQuad` vs `enhanced`, MacNeal-Harder rectangles / parallelograms / trapezoids | 1.5e-10 / 4.7e-11 / 7.4e-11 |
+
+The expected disagreement of `enhancedQuad` on distorted meshes did not appear: OpenSees' element is
+the same incompatible-mode formulation (with the detJ0/detJ scaling), and its recovered Gauss stresses
+agree too.
+
+### Findings
+
+- The plan expected volumetric locking to persist in the enhanced Quad4. In the tests run (Cook's
+  membrane at nu = 0.4999 plane strain, a pressurized thick cylinder at nu = 0.4999) the plain element
+  locks completely (about 26% of the converged tip deflection; 94% error in the cylinder) and the
+  enhanced element does not (91% at 4x4, 0.6% cylinder error). The element's doc comment therefore
+  makes no volumetric-locking claim either way, and the tests record the observation.
+- Element mass on a node that is a rigid-link or diaphragm slave made `assemble_mass_diagonal` panic
+  (a wasm abort). `Domain::validate` now reports `MassOnConstrainedDof` for it. Mass-bearing continuum
+  elements therefore cannot share a node with a rigid-link slave; put the mass on the master side.
+- The wire cannot yet express a nonlinear plane material, so "enhanced Quad4 with a nonlinear material"
+  is rejected by core's `validate` (unit tested) but cannot be reached from a decode test.
