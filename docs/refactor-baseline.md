@@ -89,7 +89,7 @@ still requires re-measuring in wasm because allocation behavior differs.
 
 | 1.3 DOF activation | identical (max relative diff 0) | 256 passed, debug and release (13 new: 10 activation core tests, 2 mask-conformance, 1 wasm) | elastic 30x6 about +10% (156 vs 141 ms), fiber 20x5 about +10% (160 vs 146 ms) in the default release profile; **parity** with `lto = "fat"` + `codegen-units = 1` (142-144 vs 139-141; 143-145 vs 146-147) | not measured (gate at 1.5) |
 
-| 1.4 general constraints | identical (max relative diff 0) | 278 passed, debug and release (19 new constraint/session tests) | not yet measured | not yet measured |
+| 1.4 general constraints | identical (max relative diff 0) | 278 passed, debug and release (19 new constraint/session tests) | see the Phase 1 gate | see the Phase 1 gate |
 
 Notes on 1.2:
 - The elastic 30x6 native gap (about 4-6 ms over 50 steps) is the one measurable cost of the sink
@@ -110,3 +110,28 @@ Notes on 1.3:
   decision for the Phase 1 gate (1.5), not made silently.
 - `cargo test` (debug) is where the assembly guard against under-declared `dof_mask`s is active
   (`#[cfg(debug_assertions)]`); the gate runs both profiles.
+
+## Phase 1 gate (step 1.5, after 1.4)
+
+Correctness: `comparison/check_refactor.sh` reports all 1318 dump values and all 11 cyclic material
+CSVs identical to the baseline (largest relative difference 0); `cargo test --workspace` passes in
+both profiles (278 passed, 0 failed, 1 ignored; baseline 236, so 42 new tests and none removed).
+
+Performance, same session, medians of 6 runs (50-step frame benchmark, `solve_ms`):
+
+| Build | elastic 30x6 (630 DOF) | fiber 20x5 (360 DOF) |
+|---|---|---|
+| native, default release profile: baseline | 138.6 | 147.9 |
+| native, default release profile: branch | 150.4 (+8.5%) | 152.6 (+3%) |
+| native, `lto = "fat"` + `codegen-units = 1`: baseline | 139.0 | 148.0 |
+| native, `lto = "fat"` + `codegen-units = 1`: branch | 142.0 (+2%) | 144.5 (-2%) |
+| wasm (Node v24, 2 warm runs): baseline | 167.5 | 169.7 |
+| wasm: branch | 161.1 | 168.3 |
+
+Wasm fiber 10x3: 29.4 ms branch vs 30.0 ms baseline. `carapace_wasm_bg.wasm`: 1,511,474 bytes vs
+1,495,510 baseline (+1.1%).
+
+Reading: the browser target (wasm) is at parity or slightly faster. The native gap in the default
+profile is an inlining artifact (it disappears under LTO with one codegen unit), not extra work per
+step. Whether to adopt `[profile.release] lto = "fat", codegen-units = 1` is an open decision (it
+changes native and wasm builds; wasm-pack uses the same profile).

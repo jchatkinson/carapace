@@ -351,7 +351,10 @@ actual target.
 Files: none changed; store numbers in the PR description (or
 `docs/refactor-baseline.md`, deleted at the end).
 
-**0.2 Snapshot test for cross-cutting behavior.** Add
+**0.2 Snapshot test for cross-cutting behavior.** *As built: `core/examples/baseline_dump.rs` +
+`comparison/compare_dumps.py` + `comparison/check_refactor.sh` against results recorded at tag
+`pre-domain-refactor` (a diff of two runs, not hard-coded numbers in a test), so it keeps working as
+the API changes. Original description:* Add
 `core/tests/refactor_snapshot.rs`: a handful of representative models (2D frame with
 diaphragm; 2D fiber cantilever; 3D frame with 3D diaphragm; a transient run; an
 arc-length run; a modal run with a constraint) that assert displacement, reaction,
@@ -522,7 +525,7 @@ from `validate` (so `TransientAnalysis::new` returns it); element lumped mass on
 (`assemble_mass_diagonal` called directly) still panics, as before.
 (6) Rigid-link wire tables and the general `linearConstraints` table are Phase 2 (2.1).
 
-**1.5 Phase 1 gate.** `cargo test --workspace`; `refactor_snapshot` identical;
+**1.5 Phase 1 gate.** *Done; results in [refactor-baseline.md](refactor-baseline.md).* `cargo test --workspace`; `refactor_snapshot` identical;
 `benchmark_frame` within a few percent of the Phase 0 baseline in both native and
 wasm; `comparison/` harness outputs unchanged; wasm size noted. Then: delete
 `refactor_snapshot.rs` (or fold into existing tests) and the baseline note.
