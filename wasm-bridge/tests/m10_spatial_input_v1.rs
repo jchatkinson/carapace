@@ -1,22 +1,14 @@
-//! Spatial ("space: 3") counterpart to `m10_carapace_input_v1.rs`: exercises
-//! `carapace_wasm::input_v1::decode`'s spatial path (`decode3.rs`) end to
-//! end, the same way that file exercises the planar path — hand-building a
-//! `CarapaceInputV1` with its `*3` tables populated and driving the
-//! resulting `Session::Spatial` with `advance`.
+//! 3D (`ndm: 3`) counterpart to `m10_carapace_input_v1.rs`: exercises
+//! `carapace_wasm::input_v1::decode`'s 3D path (`decode/elements_3d.rs`) end
+//! to end, the same way that file exercises the 2D path — hand-building a
+//! `CarapaceInputV1` with its 3D tables populated and driving the
+//! resulting `Session::D3` with `advance`.
 
 use carapace_wasm::input_v1::materials::MaterialSpec;
 use carapace_wasm::input_v1::sequence::{
-    AlgorithmSpec, ConvergenceSpec, IntegratorSpec, RecorderSpec3, SequenceSpec3, StageSpec,
+    AlgorithmSpec, ConvergenceSpec, IntegratorSpec, RecorderSpec, SequenceSpec, StageSpec,
 };
-use carapace_wasm::input_v1::tables::{
-    ElasticBeamColumnTable, ElementLoadTable, EqualDofTable, FiberBeamColumnTable, FiberTable,
-    LoadPatternTable, NodalLoadTable, NodeTable, RigidDiaphragmTable, TimeSeriesSpec, TrussTable,
-    ZeroLengthSectionTable, ZeroLengthTable,
-};
-use carapace_wasm::input_v1::tables3::{
-    Axis3Spec, ElementKind3, EqualDofTable3, FiberTable3, NodeTable3, RigidDiaphragmTable3,
-    TrussTable3, ZeroLengthSectionTable3, ZeroLengthTable3,
-};
+use carapace_wasm::input_v1::tables::*;
 use carapace_wasm::input_v1::{decode, CarapaceInputV1, Header, StepOutcome};
 
 fn last_sample(outcome: &StepOutcome, recorder_index: usize) -> Option<(f64, f64)> {
@@ -32,45 +24,36 @@ fn empty_input() -> CarapaceInputV1 {
     CarapaceInputV1 {
         header: Header {
             schema_version: 1,
-            space: 3,
+            ndm: 3,
             engine_version: "test".to_string(),
             record_initial: false,
         },
-        nodes: NodeTable::default(),
+        nodes: Default::default(),
         materials: Vec::new(),
-        fibers: FiberTable::default(),
-        trusses: TrussTable::default(),
-        elastic_beam_columns: ElasticBeamColumnTable::default(),
-        disp_beam_columns: FiberBeamColumnTable::default(),
-        force_beam_columns: FiberBeamColumnTable::default(),
-        zero_lengths: ZeroLengthTable::default(),
-        zero_length_sections: ZeroLengthSectionTable::default(),
-        equal_dofs: EqualDofTable::default(),
-        rigid_diaphragms: RigidDiaphragmTable::default(),
-        load_patterns: LoadPatternTable::default(),
-        nodal_loads: NodalLoadTable::default(),
-        element_loads: ElementLoadTable::default(),
+        fibers: Default::default(),
+        trusses: Default::default(),
+        elastic_beam_columns_2d: Default::default(),
+        elastic_beam_columns_3d: Default::default(),
+        disp_beam_columns_2d: Default::default(),
+        disp_beam_columns_3d: Default::default(),
+        force_beam_columns_2d: Default::default(),
+        force_beam_columns_3d: Default::default(),
+        zero_lengths: Default::default(),
+        zero_length_sections: Default::default(),
+        equal_dofs: Default::default(),
+        rigid_diaphragms: Default::default(),
+        rigid_links: Default::default(),
+        linear_constraints: Default::default(),
+        load_patterns: Default::default(),
+        nodal_loads: Default::default(),
+        element_loads: Default::default(),
         sequence: Default::default(),
-
-        nodes3: NodeTable3::default(),
-        fibers3: FiberTable3::default(),
-        trusses3: TrussTable3::default(),
-        elastic_beam_columns3: Default::default(),
-        disp_beam_columns3: Default::default(),
-        force_beam_columns3: Default::default(),
-        zero_lengths3: ZeroLengthTable3::default(),
-        zero_length_sections3: ZeroLengthSectionTable3::default(),
-        equal_dofs3: EqualDofTable3::default(),
-        rigid_diaphragms3: RigidDiaphragmTable3::default(),
-        nodal_loads3: NodalLoadTable::default(),
-        element_loads3: Default::default(),
-        sequence3: SequenceSpec3::default(),
     }
 }
 
 /// The M17/M1 closed-form axial-stiffness case (core/tests/m17's skew-truss
 /// analogue, core/tests/m1_truss.rs's straight-bar analogue), decoded
-/// entirely from `*3` wire tables: a 3-4-5 skew truss should reproduce the
+/// entirely from 3D wire tables: a 3-4-5 skew truss should reproduce the
 /// same axial elongation a hand computation gives, exercising `Truss3`'s
 /// direction-cosine geometry through the decoder rather than just `core`
 /// directly.
@@ -79,14 +62,14 @@ fn decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation() {
     let (e, area) = (1000.0_f64, 2.0);
     let (dx, dy, length) = (3.0_f64, 4.0, 5.0); // 3-4-5 triangle
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, dx, dy, 0.0],
         fixed: vec![0b111111, 0b111100], // node 1 free only in ux/uy
         mass_node_index: vec![],
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e }];
-    input.trusses3 = TrussTable3 {
+    input.trusses = TrussTable {
         node_i: vec![0],
         node_j: vec![1],
         area: vec![area],
@@ -98,14 +81,14 @@ fn decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation() {
         scale_factor: vec![1.0],
     };
     let force = 100.0;
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0, 0],
         node: vec![1, 1],
         dof: vec![0, 1], // ux, uy
         value: vec![force * dx / length, force * dy / length],
         stage: vec![0, 0],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "only".to_string(),
             steps: 1,
@@ -118,8 +101,8 @@ fn decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation() {
             hold_patterns_after: vec![],
         }],
         recorders: vec![
-            RecorderSpec3::NodeDisp { node: 1, dof: 0 },
-            RecorderSpec3::NodeDisp { node: 1, dof: 1 },
+            RecorderSpec::NodeDisp { node: 1, dof: 0 },
+            RecorderSpec::NodeDisp { node: 1, dof: 1 },
         ],
     };
 
@@ -140,7 +123,7 @@ fn decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation() {
     );
 }
 
-/// `ZeroLength3`'s friction coupling (`ZeroLengthTable3::friction`), the
+/// `ZeroLength3`'s friction coupling (`ZeroLengthTable::friction`), the
 /// spatial counterpart of `m10_carapace_input_v1.rs`'s
 /// `decodes_a_zero_length_with_friction_coupling`: one normal DOF (ux) and
 /// *two* independent shear DOFs (uy, uz — `Friction3::shear_dofs`), each run
@@ -152,18 +135,25 @@ fn decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation() {
 fn decodes_a_zero_length3_with_friction_coupling_on_two_shear_axes() {
     let (k_normal, mu, k0, b) = (1000.0, 0.3, 500.0, 0.01);
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         fixed: vec![0b111111, 0b111000], // node 1 free in ux/uy/uz, rotations fixed
         mass_node_index: vec![],
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e: k_normal }];
-    input.zero_lengths3 = ZeroLengthTable3 {
+    input.zero_lengths = ZeroLengthTable {
         node_i: vec![0],
         node_j: vec![1],
         materials: vec![(0, 0, 0)], // dof 0 (normal) uses material arena index 0
-        friction: vec![(0, 0, 1, 2, mu, k0, b)], // normal=ux, shear=[uy, uz]
+        friction: vec![FrictionRow {
+            row: 0,
+            normal_dof: 0,
+            shear_dofs: vec![1, 2], // normal=ux, shear=[uy, uz]
+            mu,
+            k0,
+            b,
+        }],
         orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
@@ -174,14 +164,14 @@ fn decodes_a_zero_length3_with_friction_coupling_on_two_shear_axes() {
         ],
         scale_factor: vec![1.0, 1.0, 1.0],
     };
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0, 1, 2],
         node: vec![1, 1, 1],
         dof: vec![0, 1, 2],
         value: vec![-1.0, 5.0, 0.1],
         stage: vec![0, 0, 0],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "only".to_string(),
             steps: 1,
@@ -194,8 +184,8 @@ fn decodes_a_zero_length3_with_friction_coupling_on_two_shear_axes() {
             hold_patterns_after: vec![],
         }],
         recorders: vec![
-            RecorderSpec3::NodeDisp { node: 1, dof: 1 },
-            RecorderSpec3::NodeDisp { node: 1, dof: 2 },
+            RecorderSpec::NodeDisp { node: 1, dof: 1 },
+            RecorderSpec::NodeDisp { node: 1, dof: 2 },
         ],
     };
 
@@ -222,7 +212,7 @@ fn decodes_a_zero_length3_with_friction_coupling_on_two_shear_axes() {
 }
 
 /// `ZeroLengthSection3` (`core::ZeroLengthSection3`, wired via
-/// `ZeroLengthSectionTable3`): reproduces closed-form axial stiffness from a
+/// `ZeroLengthSectionTable`): reproduces closed-form axial stiffness from a
 /// four-corner symmetric fiber section, the spatial counterpart of
 /// `m10_carapace_input_v1.rs`'s own zero-length-section test.
 #[test]
@@ -232,21 +222,21 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
     let hy = (iz / area).sqrt();
     let a4 = area / 4.0;
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         fixed: vec![0b111111, 0b111110], // node 1 free only in ux
         mass_node_index: vec![],
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e }];
-    input.fibers3 = FiberTable3 {
+    input.fibers = FiberTable {
         section_offsets: vec![0, 4],
         y: vec![hy, hy, -hy, -hy],
         z: vec![hz, -hz, hz, -hz],
         area: vec![a4, a4, a4, a4],
         material: vec![0, 0, 0, 0],
     };
-    input.zero_length_sections3 = ZeroLengthSectionTable3 {
+    input.zero_length_sections = ZeroLengthSectionTable {
         node_i: vec![0],
         node_j: vec![1],
         fiber_section: vec![0],
@@ -257,14 +247,14 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
         scale_factor: vec![1.0],
     };
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0],
         node: vec![1],
         dof: vec![0],
         value: vec![load],
         stage: vec![0],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "only".to_string(),
             steps: 1,
@@ -276,7 +266,7 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
             }),
             hold_patterns_after: vec![],
         }],
-        recorders: vec![RecorderSpec3::NodeDisp { node: 1, dof: 0 }],
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
     };
 
     let mut session = decode(input).expect("well-formed zero-length-section3 input should decode");
@@ -294,7 +284,7 @@ fn decodes_a_zero_length_section3_and_matches_closed_form_axial_stiffness() {
     );
 }
 
-/// `ZeroLengthSectionTable3::orient`: local x = global Z (yp = global X), so
+/// `ZeroLengthSectionTable::orient`: local x = global Z (yp = global X), so
 /// the section's axial stiffness answers a `uz` load.
 #[test]
 fn decodes_an_oriented_zero_length_section3_and_matches_closed_form_axial_stiffness() {
@@ -303,39 +293,43 @@ fn decodes_an_oriented_zero_length_section3_and_matches_closed_form_axial_stiffn
     let hy = (iz / area).sqrt();
     let a4 = area / 4.0;
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         fixed: vec![0b111111, 0b111011], // node 1 free only in uz
         mass_node_index: vec![],
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e }];
-    input.fibers3 = FiberTable3 {
+    input.fibers = FiberTable {
         section_offsets: vec![0, 4],
         y: vec![hy, hy, -hy, -hy],
         z: vec![hz, -hz, hz, -hz],
         area: vec![a4, a4, a4, a4],
         material: vec![0, 0, 0, 0],
     };
-    input.zero_length_sections3 = ZeroLengthSectionTable3 {
+    input.zero_length_sections = ZeroLengthSectionTable {
         node_i: vec![0],
         node_j: vec![1],
         fiber_section: vec![0],
         materials: vec![],
-        orient: vec![(0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0)],
+        orient: vec![OrientRow {
+            row: 0,
+            x: [0.0, 0.0, 1.0],
+            yp: Some([1.0, 0.0, 0.0]),
+        }],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
         scale_factor: vec![1.0],
     };
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0],
         node: vec![1],
         dof: vec![2],
         value: vec![load],
         stage: vec![0],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "only".to_string(),
             steps: 1,
@@ -347,7 +341,7 @@ fn decodes_an_oriented_zero_length_section3_and_matches_closed_form_axial_stiffn
             }),
             hold_patterns_after: vec![],
         }],
-        recorders: vec![RecorderSpec3::NodeDisp { node: 1, dof: 2 }],
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 2 }],
     };
 
     let mut session = decode(input).expect("well-formed zero-length-section3 input should decode");
@@ -370,13 +364,13 @@ fn decodes_an_elastic_beam_column3_element_force_recorder() {
     let (length, e, g, area, iy, iz, j, fy): (f64, f64, f64, f64, f64, f64, f64, f64) =
         (100.0, 30_000.0, 12_000.0, 10.0, 500.0, 1000.0, 50.0, -10.0);
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, length, 0.0, 0.0],
         fixed: vec![0b111111, 0b000000],
         mass_node_index: vec![],
         mass: vec![],
     };
-    input.elastic_beam_columns3 = carapace_wasm::input_v1::tables3::ElasticBeamColumnTable3 {
+    input.elastic_beam_columns_3d = carapace_wasm::input_v1::tables::ElasticBeamColumn3dTable {
         node_i: vec![0],
         node_j: vec![1],
         e: vec![e],
@@ -385,7 +379,7 @@ fn decodes_an_elastic_beam_column3_element_force_recorder() {
         j: vec![j],
         iy: vec![iy],
         iz: vec![iz],
-        transform: vec![carapace_wasm::input_v1::tables3::TransformSpec3::Linear3 {
+        transform: vec![carapace_wasm::input_v1::tables::TransformSpec3::Linear3 {
             vec_xz: [0.0, 0.0, 1.0],
         }],
         density: vec![0.0],
@@ -394,14 +388,14 @@ fn decodes_an_elastic_beam_column3_element_force_recorder() {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
         scale_factor: vec![1.0],
     };
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0],
         node: vec![1],
         dof: vec![1], // uy
         value: vec![fy],
         stage: vec![0],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "only".to_string(),
             steps: 1,
@@ -414,9 +408,9 @@ fn decodes_an_elastic_beam_column3_element_force_recorder() {
             hold_patterns_after: vec![],
         }],
         recorders: vec![
-            RecorderSpec3::NodeDisp { node: 1, dof: 1 },
-            RecorderSpec3::ElementForce {
-                element_kind: ElementKind3::ElasticBeamColumn,
+            RecorderSpec::NodeDisp { node: 1, dof: 1 },
+            RecorderSpec::ElementForce {
+                element_kind: ElementKind::ElasticBeamColumn3d,
                 element_index: 0,
                 // Local DOF order [ux,uy,uz,rx,ry,rz]_i, [..]_j (width 12):
                 // component 5 = rz_i (fixed-end reaction moment about z).
@@ -450,33 +444,33 @@ fn decodes_an_elastic_beam_column3_element_force_recorder() {
 
 /// The spatial SDOF-truss closed form (core/tests/m19_spatial_dynamics.rs's
 /// `spatial_truss_mass_matches_sdof_closed_form_frequency_via_modal_analysis3`),
-/// decoded entirely from `*3` wire tables — proves `Modal`/`ModeShape` work
-/// through `decode3.rs`'s spatial path, not just the planar one already
+/// decoded entirely from 3D wire tables — proves `Modal`/`ModeShape` work
+/// through the 3D decode path, not just the 2D one already
 /// checked in `m10_carapace_input_v1.rs`.
 #[test]
 fn decodes_a_modal_stage3_and_matches_the_sdof_truss_closed_form() {
     let (e, area, length, density) = (30_000.0_f64, 2.0, 100.0, 0.5);
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, length, 0.0, 0.0],
         fixed: vec![0b111111, 0b111110], // node 1 free only in ux
         mass_node_index: vec![],
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e }];
-    input.trusses3 = TrussTable3 {
+    input.trusses = TrussTable {
         node_i: vec![0],
         node_j: vec![1],
         area: vec![area],
         material: vec![0],
         density: vec![density],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Modal {
             id: "modes".to_string(),
             modes: 1,
         }],
-        recorders: vec![RecorderSpec3::ModeShape {
+        recorders: vec![RecorderSpec::ModeShape {
             mode: 0,
             node: 1,
             dof: 0,
@@ -500,7 +494,7 @@ fn decodes_a_modal_stage3_and_matches_the_sdof_truss_closed_form() {
     );
 }
 
-/// `core::Domain::equal_dof` through the spatial path (`EqualDofTable3`) —
+/// `core::Domain::equal_dof` through the spatial path (`EqualDofTable`) —
 /// same shape as `m10_carapace_input_v1.rs`'s own `equal_dof` test, just
 /// against `Node3Id`s: node 2 carries no element of its own and is free
 /// only in `ux`, tied to node 1's `ux`.
@@ -508,7 +502,7 @@ fn decodes_a_modal_stage3_and_matches_the_sdof_truss_closed_form() {
 fn decodes_an_equal_dof3_constraint_tying_one_nodes_ux_to_another() {
     let (length, area, e, load) = (100.0, 2.0, 30_000.0, 50.0);
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, length, 0.0, 0.0, 2.0 * length, 0.0, 0.0],
         // node 0 fully fixed; node 1 free only in ux; node 2 (no element of
         // its own) also free only in ux, tied to node 1's via equal_dof.
@@ -517,14 +511,14 @@ fn decodes_an_equal_dof3_constraint_tying_one_nodes_ux_to_another() {
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e }];
-    input.trusses3 = TrussTable3 {
+    input.trusses = TrussTable {
         node_i: vec![0],
         node_j: vec![1],
         area: vec![area],
         material: vec![0],
         density: vec![0.0],
     };
-    input.equal_dofs3 = EqualDofTable3 {
+    input.equal_dofs = EqualDofTable {
         retained: vec![1],
         constrained: vec![2],
         dofs: vec![(0, 0)],
@@ -533,14 +527,14 @@ fn decodes_an_equal_dof3_constraint_tying_one_nodes_ux_to_another() {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
         scale_factor: vec![1.0],
     };
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0],
         node: vec![1],
         dof: vec![0],
         value: vec![load],
         stage: vec![0],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "only".to_string(),
             steps: 1,
@@ -553,8 +547,8 @@ fn decodes_an_equal_dof3_constraint_tying_one_nodes_ux_to_another() {
             hold_patterns_after: vec![],
         }],
         recorders: vec![
-            RecorderSpec3::NodeDisp { node: 1, dof: 0 },
-            RecorderSpec3::NodeDisp { node: 2, dof: 0 },
+            RecorderSpec::NodeDisp { node: 1, dof: 0 },
+            RecorderSpec::NodeDisp { node: 2, dof: 0 },
         ],
     };
 
@@ -579,7 +573,7 @@ fn decodes_an_equal_dof3_constraint_tying_one_nodes_ux_to_another() {
 }
 
 /// `core::Domain3::rigid_diaphragm_about` through the spatial path
-/// (`RigidDiaphragmTable3`): reuses the skew-truss closed form from
+/// (`RigidDiaphragmTable`): reuses the skew-truss closed form from
 /// `decodes_a_skew_truss3_and_matches_the_closed_form_axial_elongation`
 /// to give the retained node a known, nonzero translation in *both*
 /// in-plane axes (`x`/`z`, perpendicular to `normal = Y`) while its
@@ -592,7 +586,7 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
     let (e, area) = (1000.0_f64, 2.0);
     let (dx, dz, length) = (3.0_f64, 4.0, 5.0); // 3-4-5 triangle, in the x-z plane
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0, 0.0, 0.0, dx, 0.0, dz, 2.0 * dx, 0.0, 2.0 * dz],
         // node 0 fully fixed; node 1 free only in ux/uz (rotation about
         // normal=Y stays fixed at zero, so the diaphragm's lever-arm term
@@ -603,14 +597,14 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e }];
-    input.trusses3 = TrussTable3 {
+    input.trusses = TrussTable {
         node_i: vec![0],
         node_j: vec![1],
         area: vec![area],
         material: vec![0],
         density: vec![0.0],
     };
-    input.rigid_diaphragms3 = RigidDiaphragmTable3 {
+    input.rigid_diaphragms = RigidDiaphragmTable {
         retained: vec![1],
         normal: vec![Axis3Spec::Y],
         constrained: vec![(0, 2)],
@@ -620,14 +614,14 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
         scale_factor: vec![1.0],
     };
     let force = 100.0;
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0, 0],
         node: vec![1, 1],
         dof: vec![0, 2], // ux, uz
         value: vec![force * dx / length, force * dz / length],
         stage: vec![0, 0],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "only".to_string(),
             steps: 1,
@@ -640,10 +634,10 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
             hold_patterns_after: vec![],
         }],
         recorders: vec![
-            RecorderSpec3::NodeDisp { node: 1, dof: 0 },
-            RecorderSpec3::NodeDisp { node: 1, dof: 2 },
-            RecorderSpec3::NodeDisp { node: 2, dof: 0 },
-            RecorderSpec3::NodeDisp { node: 2, dof: 2 },
+            RecorderSpec::NodeDisp { node: 1, dof: 0 },
+            RecorderSpec::NodeDisp { node: 1, dof: 2 },
+            RecorderSpec::NodeDisp { node: 2, dof: 0 },
+            RecorderSpec::NodeDisp { node: 2, dof: 2 },
         ],
     };
 
@@ -685,7 +679,7 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
 fn modal_shapes_report_a_rigid_diaphragm_slaves_motion_through_the_constraint() {
     let (dx, dz) = (4.0_f64, -6.0_f64);
     let mut input = empty_input();
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         // node 0: ground; node 1: retained (free ux, uz, ry); node 2: slave (free ux, uz).
         coords: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, dx, 0.0, dz],
         fixed: vec![0b111111, 0b101010, 0b111010],
@@ -697,7 +691,7 @@ fn modal_shapes_report_a_rigid_diaphragm_slaves_motion_through_the_constraint() 
         MaterialSpec::Elastic { e: 250.0 },
         MaterialSpec::Elastic { e: 1000.0 },
     ];
-    input.zero_lengths3 = ZeroLengthTable3 {
+    input.zero_lengths = ZeroLengthTable {
         node_i: vec![0, 0],
         node_j: vec![2, 1],
         // Row 0: slave springs in ux and uz; row 1: a rotational spring about y on the retained node.
@@ -705,12 +699,12 @@ fn modal_shapes_report_a_rigid_diaphragm_slaves_motion_through_the_constraint() 
         friction: vec![],
         orient: vec![],
     };
-    input.rigid_diaphragms3 = RigidDiaphragmTable3 {
+    input.rigid_diaphragms = RigidDiaphragmTable {
         retained: vec![1],
         normal: vec![Axis3Spec::Y],
         constrained: vec![(0, 2)],
     };
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Modal {
             id: "modes".to_string(),
             modes: 3,
@@ -745,6 +739,9 @@ fn modal_shapes_report_a_rigid_diaphragm_slaves_motion_through_the_constraint() 
             "slave uz {} vs {expected_z}",
             node(2, 2)
         );
-        assert!(node(2, 0).abs() + node(2, 2).abs() > 1e-9, "the slave must move");
+        assert!(
+            node(2, 0).abs() + node(2, 2).abs() > 1e-9,
+            "the slave must move"
+        );
     }
 }

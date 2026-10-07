@@ -135,12 +135,18 @@ impl std::ops::Add for ElementLoad {
 /// Scalar view of an element load's components (local axes), for recording
 /// the load an element actually carries at some pseudo-time.
 pub trait ElementLoadComponents {
+    /// Number of components (`ElementLoad`: 2, `ElementLoad3`: 3); the bound a
+    /// recorder's `component` index is checked against.
+    const COUNT: usize;
+
     /// Component `index` (`ElementLoad`: `0` = `wx`, `1` = `wy`;
     /// `ElementLoad3`: `0..3` = `wx`, `wy`, `wz`); `0.0` past the last.
     fn component(&self, index: usize) -> f64;
 }
 
 impl ElementLoadComponents for ElementLoad {
+    const COUNT: usize = 2;
+
     fn component(&self, index: usize) -> f64 {
         let ElementLoad::Uniform { wx, wy } = *self;
         [wx, wy].get(index).copied().unwrap_or(0.0)
@@ -148,6 +154,8 @@ impl ElementLoadComponents for ElementLoad {
 }
 
 impl ElementLoadComponents for ElementLoad3 {
+    const COUNT: usize = 3;
+
     fn component(&self, index: usize) -> f64 {
         let ElementLoad3::Uniform { wx, wy, wz } = *self;
         [wx, wy, wz].get(index).copied().unwrap_or(0.0)

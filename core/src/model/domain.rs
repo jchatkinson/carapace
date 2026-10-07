@@ -183,6 +183,10 @@ where
         &self.nodes[id]
     }
 
+    pub fn element(&self, id: E::Id) -> &E {
+        &self.elements[id]
+    }
+
     fn node_view(&self) -> NodeView<'_, NDIM, NDOF, NId> {
         NodeView::new(&self.nodes)
     }

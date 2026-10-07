@@ -46,6 +46,8 @@ impl std::ops::Mul<f64> for NodalPush {
 }
 
 impl ElementLoadComponents for NodalPush {
+    const COUNT: usize = 2;
+
     fn component(&self, index: usize) -> f64 {
         [self.fx, self.fy].get(index).copied().unwrap_or(0.0)
     }

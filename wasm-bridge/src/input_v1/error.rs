@@ -22,10 +22,35 @@ pub enum DecodeError {
         stage: String,
         field: &'static str,
     },
-    /// `header.space` is neither the planar profile this decoder
-    /// implements nor (yet) any other recognized value.
-    UnsupportedSpace {
+    /// `header.ndm` is neither 2 nor 3.
+    UnsupportedNdm {
         got: u8,
+    },
+    /// A table that belongs to the other profile (a 3D beam-column table in a
+    /// 2D model, or the reverse) is not empty.
+    TableNotInProfile {
+        table: &'static str,
+    },
+    /// A reference (element load, recorder) names an element kind that
+    /// belongs to the other profile.
+    ElementKindNotInProfile {
+        table: &'static str,
+    },
+    /// A recorder's `component` is past the element's local force width (or
+    /// the load width, for an `elementLoad` recorder). `recorder` is its
+    /// index in `sequence.recorders`.
+    InvalidRecorderComponent {
+        recorder: u32,
+        component: u8,
+        width: u32,
+    },
+    /// A row's shape is wrong for the profile or its sparse encoding (a
+    /// friction row with the wrong number of shear DOFs, a 2D `orient` row
+    /// with `yp`, `fibers.z` not parallel to `y`, malformed offsets, ...).
+    InvalidRow {
+        table: &'static str,
+        row: u32,
+        reason: &'static str,
     },
     UnknownNodeIndex {
         table: &'static str,
@@ -65,7 +90,7 @@ pub enum DecodeError {
         dof: u8,
     },
     /// A sparse per-row entry (`EqualDofTable::dofs`/`RigidDiaphragmTable::
-    /// constrained` and their spatial counterparts) named a row past the
+    /// constrained`) named a row past the
     /// end of that table's own dense `retained` list.
     UnknownConstraintRow {
         table: &'static str,

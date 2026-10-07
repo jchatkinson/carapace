@@ -1,16 +1,16 @@
 //! `Session`/`StageRunner`/`advance` — pysees-handoff.md's "Decode and
 //! session model": `Session` is chosen once at decode time from the
-//! header's `space` discriminant and never branches on it again; stepping
+//! header's `ndm` discriminant and never branches on it again; stepping
 //! is driven by the caller via a step budget rather than run to completion
 //! inside one call, the mechanism cooperative cancellation is built on.
 //!
 //! `ModelSession<NDIM, NDOF, NId, E>` is generic over the same
 //! kinematic profile `core`'s own `Domain`/`Analysis` are generic over
 //! (`AnalysisBuilder::build` already infers that whole profile from its
-//! `domain` argument — see its doc comment) — the planar/spatial split only
-//! actually differs in element physics and DTO shapes (`decode.rs`/
-//! `decode3.rs`, `tables.rs`/`tables3.rs`), never in this stepping/
-//! recording bookkeeping, so `PlanarSession`/`SpatialSession` are just two
+//! `domain` argument — see its doc comment) — the 2D/3D split only
+//! actually differs in element physics and DTO shapes (`decode/elements_2d.rs`/
+//! `elements_3d.rs`), never in this stepping/
+//! recording bookkeeping, so `Session2`/`Session3` are just two
 //! instantiations of one implementation rather than two hand-duplicated
 //! ones.
 
@@ -247,10 +247,10 @@ impl From<AnalysisError> for AnalysisErrorDetail {
     }
 }
 
-/// A `RecorderSpec`/`RecorderSpec3` resolved against a decoded `Domain` —
+/// A `RecorderSpec` resolved against a decoded `Domain` —
 /// real node/element ID handles instead of wire-format table indices.
 /// Generic over the profile's ID types so one definition serves both
-/// `PlanarSession` (`NodeId`/`ElementId`) and `SpatialSession`
+/// `Session2` (`NodeId`/`ElementId`) and `Session3`
 /// (`Node3Id`/`Element3Id`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResolvedRecorder<NId, EId> {
@@ -448,27 +448,27 @@ pub struct RecorderBatch {
     pub samples: Vec<(f64, f64)>,
 }
 
-/// One opaque handle exposed to the caller, chosen once from `space` at
+/// One opaque handle exposed to the caller, chosen once from `ndm` at
 /// decode time.
 #[derive(Debug)]
 pub enum Session {
-    Planar(PlanarSession),
-    Spatial(SpatialSession),
+    D2(Session2),
+    D3(Session3),
 }
 
 impl Session {
     pub fn advance(&mut self, step_budget: u32) -> StepOutcome {
         match self {
-            Session::Planar(session) => session.advance(step_budget),
-            Session::Spatial(session) => session.advance(step_budget),
+            Session::D2(session) => session.advance(step_budget),
+            Session::D3(session) => session.advance(step_budget),
         }
     }
 
     /// Every `Modal` stage finished so far (see `ModalStageResult`).
     pub fn modal_results(&self) -> ModalResultsReport {
         match self {
-            Session::Planar(session) => session.modal_results(),
-            Session::Spatial(session) => session.modal_results(),
+            Session::D2(session) => session.modal_results(),
+            Session::D3(session) => session.modal_results(),
         }
     }
 
@@ -478,14 +478,14 @@ impl Session {
     /// is marked failed with the error's structured detail".
     pub fn current_stage_id(&self) -> Option<&str> {
         match self {
-            Session::Planar(session) => session.current_stage_id(),
-            Session::Spatial(session) => session.current_stage_id(),
+            Session::D2(session) => session.current_stage_id(),
+            Session::D3(session) => session.current_stage_id(),
         }
     }
 }
 
-pub type PlanarSession = ModelSession<PLANAR_NDIM, NDF, NodeId, Element>;
-pub type SpatialSession = ModelSession<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;
+pub type Session2 = ModelSession<PLANAR_NDIM, NDF, NodeId, Element>;
+pub type Session3 = ModelSession<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;
 
 pub struct ModelSession<const NDIM: usize, const NDOF: usize, NId, E>
 where

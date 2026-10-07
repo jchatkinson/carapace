@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::tables::{ElementKind, TimeSeriesSpec};
-use super::tables3::ElementKind3;
 
 // `ArcLength` is much larger than the other variants; these are decoded a
 // handful of times per input, so boxing would only complicate the wire type.
@@ -404,14 +403,13 @@ impl StageSpec {
 /// `StepOutcome::recorder_batches`, neither of which needed to change shape
 /// to add it. `ElementForce`'s `element_kind`/`element_index` pair mirrors
 /// `ElementLoadTable`'s existing disambiguation between per-kind element
-/// tables (`ElasticBeamColumnTable`, `ForceBeamColumnTable`, ...) — there is
+/// tables (`ElasticBeamColumn2dTable`, `FiberBeamColumn3dTable`, ...) — there is
 /// no single flat element table to index into directly, unlike `NodeTable`.
 /// Adding a future response kind (velocity, acceleration, ...) is one more
-/// variant here plus one more match arm in `PlanarSession::record_sample`,
+/// variant here plus one more match arm in `ModelSession::record_sample`,
 /// not a new parallel type or a new `Session`/`StepOutcome` field.
 /// Which half of a fiber's `(strain, stress)` pair (`core::FiberSection::
-/// fiber_responses`'s doc comment) a `RecorderSpec::Fiber`/`RecorderSpec3::
-/// Fiber` reads — one scalar channel per recorder, same as every other
+/// fiber_responses`'s doc comment) a `RecorderSpec::Fiber` reads — one scalar channel per recorder, same as every other
 /// kind here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
@@ -440,8 +438,9 @@ pub enum RecorderSpec {
     /// names (e.g. `ForceBeamColumnTable`), not a flat cross-kind element
     /// list. `component` indexes the element's local nodal force vector
     /// (`ElementOps::local_force` — axial/shear/moment at each end, in the
-    /// element's own axis frame), width `2 * dofsPerNode` (6 for this
-    /// planar decoder).
+    /// element's own axis frame), width `2 * dofsPerNode` (6 in 2D, 12 in
+    /// 3D); a `component` past `ElementOps::local_force_width` is
+    /// `DecodeError::InvalidRecorderComponent`.
     ElementForce {
         element_kind: ElementKind,
         element_index: u32,
@@ -449,7 +448,9 @@ pub enum RecorderSpec {
     },
     /// The uniform load an element carries at the sample's pseudo-time
     /// (every pattern's load on it, scaled by its factor, summed — frozen
-    /// patterns included): `component` `0` = `wx`, `1` = `wy`, local axes.
+    /// patterns included): `component` `0` = `wx`, `1` = `wy`, `2` = `wz`
+    /// (3D only), local axes; past the load's width it is
+    /// `DecodeError::InvalidRecorderComponent`.
     /// What a consumer needs to recover internal-force diagrams from
     /// `ElementForce`'s end forces. `0` for an unloaded element.
     ElementLoad {
@@ -500,70 +501,4 @@ pub enum RecorderSpec {
 pub struct SequenceSpec {
     pub stages: Vec<StageSpec>,
     pub recorders: Vec<RecorderSpec>,
-}
-
-/// `RecorderSpec`'s spatial counterpart — same shape, just `element_kind`
-/// naming a spatial [`ElementKind3`] and `component` indexing a width-12
-/// (`2 * SPATIAL_NDF`) local nodal force vector instead of width-6. `Node`
-/// disp is otherwise dimension-agnostic (`dof` just goes up to 5 instead of
-/// 2), but a shared enum would need `RecorderSpec::ElementForce` to name a
-/// type that's different per profile, so this stays its own enum rather
-/// than a generic parameter.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
-#[serde(
-    tag = "response",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum RecorderSpec3 {
-    NodeDisp {
-        node: u32,
-        dof: u8,
-    },
-    NodeVel {
-        node: u32,
-        dof: u8,
-    },
-    NodeAccel {
-        node: u32,
-        dof: u8,
-    },
-    ElementForce {
-        element_kind: ElementKind3,
-        element_index: u32,
-        component: u8,
-    },
-    /// See `RecorderSpec::ElementLoad`; `component` `0..3` = `wx`, `wy`, `wz`.
-    ElementLoad {
-        element_kind: ElementKind3,
-        element_index: u32,
-        component: u8,
-    },
-    ModeShape {
-        mode: u32,
-        node: u32,
-        dof: u8,
-    },
-    Reaction {
-        node: u32,
-        dof: u8,
-    },
-    Fiber {
-        element_kind: ElementKind3,
-        element_index: u32,
-        point: u32,
-        fiber: u32,
-        quantity: FiberResponseKind,
-    },
-}
-
-/// `SequenceSpec`'s spatial counterpart. `stages: Vec<StageSpec>` is reused
-/// verbatim — stage/integrator/algorithm/convergence compilation
-/// (`decode.rs`'s `compile_stages`) never touches element physics, only
-/// node indices and DOF numbers, so nothing about it is planar-specific.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
-#[serde(rename_all = "camelCase")]
-pub struct SequenceSpec3 {
-    pub stages: Vec<StageSpec>,
-    pub recorders: Vec<RecorderSpec3>,
 }

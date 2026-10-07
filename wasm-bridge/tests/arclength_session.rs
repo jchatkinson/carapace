@@ -9,58 +9,41 @@ use carapace_wasm::input_v1::materials::MaterialSpec;
 use carapace_wasm::input_v1::sequence::{
     AlgorithmConfigSpec, AlgorithmSpec, ArcLengthSpec, ArcScalesSpec, ArcSeedComponentSpec,
     ArcSeedSpec, ArcStopSpec, ConvergenceSpec, DisplacementTargetSpec, IntegratorSpec,
-    LoadFactorTargetSpec, RecorderSpec, RecorderSpec3, SequenceSpec, SequenceSpec3, StageSpec,
-    TangentStrategySpec,
+    LoadFactorTargetSpec, RecorderSpec, SequenceSpec, StageSpec, TangentStrategySpec,
 };
-use carapace_wasm::input_v1::tables::{
-    ElasticBeamColumnTable, ElementLoadTable, EqualDofTable, FiberBeamColumnTable, FiberTable,
-    LoadPatternTable, NodalLoadTable, NodeTable, RigidDiaphragmTable, TimeSeriesSpec, TrussTable,
-    ZeroLengthSectionTable, ZeroLengthTable,
-};
-use carapace_wasm::input_v1::tables3::{
-    ElasticBeamColumnTable3, ElementLoadTable3, EqualDofTable3, FiberBeamColumnTable3, FiberTable3,
-    NodeTable3, RigidDiaphragmTable3, TrussTable3, ZeroLengthSectionTable3, ZeroLengthTable3,
-};
+use carapace_wasm::input_v1::tables::*;
 use carapace_wasm::input_v1::{
     decode, AnalysisErrorDetail, CarapaceInputV1, DecodeError, Header, StopReasonDetail,
 };
 
-fn empty_input(space: u8) -> CarapaceInputV1 {
+fn empty_input(ndm: u8) -> CarapaceInputV1 {
     CarapaceInputV1 {
         header: Header {
             schema_version: 1,
-            space,
+            ndm,
             engine_version: "test".to_string(),
             record_initial: false,
         },
-        nodes: NodeTable::default(),
+        nodes: Default::default(),
         materials: Vec::new(),
-        fibers: FiberTable::default(),
-        trusses: TrussTable::default(),
-        elastic_beam_columns: ElasticBeamColumnTable::default(),
-        disp_beam_columns: FiberBeamColumnTable::default(),
-        force_beam_columns: FiberBeamColumnTable::default(),
-        zero_lengths: ZeroLengthTable::default(),
-        zero_length_sections: ZeroLengthSectionTable::default(),
-        equal_dofs: EqualDofTable::default(),
-        rigid_diaphragms: RigidDiaphragmTable::default(),
-        load_patterns: LoadPatternTable::default(),
-        nodal_loads: NodalLoadTable::default(),
-        element_loads: ElementLoadTable::default(),
-        sequence: SequenceSpec::default(),
-        nodes3: NodeTable3::default(),
-        fibers3: FiberTable3::default(),
-        trusses3: TrussTable3::default(),
-        elastic_beam_columns3: ElasticBeamColumnTable3::default(),
-        disp_beam_columns3: FiberBeamColumnTable3::default(),
-        force_beam_columns3: FiberBeamColumnTable3::default(),
-        zero_lengths3: ZeroLengthTable3::default(),
-        zero_length_sections3: ZeroLengthSectionTable3::default(),
-        equal_dofs3: EqualDofTable3::default(),
-        rigid_diaphragms3: RigidDiaphragmTable3::default(),
-        nodal_loads3: NodalLoadTable::default(),
-        element_loads3: ElementLoadTable3::default(),
-        sequence3: SequenceSpec3::default(),
+        fibers: Default::default(),
+        trusses: Default::default(),
+        elastic_beam_columns_2d: Default::default(),
+        elastic_beam_columns_3d: Default::default(),
+        disp_beam_columns_2d: Default::default(),
+        disp_beam_columns_3d: Default::default(),
+        force_beam_columns_2d: Default::default(),
+        force_beam_columns_3d: Default::default(),
+        zero_lengths: Default::default(),
+        zero_length_sections: Default::default(),
+        equal_dofs: Default::default(),
+        rigid_diaphragms: Default::default(),
+        rigid_links: Default::default(),
+        linear_constraints: Default::default(),
+        load_patterns: Default::default(),
+        nodal_loads: Default::default(),
+        element_loads: Default::default(),
+        sequence: Default::default(),
     }
 }
 
@@ -280,14 +263,14 @@ fn stop_detail_and_default_combined_convergence_are_reported() {
 fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
     let k = 80.0;
     let mut input = empty_input(3);
-    input.nodes3 = NodeTable3 {
+    input.nodes = NodeTable {
         coords: vec![0.0; 6],
         fixed: vec![0b111111, 0b111011], // node 1 free only in uz
         mass_node_index: vec![],
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e: k }];
-    input.zero_lengths3 = ZeroLengthTable3 {
+    input.zero_lengths = ZeroLengthTable {
         node_i: vec![0],
         node_j: vec![1],
         materials: vec![(0, 2, 0)],
@@ -298,7 +281,7 @@ fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
         scale_factor: vec![1.0],
     };
-    input.nodal_loads3 = NodalLoadTable {
+    input.nodal_loads = NodalLoadTable {
         pattern: vec![0],
         node: vec![1],
         dof: vec![2],
@@ -322,7 +305,7 @@ fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
         }),
         ..Default::default()
     });
-    input.sequence3 = SequenceSpec3 {
+    input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
             id: "push".into(),
             steps: 100,
@@ -331,7 +314,7 @@ fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
             convergence: None,
             hold_patterns_after: vec![],
         }],
-        recorders: vec![RecorderSpec3::NodeDisp { node: 1, dof: 2 }],
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 2 }],
     };
     let outcome = decode(input).unwrap().advance(1000);
     assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");

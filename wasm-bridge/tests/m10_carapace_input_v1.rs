@@ -6,18 +6,9 @@
 use carapace_wasm::input_v1::materials::MaterialSpec;
 use carapace_wasm::input_v1::sequence::{
     AlgorithmSpec, ConvergenceSpec, FiberResponseKind, IntegratorSpec, RecorderSpec, SequenceSpec,
-    SequenceSpec3, StageSpec,
+    StageSpec,
 };
-use carapace_wasm::input_v1::tables::{
-    ElasticBeamColumnTable, ElementKind, ElementLoadSpec, ElementLoadTable, EqualDofTable,
-    FiberBeamColumnTable, FiberTable, IntegrationSpec, LoadPatternTable, NodalLoadTable, NodeTable,
-    RigidDiaphragmTable, TimeSeriesSpec, TransformSpec, TrussTable, ZeroLengthSectionTable,
-    ZeroLengthTable,
-};
-use carapace_wasm::input_v1::tables3::{
-    ElasticBeamColumnTable3, ElementLoadTable3, EqualDofTable3, FiberBeamColumnTable3, FiberTable3,
-    NodeTable3, RigidDiaphragmTable3, TrussTable3, ZeroLengthSectionTable3, ZeroLengthTable3,
-};
+use carapace_wasm::input_v1::tables::*;
 use carapace_wasm::input_v1::{decode, CarapaceInputV1, Header, StepOutcome};
 
 /// The last sample a given recorder produced in one `advance()` call's outcome, or `None` if
@@ -31,43 +22,34 @@ fn last_sample(outcome: &StepOutcome, recorder_index: usize) -> Option<(f64, f64
         .copied()
 }
 
-fn empty_input(header_space: u8) -> CarapaceInputV1 {
+fn empty_input(ndm: u8) -> CarapaceInputV1 {
     CarapaceInputV1 {
         header: Header {
             schema_version: 1,
-            space: header_space,
+            ndm,
             engine_version: "test".to_string(),
             record_initial: false,
         },
-        nodes: NodeTable::default(),
+        nodes: Default::default(),
         materials: Vec::new(),
-        fibers: FiberTable::default(),
-        trusses: TrussTable::default(),
-        elastic_beam_columns: ElasticBeamColumnTable::default(),
-        disp_beam_columns: FiberBeamColumnTable::default(),
-        force_beam_columns: FiberBeamColumnTable::default(),
-        zero_lengths: ZeroLengthTable::default(),
-        zero_length_sections: ZeroLengthSectionTable::default(),
-        equal_dofs: EqualDofTable::default(),
-        rigid_diaphragms: RigidDiaphragmTable::default(),
-        load_patterns: LoadPatternTable::default(),
-        nodal_loads: NodalLoadTable::default(),
-        element_loads: ElementLoadTable::default(),
-        sequence: SequenceSpec::default(),
-
-        nodes3: NodeTable3::default(),
-        fibers3: FiberTable3::default(),
-        trusses3: TrussTable3::default(),
-        elastic_beam_columns3: ElasticBeamColumnTable3::default(),
-        disp_beam_columns3: FiberBeamColumnTable3::default(),
-        force_beam_columns3: FiberBeamColumnTable3::default(),
-        zero_lengths3: ZeroLengthTable3::default(),
-        zero_length_sections3: ZeroLengthSectionTable3::default(),
-        equal_dofs3: EqualDofTable3::default(),
-        rigid_diaphragms3: RigidDiaphragmTable3::default(),
-        nodal_loads3: NodalLoadTable::default(),
-        element_loads3: ElementLoadTable3::default(),
-        sequence3: SequenceSpec3::default(),
+        fibers: Default::default(),
+        trusses: Default::default(),
+        elastic_beam_columns_2d: Default::default(),
+        elastic_beam_columns_3d: Default::default(),
+        disp_beam_columns_2d: Default::default(),
+        disp_beam_columns_3d: Default::default(),
+        force_beam_columns_2d: Default::default(),
+        force_beam_columns_3d: Default::default(),
+        zero_lengths: Default::default(),
+        zero_length_sections: Default::default(),
+        equal_dofs: Default::default(),
+        rigid_diaphragms: Default::default(),
+        rigid_links: Default::default(),
+        linear_constraints: Default::default(),
+        load_patterns: Default::default(),
+        nodal_loads: Default::default(),
+        element_loads: Default::default(),
+        sequence: Default::default(),
     }
 }
 
@@ -325,8 +307,8 @@ fn truss_with_unfixed_rotations(extra_load: Option<(u32, u8, f64)>) -> CarapaceI
 /// `advance`, not a panic.
 #[test]
 fn truss_with_unfixed_rotations_solves_and_a_load_on_an_unused_dof_is_a_structured_error() {
-    use carapace_wasm::input_v1::AnalysisErrorDetail;
     use carapace_wasm::input_v1::error::ModelErrorDetail;
+    use carapace_wasm::input_v1::AnalysisErrorDetail;
 
     let mut session = decode(truss_with_unfixed_rotations(None)).expect("decodes");
     let outcome = session.advance(10);
@@ -364,7 +346,7 @@ fn decodes_an_element_force_recorder_alongside_a_node_disp_recorder() {
         mass_node_index: vec![],
         mass: vec![],
     };
-    input.elastic_beam_columns = ElasticBeamColumnTable {
+    input.elastic_beam_columns_2d = ElasticBeamColumn2dTable {
         node_i: vec![0],
         node_j: vec![1],
         e: vec![e],
@@ -399,13 +381,13 @@ fn decodes_an_element_force_recorder_alongside_a_node_disp_recorder() {
         recorders: vec![
             RecorderSpec::NodeDisp { node: 1, dof: 1 },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::ElasticBeamColumn,
+                element_kind: ElementKind::ElasticBeamColumn2d,
                 element_index: 0,
                 // component 2 = rz_i (fixed-end reaction moment), component 4 = uy_j (tip shear).
                 component: 2,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::ElasticBeamColumn,
+                element_kind: ElementKind::ElasticBeamColumn2d,
                 element_index: 0,
                 component: 4,
             },
@@ -464,7 +446,14 @@ fn decodes_a_zero_length_with_friction_coupling() {
         node_i: vec![0],
         node_j: vec![1],
         materials: vec![(0, 0, 0)], // dof 0 (normal) uses material arena index 0
-        friction: vec![(0, 0, 1, mu, k0, b)], // normal_dof=0, shear_dof=1
+        friction: vec![FrictionRow {
+            row: 0,
+            normal_dof: 0,
+            shear_dofs: vec![1], // normal_dof=0, shear_dof=1
+            mu,
+            k0,
+            b,
+        }],
         orient: vec![],
     };
     input.load_patterns = LoadPatternTable {
@@ -538,6 +527,7 @@ fn decodes_a_zero_length_section_and_matches_closed_form_axial_stiffness() {
     input.materials = vec![MaterialSpec::Elastic { e }];
     input.fibers = FiberTable {
         section_offsets: vec![0, 2],
+        z: vec![],
         y: vec![h, -h],
         area: vec![area / 2.0, area / 2.0],
         material: vec![0, 0],
@@ -607,6 +597,7 @@ fn decodes_an_oriented_zero_length_section_and_matches_closed_form_axial_stiffne
     input.materials = vec![MaterialSpec::Elastic { e }];
     input.fibers = FiberTable {
         section_offsets: vec![0, 2],
+        z: vec![],
         y: vec![h, -h],
         area: vec![area / 2.0, area / 2.0],
         material: vec![0, 0],
@@ -616,7 +607,11 @@ fn decodes_an_oriented_zero_length_section_and_matches_closed_form_axial_stiffne
         node_j: vec![1],
         fiber_section: vec![0],
         materials: vec![],
-        orient: vec![(0, 0.0, 1.0, 0.0)],
+        orient: vec![OrientRow {
+            row: 0,
+            x: [0.0, 1.0, 0.0],
+            yp: None,
+        }],
     };
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
@@ -665,23 +660,23 @@ fn decodes_an_oriented_zero_length_section_and_matches_closed_form_axial_stiffne
 #[test]
 fn rejects_invalid_zero_length_orientations() {
     use carapace_wasm::input_v1::DecodeError;
-    for (orient, expected) in [
+    for ((row, x), expected) in [
         (
-            (0, 0.0, 0.0, 0.0),
+            (0, [0.0, 0.0, 0.0]),
             DecodeError::InvalidOrientation {
                 table: "zero_length_sections",
                 row: 0,
             },
         ),
         (
-            (0, 0.0, 0.0, 1.0),
+            (0, [0.0, 0.0, 1.0]),
             DecodeError::InvalidOrientation {
                 table: "zero_length_sections",
                 row: 0,
             },
         ),
         (
-            (3, 1.0, 0.0, 0.0),
+            (3, [1.0, 0.0, 0.0]),
             DecodeError::UnknownElementIndex {
                 table: "zero_length_sections",
                 row: 3,
@@ -698,6 +693,7 @@ fn rejects_invalid_zero_length_orientations() {
         input.materials = vec![MaterialSpec::Elastic { e: 1.0 }];
         input.fibers = FiberTable {
             section_offsets: vec![0, 1],
+            z: vec![],
             y: vec![0.0],
             area: vec![1.0],
             material: vec![0],
@@ -707,7 +703,7 @@ fn rejects_invalid_zero_length_orientations() {
             node_j: vec![1],
             fiber_section: vec![0],
             materials: vec![],
-            orient: vec![orient],
+            orient: vec![OrientRow { row, x, yp: None }],
         };
         assert_eq!(decode(input).err(), Some(expected));
     }
@@ -841,7 +837,7 @@ fn rejects_an_unrecognized_space_before_constructing_a_session() {
     let err = decode(empty_input(4)).unwrap_err();
     assert_eq!(
         err,
-        carapace_wasm::input_v1::DecodeError::UnsupportedSpace { got: 4 }
+        carapace_wasm::input_v1::DecodeError::UnsupportedNdm { got: 4 }
     );
 }
 
@@ -943,7 +939,10 @@ fn modal_results_report_shapes_and_participation_without_recorders() {
     let report = session.modal_results();
     assert_eq!(report.stages.len(), 1);
     let stage = &report.stages[0];
-    assert_eq!((stage.stage_index, stage.stage_id.as_str(), stage.ndf), (0, "modes", 3));
+    assert_eq!(
+        (stage.stage_index, stage.stage_id.as_str(), stage.ndf),
+        (0, "modes", 3)
+    );
     assert_eq!(stage.modes.len(), 2);
     assert!((stage.total_mass[0] - 2.0).abs() < 1e-12);
     assert_eq!(stage.total_mass[1], 0.0);
@@ -951,12 +950,19 @@ fn modal_results_report_shapes_and_participation_without_recorders() {
     let phi = (1.0 + 5.0_f64.sqrt()) / 2.0;
     assert!((stage.modes[0].frequency - 1.0 / phi).abs() < 1e-9);
     let ratio_sum: f64 = stage.modes.iter().map(|m| m.mass_ratio[0]).sum();
-    assert!((ratio_sum - 1.0).abs() < 1e-9, "x mass ratios sum to {ratio_sum}");
+    assert!(
+        (ratio_sum - 1.0).abs() < 1e-9,
+        "x mass ratios sum to {ratio_sum}"
+    );
     for mode in &stage.modes {
         assert_eq!(mode.shape.len(), 3 * 3);
         // Ground node fixed -> zero; largest entry positive; M-normalized.
         assert!(mode.shape[..3].iter().all(|v| *v == 0.0));
-        let peak = mode.shape.iter().copied().fold(0.0_f64, |b, v| if v.abs() > b.abs() { v } else { b });
+        let peak = mode
+            .shape
+            .iter()
+            .copied()
+            .fold(0.0_f64, |b, v| if v.abs() > b.abs() { v } else { b });
         assert!(peak > 0.0);
         let norm: f64 = mode.shape[3] * mode.shape[3] + mode.shape[6] * mode.shape[6];
         assert!((norm - 1.0).abs() < 1e-9);
@@ -1136,11 +1142,12 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
     input.materials = vec![MaterialSpec::ElasticPp { e, eyp }];
     input.fibers = FiberTable {
         section_offsets: vec![0, fiber_y.len() as u32],
+        z: vec![],
         y: fiber_y,
         area: fiber_area,
         material: fiber_material,
     };
-    input.force_beam_columns = FiberBeamColumnTable {
+    input.force_beam_columns_2d = FiberBeamColumn2dTable {
         node_i: vec![0],
         node_j: vec![1],
         fiber_section: vec![0],
@@ -1387,11 +1394,12 @@ fn decodes_a_fiber_recorder_and_matches_hand_computed_strain_and_stress() {
     input.materials = vec![MaterialSpec::Elastic { e }];
     input.fibers = FiberTable {
         section_offsets: vec![0, 2],
+        z: vec![],
         y: vec![h, -h],
         area: vec![area / 2.0, area / 2.0],
         material: vec![0, 0],
     };
-    input.disp_beam_columns = FiberBeamColumnTable {
+    input.disp_beam_columns_2d = FiberBeamColumn2dTable {
         node_i: vec![0],
         node_j: vec![1],
         fiber_section: vec![0],
@@ -1424,14 +1432,14 @@ fn decodes_a_fiber_recorder_and_matches_hand_computed_strain_and_stress() {
         }],
         recorders: vec![
             RecorderSpec::Fiber {
-                element_kind: ElementKind::DispBeamColumn,
+                element_kind: ElementKind::DispBeamColumn2d,
                 element_index: 0,
                 point: 0,
                 fiber: 0,
                 quantity: FiberResponseKind::Strain,
             },
             RecorderSpec::Fiber {
-                element_kind: ElementKind::DispBeamColumn,
+                element_kind: ElementKind::DispBeamColumn2d,
                 element_index: 0,
                 point: 0,
                 fiber: 1,
@@ -1630,6 +1638,7 @@ fn decodes_a_rigid_diaphragm_tying_two_nodes_ux_to_the_retained_node() {
         density: vec![0.0],
     };
     input.rigid_diaphragms = RigidDiaphragmTable {
+        normal: vec![],
         retained: vec![1],
         constrained: vec![(0, 2), (0, 3)],
     };
@@ -1700,7 +1709,7 @@ fn decodes_a_uniform_element_load_and_records_loaded_member_end_forces() {
         mass_node_index: vec![],
         mass: vec![],
     };
-    input.elastic_beam_columns = ElasticBeamColumnTable {
+    input.elastic_beam_columns_2d = ElasticBeamColumn2dTable {
         node_i: vec![0],
         node_j: vec![1],
         e: vec![e],
@@ -1716,16 +1725,24 @@ fn decodes_a_uniform_element_load_and_records_loaded_member_end_forces() {
     // Two rows on the same element: they must sum to (wx, wy).
     input.element_loads = ElementLoadTable {
         pattern: vec![0, 0],
-        element_kind: vec![ElementKind::ElasticBeamColumn; 2],
+        element_kind: vec![ElementKind::ElasticBeamColumn2d; 2],
         element_index: vec![0, 0],
         load: vec![
-            ElementLoadSpec::Uniform { wx, wy: 0.0 },
-            ElementLoadSpec::Uniform { wx: 0.0, wy },
+            ElementLoadSpec::Uniform {
+                wx,
+                wy: 0.0,
+                wz: None,
+            },
+            ElementLoadSpec::Uniform {
+                wx: 0.0,
+                wy,
+                wz: None,
+            },
         ],
         stage: vec![0, 0],
     };
     let element_force = |component| RecorderSpec::ElementForce {
-        element_kind: ElementKind::ElasticBeamColumn,
+        element_kind: ElementKind::ElasticBeamColumn2d,
         element_index: 0,
         component,
     };
@@ -1804,7 +1821,11 @@ fn rejects_an_element_load_on_an_unsupported_element_kind() {
         pattern: vec![0],
         element_kind: vec![ElementKind::Truss],
         element_index: vec![0],
-        load: vec![ElementLoadSpec::Uniform { wx: 0.0, wy: 1.0 }],
+        load: vec![ElementLoadSpec::Uniform {
+            wx: 0.0,
+            wy: 1.0,
+            wz: None,
+        }],
         stage: vec![0],
     };
     input.sequence = SequenceSpec {
@@ -1838,11 +1859,12 @@ fn decodes_a_uniform_load_on_a_disp_beam_column() {
     input.materials = vec![MaterialSpec::Elastic { e }];
     input.fibers = FiberTable {
         section_offsets: vec![0, 2],
+        z: vec![],
         y: vec![h, -h],
         area: vec![area / 2.0; 2],
         material: vec![0, 0],
     };
-    input.disp_beam_columns = FiberBeamColumnTable {
+    input.disp_beam_columns_2d = FiberBeamColumn2dTable {
         node_i: vec![0],
         node_j: vec![1],
         fiber_section: vec![0],
@@ -1856,13 +1878,17 @@ fn decodes_a_uniform_load_on_a_disp_beam_column() {
     };
     input.element_loads = ElementLoadTable {
         pattern: vec![0],
-        element_kind: vec![ElementKind::DispBeamColumn],
+        element_kind: vec![ElementKind::DispBeamColumn2d],
         element_index: vec![0],
-        load: vec![ElementLoadSpec::Uniform { wx: 0.0, wy }],
+        load: vec![ElementLoadSpec::Uniform {
+            wx: 0.0,
+            wy,
+            wz: None,
+        }],
         stage: vec![0],
     };
     let element_force = |component| RecorderSpec::ElementForce {
-        element_kind: ElementKind::DispBeamColumn,
+        element_kind: ElementKind::DispBeamColumn2d,
         element_index: 0,
         component,
     };
@@ -1924,11 +1950,12 @@ fn decodes_a_uniform_load_on_a_force_beam_column() {
     input.materials = vec![MaterialSpec::Elastic { e }];
     input.fibers = FiberTable {
         section_offsets: vec![0, 2],
+        z: vec![],
         y: vec![h, -h],
         area: vec![area / 2.0; 2],
         material: vec![0, 0],
     };
-    input.force_beam_columns = FiberBeamColumnTable {
+    input.force_beam_columns_2d = FiberBeamColumn2dTable {
         node_i: vec![0],
         node_j: vec![1],
         fiber_section: vec![0],
@@ -1942,13 +1969,17 @@ fn decodes_a_uniform_load_on_a_force_beam_column() {
     };
     input.element_loads = ElementLoadTable {
         pattern: vec![0],
-        element_kind: vec![ElementKind::ForceBeamColumn],
+        element_kind: vec![ElementKind::ForceBeamColumn2d],
         element_index: vec![0],
-        load: vec![ElementLoadSpec::Uniform { wx: 0.0, wy }],
+        load: vec![ElementLoadSpec::Uniform {
+            wx: 0.0,
+            wy,
+            wz: None,
+        }],
         stage: vec![0],
     };
     let element_force = |component| RecorderSpec::ElementForce {
-        element_kind: ElementKind::ForceBeamColumn,
+        element_kind: ElementKind::ForceBeamColumn2d,
         element_index: 0,
         component,
     };
@@ -2008,7 +2039,7 @@ fn an_element_load_recorder_follows_the_pattern_factor_then_the_frozen_value() {
         mass_node_index: vec![],
         mass: vec![],
     };
-    input.elastic_beam_columns = ElasticBeamColumnTable {
+    input.elastic_beam_columns_2d = ElasticBeamColumn2dTable {
         node_i: vec![0],
         node_j: vec![1],
         e: vec![e],
@@ -2026,9 +2057,9 @@ fn an_element_load_recorder_follows_the_pattern_factor_then_the_frozen_value() {
     };
     input.element_loads = ElementLoadTable {
         pattern: vec![0],
-        element_kind: vec![ElementKind::ElasticBeamColumn],
+        element_kind: vec![ElementKind::ElasticBeamColumn2d],
         element_index: vec![0],
-        load: vec![ElementLoadSpec::Uniform { wx, wy }],
+        load: vec![ElementLoadSpec::Uniform { wx, wy, wz: None }],
         stage: vec![0],
     };
     input.nodal_loads = NodalLoadTable {
@@ -2056,12 +2087,12 @@ fn an_element_load_recorder_follows_the_pattern_factor_then_the_frozen_value() {
         ],
         recorders: vec![
             RecorderSpec::ElementLoad {
-                element_kind: ElementKind::ElasticBeamColumn,
+                element_kind: ElementKind::ElasticBeamColumn2d,
                 element_index: 0,
                 component: 0,
             },
             RecorderSpec::ElementLoad {
-                element_kind: ElementKind::ElasticBeamColumn,
+                element_kind: ElementKind::ElasticBeamColumn2d,
                 element_index: 0,
                 component: 1,
             },
@@ -2085,13 +2116,20 @@ fn an_element_load_recorder_follows_the_pattern_factor_then_the_frozen_value() {
 
 /// A bar loaded in two static stages that both ramp pattern 0 (load stage `0`), optionally with a
 /// `Reset` between them. `hold` freezes the pattern after the first stage.
-fn two_stage_bar(record_initial: bool, between: Option<StageSpec>, hold: bool) -> carapace_wasm::input_v1::Session {
+fn two_stage_bar(
+    record_initial: bool,
+    between: Option<StageSpec>,
+    hold: bool,
+) -> carapace_wasm::input_v1::Session {
     let static_stage = |id: &str, hold: bool| StageSpec::Static {
         id: id.to_string(),
         steps: 2,
         integrator: IntegratorSpec::LoadControl { increment: 0.5 },
         algorithm: AlgorithmSpec::Linear,
-        convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-9, max_iter: 10 }),
+        convergence: Some(ConvergenceSpec::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        }),
         hold_patterns_after: if hold { vec![0] } else { vec![] },
     };
     let mut input = empty_input(2);
@@ -2103,13 +2141,31 @@ fn two_stage_bar(record_initial: bool, between: Option<StageSpec>, hold: bool) -
         mass: vec![],
     };
     input.materials = vec![MaterialSpec::Elastic { e: 30000.0 }];
-    input.trusses = TrussTable { node_i: vec![0], node_j: vec![1], area: vec![2.0], material: vec![0], density: vec![0.0] };
-    input.load_patterns = LoadPatternTable { series: vec![TimeSeriesSpec::Linear { slope: 1.0 }], scale_factor: vec![1.0] };
-    input.nodal_loads = NodalLoadTable { pattern: vec![0], node: vec![1], dof: vec![0], value: vec![60.0], stage: vec![0] };
+    input.trusses = TrussTable {
+        node_i: vec![0],
+        node_j: vec![1],
+        area: vec![2.0],
+        material: vec![0],
+        density: vec![0.0],
+    };
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
+        scale_factor: vec![1.0],
+    };
+    input.nodal_loads = NodalLoadTable {
+        pattern: vec![0],
+        node: vec![1],
+        dof: vec![0],
+        value: vec![60.0],
+        stage: vec![0],
+    };
     let mut stages = vec![static_stage("first", hold)];
     stages.extend(between);
     stages.push(static_stage("second", false));
-    input.sequence = SequenceSpec { stages, recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }] };
+    input.sequence = SequenceSpec {
+        stages,
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
+    };
     decode(input).expect("well-formed input should decode")
 }
 
@@ -2119,8 +2175,17 @@ fn all_samples(session: &mut carapace_wasm::input_v1::Session) -> Vec<(usize, f6
     loop {
         let outcome = session.advance(8);
         assert!(outcome.error.is_none(), "{outcome:?}");
-        for batch in outcome.recorder_batches.iter().filter(|b| b.recorder_index == 0) {
-            out.extend(batch.samples.iter().map(|&(t, v)| (batch.stage_index, t, v)));
+        for batch in outcome
+            .recorder_batches
+            .iter()
+            .filter(|b| b.recorder_index == 0)
+        {
+            out.extend(
+                batch
+                    .samples
+                    .iter()
+                    .map(|&(t, v)| (batch.stage_index, t, v)),
+            );
         }
         if outcome.done {
             return out;
@@ -2145,7 +2210,10 @@ fn record_initial_adds_a_step_zero_sample_per_stage() {
     let end_of_first = first[2].2;
     assert!((end_of_first - 60.0 * 100.0 / (2.0 * 30000.0)).abs() < 1e-9);
     assert_eq!(second[0].1, 0.0);
-    assert!((second[0].2 - end_of_first).abs() < 1e-12, "stage 2 starts where stage 1 ended");
+    assert!(
+        (second[0].2 - end_of_first).abs() < 1e-12,
+        "stage 2 starts where stage 1 ended"
+    );
 }
 
 /// A `Reset` stage reverts displacements to the as-built state (a later stage starts from zero, not
@@ -2153,25 +2221,38 @@ fn record_initial_adds_a_step_zero_sample_per_stage() {
 /// stays frozen at its final factor: the next stage applies it in full from its first step.
 #[test]
 fn reset_stage_reverts_the_state_but_keeps_held_patterns_applied() {
-    let reset = Some(StageSpec::Reset { id: "reset".to_string() });
+    let reset = Some(StageSpec::Reset {
+        id: "reset".to_string(),
+    });
     let samples = all_samples(&mut two_stage_bar(true, reset, true));
     // Reset records nothing: stage indices are first = 0, second = 2.
     let second: Vec<_> = samples.iter().filter(|s| s.0 == 2).collect();
     assert_eq!(second.len(), 3);
-    assert_eq!(second[0].2, 0.0, "second stage starts from the as-built state");
+    assert_eq!(
+        second[0].2, 0.0,
+        "second stage starts from the as-built state"
+    );
     let end_of_first = samples.iter().filter(|s| s.0 == 0).last().unwrap().2;
-    assert!((second[1].2 - end_of_first).abs() < 1e-12, "the held load is applied in full at once");
+    assert!(
+        (second[1].2 - end_of_first).abs() < 1e-12,
+        "the held load is applied in full at once"
+    );
     assert!((second[2].2 - end_of_first).abs() < 1e-12);
 }
 
 /// Without a hold, the same pattern ramps again from zero after a `Reset`.
 #[test]
 fn reset_stage_lets_an_unheld_pattern_ramp_again() {
-    let reset = Some(StageSpec::Reset { id: "reset".to_string() });
+    let reset = Some(StageSpec::Reset {
+        id: "reset".to_string(),
+    });
     let samples = all_samples(&mut two_stage_bar(true, reset, false));
     let second: Vec<_> = samples.iter().filter(|s| s.0 == 2).collect();
     let end_of_first = samples.iter().filter(|s| s.0 == 0).last().unwrap().2;
     assert_eq!(second[0].2, 0.0);
-    assert!((second[1].2 - end_of_first / 2.0).abs() < 1e-12, "half the load at the first of two steps");
+    assert!(
+        (second[1].2 - end_of_first / 2.0).abs() < 1e-12,
+        "half the load at the first of two steps"
+    );
     assert!((second[2].2 - end_of_first).abs() < 1e-12);
 }

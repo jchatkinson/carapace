@@ -212,6 +212,8 @@ impl std::ops::Add for NoLoad {
 }
 
 impl carapace_core::model::ElementLoadComponents for NoLoad {
+    const COUNT: usize = 0;
+
     fn component(&self, _: usize) -> f64 {
         0.0
     }
