@@ -25,7 +25,10 @@ pub use integration::BeamIntegration;
 pub use load_pattern::{
     ElementLoad, ElementLoad3, ElementLoadComponents, LoadPatternId, LoadSeries,
 };
-pub use materials::{Material, Pinching4DmgCyc, Pinching4State};
+pub use materials::{
+    Material, Pinching4DmgCyc, Pinching4State, PlaneMaterial, PlaneMaterialError, PlaneMatrix,
+    PlaneVector,
+};
 pub use node::{
     Axis3, Node, Node2, Node3, Node3Id, NodeId, SpatialDof, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,
     SPATIAL_NDF, SPATIAL_NDIM,

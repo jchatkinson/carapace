@@ -72,10 +72,12 @@ mod concrete02;
 mod elastic_like;
 mod hysteretic;
 mod pinching4;
+mod plane;
 mod steel01;
 mod steel02;
 
 pub use hysteretic::HystereticFields;
+pub use plane::{PlaneMaterial, PlaneMaterialError, PlaneMatrix, PlaneVector};
 pub use pinching4::{Pinching4DmgCyc, Pinching4Fields, Pinching4State};
 pub use steel01::Steel01Loading;
 pub use steel02::Steel02Kon;
