@@ -675,3 +675,76 @@ fn decodes_a_rigid_diaphragm3_and_ties_translation_with_no_lever_arm_when_untwis
         "diaphragm-tied node should exactly match the retained node's uz with no rotation: {constrained_uz} vs {retained_uz}"
     );
 }
+
+/// A rigid-diaphragm slave has no equation of its own, so its mode-shape
+/// components must come from its constraint: reading them through
+/// `equation_of` (as the session used to) reported a slave that never moves.
+/// Mass and a rotational spring sit on the retained node; the translational
+/// springs sit on the slave, so every mode moves it.
+#[test]
+fn modal_shapes_report_a_rigid_diaphragm_slaves_motion_through_the_constraint() {
+    let (dx, dz) = (4.0_f64, -6.0_f64);
+    let mut input = empty_input();
+    input.nodes3 = NodeTable3 {
+        // node 0: ground; node 1: retained (free ux, uz, ry); node 2: slave (free ux, uz).
+        coords: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, dx, 0.0, dz],
+        fixed: vec![0b111111, 0b101010, 0b111010],
+        mass_node_index: vec![1],
+        mass: vec![2.0, 0.0, 2.0, 0.0, 5.0, 0.0],
+    };
+    input.materials = vec![
+        MaterialSpec::Elastic { e: 400.0 },
+        MaterialSpec::Elastic { e: 250.0 },
+        MaterialSpec::Elastic { e: 1000.0 },
+    ];
+    input.zero_lengths3 = ZeroLengthTable3 {
+        node_i: vec![0, 0],
+        node_j: vec![2, 1],
+        // Row 0: slave springs in ux and uz; row 1: a rotational spring about y on the retained node.
+        materials: vec![(0, 0, 0), (0, 2, 1), (1, 4, 2)],
+        friction: vec![],
+        orient: vec![],
+    };
+    input.rigid_diaphragms3 = RigidDiaphragmTable3 {
+        retained: vec![1],
+        normal: vec![Axis3Spec::Y],
+        constrained: vec![(0, 2)],
+    };
+    input.sequence3 = SequenceSpec3 {
+        stages: vec![StageSpec::Modal {
+            id: "modes".to_string(),
+            modes: 3,
+        }],
+        recorders: vec![],
+    };
+
+    let mut session = decode(input).expect("well-formed spatial modal input should decode");
+    let outcome = session.advance(1);
+    assert!(
+        outcome.done && outcome.error.is_none(),
+        "unexpected outcome: {outcome:?}"
+    );
+
+    let report = session.modal_results();
+    let modal = &report.stages[0];
+    assert_eq!(modal.ndf, 6);
+    assert_eq!(modal.modes.len(), 3);
+    for mode in &modal.modes {
+        let node = |n: usize, dof: usize| mode.shape[n * 6 + dof];
+        let ry = node(1, 4);
+        // Diaphragm about Y: u_c[z] = u_r[z] - ry * (x_c - x_r), u_c[x] = u_r[x] + ry * (z_c - z_r).
+        let expected_x = node(1, 0) + ry * dz;
+        let expected_z = node(1, 2) - ry * dx;
+        assert!(
+            (node(2, 0) - expected_x).abs() < 1e-9,
+            "slave ux {} vs {expected_x}",
+            node(2, 0)
+        );
+        assert!(
+            (node(2, 2) - expected_z).abs() < 1e-9,
+            "slave uz {} vs {expected_z}",
+            node(2, 2)
+        );
+        assert!(node(2, 0).abs() + node(2, 2).abs() > 1e-9, "the slave must move");
+    }
+}

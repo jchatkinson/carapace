@@ -4,6 +4,7 @@ use faer::sparse::Triplet;
 use nalgebra::{DVector, SMatrix, SVector};
 use slotmap::{Key, SlotMap};
 
+use super::constraint::{self, LinearConstraint, ResolveError};
 use super::dof_table::{DofEntry, DofTable};
 use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
@@ -14,87 +15,30 @@ use super::{
     PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
-/// A multi-point constraint tying `dofs` of `constrained` exactly to the
-/// same DOFs of `retained` (`u_c[dof] = u_r[dof]`) — identity ties only, no
-/// coefficients, no cross-DOF terms. See `ConstraintHandler::Transformation`
-/// for how this is resolved (DOF-equation aliasing, not a real
-/// transformation matrix) and why that's sufficient for `equal_dof`.
-#[derive(Debug, Clone)]
-struct MpConstraint<NId> {
-    retained: NId,
-    constrained: NId,
-    dofs: Vec<usize>,
-}
-
-/// A general affine multi-point constraint: each listed `constrained` dof
-/// equals a linear combination of one or more of `retained`'s dofs —
-/// `u_c[dof] = sum(coeff * u_r[retained_dof])`. Strictly more general than
-/// `MpConstraint`'s identity-only ties (which stay a separate, simpler fast
-/// path — see `MpConstraint`'s doc comment); this is what a real spatial
-/// `rigid_diaphragm` needs, since a constrained node's in-plane translation
-/// depends on *both* the retained node's same-axis translation *and* its
-/// rotation about the diaphragm normal, scaled by the lever arm between the
-/// two nodes (`Domain3::rigid_diaphragm_about`'s doc comment has the
-/// derivation). Resolved at `number_dofs` time into `Domain::dof_transform`
-/// (retained dofs there refer to actual free-DOF equation numbers, not
-/// DOF indices).
-#[derive(Debug, Clone)]
-struct AffineConstraint<NId> {
-    retained: NId,
-    constrained: NId,
-    /// `(constrained dof, [(retained dof, coefficient)])` pairs.
-    ties: Vec<(usize, Vec<(usize, f64)>)>,
-}
-
-/// The most terms any affine tie this crate produces will ever need: a
-/// rigid-diaphragm-tied translation is exactly two (the retained node's
-/// same-axis translation, plus its rotation about the diaphragm normal). A
-/// fixed-size, `Copy` array rather than a `Vec` since `dof_terms` builds
-/// one of these per element-dof in every assembly hot loop (§2.4's
-/// fixed-size, stack-allocated reasoning applies here too, not just to
-/// element-local matrices).
-const MAX_AFFINE_TERMS: usize = 2;
-
 /// Every `(equation, coefficient)` term one node-dof contributes to the
-/// assembled free-DOF system: empty for a fixed dof, a single `(eq, 1.0)`
-/// for an ordinary free or identity-tied dof, or (for a rigid-diaphragm-
-/// style affine tie) up to `MAX_AFFINE_TERMS` terms with real coefficients.
+/// assembled free-DOF system: none for a fixed or inactive dof, a single
+/// `(eq, 1.0)` for an ordinary free or identity-tied dof, or any number of
+/// terms for a constrained dof (a slave's value is a linear combination of
+/// free unknowns). Borrowed from the `DofTable`'s term arena, so there is no
+/// cap on the number of terms and no allocation in the assembly loop.
 #[derive(Debug, Clone, Copy)]
-struct DofTerms {
-    terms: [(usize, f64); MAX_AFFINE_TERMS],
-    len: u8,
+enum DofTerms<'a> {
+    None,
+    One([(usize, f64); 1]),
+    Many(&'a [(usize, f64)]),
 }
 
-impl DofTerms {
-    fn empty() -> Self {
-        DofTerms {
-            terms: [(0, 0.0); MAX_AFFINE_TERMS],
-            len: 0,
+impl DofTerms<'_> {
+    fn as_slice(&self) -> &[(usize, f64)] {
+        match self {
+            DofTerms::None => &[],
+            DofTerms::One(term) => term,
+            DofTerms::Many(terms) => terms,
         }
     }
 
-    fn single(eq: usize) -> Self {
-        let mut t = Self::empty();
-        t.terms[0] = (eq, 1.0);
-        t.len = 1;
-        t
-    }
-
-    fn from_slice(terms: &[(usize, f64)]) -> Self {
-        assert!(
-            terms.len() <= MAX_AFFINE_TERMS,
-            "DofTerms: at most {MAX_AFFINE_TERMS} terms are supported per affine-constrained dof"
-        );
-        let mut t = Self::empty();
-        for (i, &term) in terms.iter().enumerate() {
-            t.terms[i] = term;
-        }
-        t.len = terms.len() as u8;
-        t
-    }
-
-    fn iter(&self) -> impl Iterator<Item = &(usize, f64)> {
-        self.terms[..self.len as usize].iter()
+    fn iter(&self) -> std::slice::Iter<'_, (usize, f64)> {
+        self.as_slice().iter()
     }
 }
 
@@ -141,8 +85,10 @@ pub struct Domain<
 {
     nodes: SlotMap<NId, Node<NDIM, NDOF>>,
     elements: SlotMap<E::Id, E>,
-    mp_constraints: Vec<MpConstraint<NId>>,
-    affine_constraints: Vec<AffineConstraint<NId>>,
+    constraints: Vec<LinearConstraint<NId>>,
+    /// The first structural problem `number_dofs` found in `constraints`
+    /// (duplicate slave, cycle, fixed slave); reported by `validate`.
+    constraint_error: Option<ModelError>,
     load_patterns: SlotMap<LoadPatternId, LoadPattern<NDOF, NId, E::Id, E::Load>>,
     default_pattern: LoadPatternId,
     num_free_dofs: usize,
@@ -151,7 +97,7 @@ pub struct Domain<
     /// loads at.
     committed_time: f64,
     /// How every node DOF maps onto the free-DOF system (equation number,
-    /// or resolved affine terms for `AffineConstraint`-covered DOFs),
+    /// or resolved terms for constrained DOFs),
     /// rebuilt by `number_dofs`.
     dofs: DofTable<NId, NDOF>,
 }
@@ -176,8 +122,8 @@ where
         Domain {
             nodes: self.nodes.clone(),
             elements: self.elements.clone(),
-            mp_constraints: self.mp_constraints.clone(),
-            affine_constraints: self.affine_constraints.clone(),
+            constraints: self.constraints.clone(),
+            constraint_error: self.constraint_error,
             load_patterns: self.load_patterns.clone(),
             default_pattern: self.default_pattern,
             num_free_dofs: self.num_free_dofs,
@@ -215,8 +161,8 @@ where
         Domain {
             nodes: SlotMap::default(),
             elements: SlotMap::default(),
-            mp_constraints: Vec::new(),
-            affine_constraints: Vec::new(),
+            constraints: Vec::new(),
+            constraint_error: None,
             load_patterns,
             default_pattern,
             num_free_dofs: 0,
@@ -368,8 +314,18 @@ where
     }
 
     /// Whether `prescribe_displacement` would accept these arguments.
+    ///
+    /// A DOF that a constraint uses as a master is refused: constraints are
+    /// homogeneous and have already eliminated a fixed master's
+    /// contribution, so moving it would silently leave its slaves behind.
     pub fn can_prescribe(&self, node: NId, dof: usize, value: f64) -> bool {
-        value.is_finite() && dof < NDOF && self.nodes.get(node).is_some_and(|n| n.fixed[dof])
+        value.is_finite()
+            && dof < NDOF
+            && self.nodes.get(node).is_some_and(|n| n.fixed[dof])
+            && !self
+                .constraints
+                .iter()
+                .any(|c| c.terms.iter().any(|&(n, d, _)| n == node && d == dof))
     }
 
     /// `Domain::new()`'s always-present pattern — see its doc comment.
@@ -432,19 +388,45 @@ where
         self.load_patterns[pattern].hold_constant(pseudo_time);
     }
 
+    /// Constrains `slave`'s DOF to a linear combination of master DOFs on
+    /// any nodes: `u_slave = sum(coeff * u_master)`. Repeated masters are
+    /// merged and vanishing terms dropped; an empty result means
+    /// `u_slave = 0`. Problems that cannot be seen from one constraint (a
+    /// slave defined twice, a fixed slave, a dependency cycle, a master that
+    /// carries a prescribed value, an inconsistent initial state) are
+    /// reported by `validate`. Requires `ConstraintHandler::Transformation`.
+    pub fn add_constraint(&mut self, slave: (NId, usize), terms: &[(NId, usize, f64)]) {
+        assert!(
+            slave.1 < NDOF,
+            "constraint slave DOF {} out of range",
+            slave.1
+        );
+        assert!(
+            terms.iter().all(|t| t.1 < NDOF),
+            "constraint master DOF out of range"
+        );
+        self.constraints.push(LinearConstraint {
+            slave,
+            terms: constraint::normalize(terms),
+        });
+    }
+
     /// Tie `dofs` of `constrained` exactly to the same DOFs of `retained`
     /// (`u_c = u_r` for each listed dof) — Xara/OpenSees's `equalDOF`.
     /// Requires `ConstraintHandler::Transformation`; see its doc comment
     /// for how this is resolved.
     pub fn equal_dof(&mut self, retained: NId, constrained: NId, dofs: &[usize]) {
-        self.mp_constraints.push(MpConstraint {
-            retained,
-            constrained,
-            dofs: dofs.to_vec(),
-        });
+        for &dof in dofs {
+            self.add_constraint((constrained, dof), &[(retained, dof, 1.0)]);
+        }
     }
 
-    /// Equation number of a node's DOF, or `None` if it's fixed. Used
+    /// Equation number of a node's DOF **if it is a free unknown** (a DOF
+    /// identity-tied to one shares its equation), or `None` for a fixed DOF,
+    /// an inactive DOF, or a constrained DOF that is a combination of
+    /// several unknowns. It says where an unknown lives, not what a DOF's
+    /// value is: to read a node DOF out of a free-DOF-indexed vector use
+    /// `value_at`. Used
     /// internally by `Integrator::DisplacementControl` to locate its
     /// controlled DOF in the free-DOF system, and `pub` (not just
     /// `pub(crate)`) so a caller holding a free-DOF-indexed vector — e.g.
@@ -456,6 +438,25 @@ where
         match self.dofs.entry(node, dof) {
             DofEntry::Free(eq) => Some(eq),
             DofEntry::Fixed | DofEntry::Inactive | DofEntry::Affine { .. } => None,
+        }
+    }
+
+    /// The value of `(node, dof)` in the free-DOF-indexed vector `q`: the
+    /// entry for a free unknown, the constraint's combination of entries for
+    /// a constrained DOF, and `0.0` for a fixed or inactive DOF. This is how
+    /// a mode shape, an influence vector, or any other free-DOF vector is
+    /// read back onto nodes; `equation_of` cannot do it for a constrained DOF
+    /// that depends on several unknowns (a rigid-diaphragm slave).
+    pub fn value_at(&self, q: &DVector<f64>, node: NId, dof: usize) -> f64 {
+        match self.dofs.entry(node, dof) {
+            DofEntry::Free(eq) => q[eq],
+            DofEntry::Affine { start, len } => self
+                .dofs
+                .terms(start, len)
+                .iter()
+                .map(|&(eq, coeff)| coeff * q[eq])
+                .sum(),
+            DofEntry::Fixed | DofEntry::Inactive => 0.0,
         }
     }
 
@@ -496,11 +497,21 @@ where
     }
 
     /// Numbers the DOFs and checks the model for mistakes that would
-    /// otherwise be silently wrong: an element rejecting its own geometry,
-    /// and nodal loads on DOFs nothing uses. Called by
+    /// otherwise be silently wrong: constraint problems (a slave defined
+    /// twice or fixed, a dependency cycle, a master carrying a prescribed
+    /// value, mass on a slave that combines several unknowns), an element
+    /// rejecting its own geometry, nodal loads on DOFs nothing uses, and a
+    /// constrained slave whose initial state contradicts its masters. Also
+    /// makes the initial state consistent with the constraints: a slave
+    /// whose initial displacement, velocity or acceleration is exactly zero
+    /// (the default) takes the value its masters imply; a nonzero value that
+    /// disagrees is an error, never overwritten. Called by
     /// `AnalysisBuilder::build`, `modal_analysis` and `TransientAnalysis`.
     pub fn validate(&mut self) -> Result<(), ModelError> {
         self.number_dofs();
+        if let Some(error) = self.constraint_error {
+            return Err(error);
+        }
         let view = self.node_view();
         for (index, (_, element)) in self.elements.iter().enumerate() {
             element
@@ -524,13 +535,102 @@ where
                 }
             }
         }
+        self.validate_constraint_state()
+    }
+
+    fn node_index(&self, id: NId) -> usize {
+        self.nodes.keys().position(|key| key == id).unwrap_or(0)
+    }
+
+    /// The constraint-related half of `validate` that needs node state.
+    fn validate_constraint_state(&mut self) -> Result<(), ModelError> {
+        for constraint in &self.constraints {
+            for &(node, dof, _) in &constraint.terms {
+                // A fixed master's contribution has been eliminated, which is
+                // only right while it stays zero.
+                if self.nodes[node].fixed[dof] && self.nodes[node].displacement[dof] != 0.0 {
+                    return Err(ModelError::ConstraintOnPrescribedDof {
+                        node: self.node_index(node),
+                        dof,
+                    });
+                }
+            }
+            let (slave, dof) = constraint.slave;
+            let several_unknowns = matches!(
+                self.dofs.entry(slave, dof),
+                DofEntry::Affine { len, .. } if len > 1
+            );
+            if several_unknowns && self.nodes[slave].mass[dof] != 0.0 {
+                return Err(ModelError::MassOnConstrainedDof {
+                    node: self.node_index(slave),
+                    dof,
+                });
+            }
+        }
+
+        // Project zero-valued slave state from the masters, in dependency
+        // order (repeat until nothing changes; a chain settles in at most
+        // one pass per link).
+        for _ in 0..=self.constraints.len() {
+            let mut changed = false;
+            for index in 0..self.constraints.len() {
+                let (slave, dof) = self.constraints[index].slave;
+                let implied = self.implied_state(index);
+                let node = &mut self.nodes[slave];
+                let targets = [
+                    &mut node.displacement[dof],
+                    &mut node.velocity[dof],
+                    &mut node.acceleration[dof],
+                ];
+                for (target, value) in targets.into_iter().zip(implied) {
+                    if *target == 0.0 && value != 0.0 {
+                        *target = value;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for index in 0..self.constraints.len() {
+            let (slave, dof) = self.constraints[index].slave;
+            let implied = self.implied_state(index);
+            let node = &self.nodes[slave];
+            let actual = [
+                node.displacement[dof],
+                node.velocity[dof],
+                node.acceleration[dof],
+            ];
+            for (actual, implied) in actual.into_iter().zip(implied) {
+                if (actual - implied).abs() > 1e-12 * (1.0 + actual.abs() + implied.abs()) {
+                    return Err(ModelError::InconsistentInitialState {
+                        node: self.node_index(slave),
+                        dof,
+                    });
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// The displacement, velocity and acceleration constraint `index`'s
+    /// masters imply for its slave.
+    fn implied_state(&self, index: usize) -> [f64; 3] {
+        let mut implied = [0.0; 3];
+        for &(node, dof, coeff) in &self.constraints[index].terms {
+            let node = &self.nodes[node];
+            implied[0] += coeff * node.displacement[dof];
+            implied[1] += coeff * node.velocity[dof];
+            implied[2] += coeff * node.acceleration[dof];
+        }
+        implied
     }
 
     /// Assign a sequential equation number to every free, unconstrained
     /// DOF, in node insertion order, then alias every multi-point-
     /// constrained DOF to its retained node's equation number for that DOF
-    /// (`ConstraintHandler::Transformation` — see `MpConstraint`). Fixed
+    /// (`ConstraintHandler::Transformation`). Fixed
     /// DOFs, and constrained DOFs whose retained DOF is itself fixed, get
     /// no equation number. This is the entire numbering pass — done once,
     /// not re-checked every step (§4.4: no live re-solve means no
@@ -543,16 +643,8 @@ where
     ///
     /// Returns the number of free DOFs (the size of the global system).
     pub(crate) fn number_dofs(&mut self) -> usize {
-        let constrained_dofs: HashSet<(NId, usize)> = self
-            .mp_constraints
-            .iter()
-            .flat_map(|c| c.dofs.iter().map(move |&dof| (c.constrained, dof)))
-            .chain(
-                self.affine_constraints
-                    .iter()
-                    .flat_map(|c| c.ties.iter().map(move |&(dof, _)| (c.constrained, dof))),
-            )
-            .collect();
+        let slaves: HashSet<(NId, usize)> = self.constraints.iter().map(|c| c.slave).collect();
+        self.constraint_error = None;
 
         // A DOF is active if an element stiffens it, a constraint uses it as
         // a master (a diaphragm's retained node typically has no element at
@@ -574,24 +666,24 @@ where
                 active.insert((id, dof));
             }
         }
-        for constraint in &self.mp_constraints {
-            for &dof in &constraint.dofs {
-                active.insert((constraint.retained, dof));
-            }
-        }
-        for constraint in &self.affine_constraints {
-            for (_, terms) in &constraint.ties {
-                for &(retained_dof, _) in terms {
-                    active.insert((constraint.retained, retained_dof));
-                }
+        for constraint in &self.constraints {
+            for &(node, dof, _) in &constraint.terms {
+                active.insert((node, dof));
             }
         }
 
         let mut table = DofTable::<NId, NDOF>::for_nodes(self.nodes.keys());
         let mut next = 0;
-        for (id, node) in self.nodes.iter() {
+        for (index, (id, node)) in self.nodes.iter().enumerate() {
             for dof in 0..NDOF {
-                if node.fixed[dof] || constrained_dofs.contains(&(id, dof)) {
+                if slaves.contains(&(id, dof)) {
+                    if node.fixed[dof] {
+                        self.constraint_error
+                            .get_or_insert(ModelError::SlaveIsFixed { node: index, dof });
+                    }
+                    continue;
+                }
+                if node.fixed[dof] {
                     continue;
                 }
                 if !active.contains(&(id, dof)) {
@@ -603,44 +695,13 @@ where
             }
         }
 
-        for constraint in &self.mp_constraints {
-            for &dof in &constraint.dofs {
-                let retained = table.entry(constraint.retained, dof);
-                table.set(constraint.constrained, dof, retained);
-            }
-        }
-
-        // Resolve every `AffineConstraint`'s retained-dof references to
-        // actual free-DOF equation numbers — after the identity-tie pass
-        // above, so a retained dof that's itself identity-tied elsewhere
-        // still resolves correctly. A *fixed* retained dof (e.g. a
-        // diaphragm whose master node has its own out-of-plane translation
-        // pinned) is permanently zero, so its term correctly contributes
-        // nothing and is dropped rather than resolved to an equation — only
-        // a retained dof that's itself affine-constrained (chained
-        // diaphragms) is rejected, since that would need transform
-        // composition this crate doesn't implement.
-        for constraint in &self.affine_constraints {
-            let retained_node = &self.nodes[constraint.retained];
-            for (dof, terms) in &constraint.ties {
-                let resolved: Vec<(usize, f64)> = terms
-                    .iter()
-                    .filter_map(|&(retained_dof, coeff)| {
-                        match table.entry(constraint.retained, retained_dof) {
-                            DofEntry::Free(eq) => Some((eq, coeff)),
-                            _ if retained_node.fixed[retained_dof] => None,
-                            _ => panic!(
-                                "rigid_diaphragm: the retained node's translation and rotation-about-normal dofs must \
-                                 each be either free or fixed, not themselves multi-point-constrained — a diaphragm's \
-                                 retained node can't itself be another diaphragm's slave (chained diaphragms aren't \
-                                 supported)"
-                            ),
-                        }
-                    })
-                    .collect();
-                let entry = table.push_terms(&resolved);
-                table.set(constraint.constrained, *dof, entry);
-            }
+        if let Err(error) = constraint::resolve(&self.constraints, &mut table) {
+            let (ResolveError::DuplicateSlave((id, dof)) | ResolveError::Cycle((id, dof))) = error;
+            let node = self.nodes.keys().position(|k| k == id).unwrap_or(0);
+            self.constraint_error.get_or_insert(match error {
+                ResolveError::DuplicateSlave(_) => ModelError::DuplicateSlave { node, dof },
+                ResolveError::Cycle(_) => ModelError::ConstraintCycle { node, dof },
+            });
         }
 
         self.dofs = table;
@@ -664,7 +725,7 @@ where
     /// (e.g. `carapace-wasm`'s decoder) to pick `ConstraintHandler::
     /// Transformation` automatically whenever a domain actually has any.
     pub fn has_mp_constraints(&self) -> bool {
-        !self.mp_constraints.is_empty() || !self.affine_constraints.is_empty()
+        !self.constraints.is_empty()
     }
 
     /// Every `(equation, coefficient)` term `node_id`'s `dof` contributes
@@ -674,11 +735,11 @@ where
     /// directly, so each of them handles ordinary free dofs, identity-tied
     /// dofs, and affine-tied (rigid-diaphragm) dofs uniformly rather than
     /// three separate code paths.
-    fn dof_terms(&self, node_id: NId, dof: usize) -> DofTerms {
+    fn dof_terms(&self, node_id: NId, dof: usize) -> DofTerms<'_> {
         match self.dofs.entry(node_id, dof) {
-            DofEntry::Free(eq) => DofTerms::single(eq),
-            DofEntry::Affine { start, len } => DofTerms::from_slice(self.dofs.terms(start, len)),
-            DofEntry::Fixed | DofEntry::Inactive => DofTerms::empty(),
+            DofEntry::Free(eq) => DofTerms::One([(eq, 1.0)]),
+            DofEntry::Affine { start, len } => DofTerms::Many(self.dofs.terms(start, len)),
+            DofEntry::Fixed | DofEntry::Inactive => DofTerms::None,
         }
     }
 
@@ -882,7 +943,7 @@ where
     /// (`-M·ι·ag(t)`, mass-proportional, not reference-load-proportional —
     /// see `GroundMotion`). Computed once at `TransientAnalysis::new` time,
     /// not every step (like `mass` itself).
-    pub(crate) fn direction_incidence(&self, dof_direction: usize) -> DVector<f64> {
+    pub fn direction_incidence(&self, dof_direction: usize) -> DVector<f64> {
         let mut incidence = DVector::<f64>::zeros(self.num_free_dofs);
         for (id, _) in self.nodes.iter() {
             if let DofEntry::Free(eq) = self.dofs.entry(id, dof_direction) {
@@ -916,10 +977,10 @@ where
 
     /// Scatter a global free-DOF displacement increment back onto nodes.
     /// Every ordinarily-numbered dof (free, or identity-tied via
-    /// `MpConstraint`) reads its increment directly out of `du`; every
-    /// affine-tied dof (`dof_transform` — a rigid diaphragm's lever-arm
+    /// an identity tie) reads its increment directly out of `du`; every
+    /// constrained dof (a rigid diaphragm's lever-arm
     /// coupling) then gets its increment *derived* from the same `du`,
-    /// applying `AffineConstraint`'s linear combination directly to the
+    /// applying the constraint's linear combination directly to the
     /// increment rather than to an absolute value — valid because the
     /// relation is linear and homogeneous (constant geometry-derived
     /// coefficients, no offset term), so it holds identically for an
@@ -1049,21 +1110,21 @@ where
 }
 
 /// Adds a lumped-mass value on one node DOF to the diagonal mass vector.
-fn accumulate_mass(mass: &mut DVector<f64>, terms: DofTerms, value: f64) {
+/// A DOF that is a single scaled unknown (`u = c * q`) contributes
+/// `c^2 * m`; one that combines several unknowns would need the full
+/// `T^T M T`, which a diagonal mass vector cannot hold.
+fn accumulate_mass(mass: &mut DVector<f64>, terms: DofTerms<'_>, value: f64) {
     if value == 0.0 {
         return;
     }
-    match terms.len {
-        0 => {}
-        1 => {
-            let (eq, coeff) = terms.terms[0];
-            mass[eq] += coeff * coeff * value;
-        }
+    match terms.as_slice() {
+        [] => {}
+        [(eq, coeff)] => mass[*eq] += coeff * coeff * value,
         _ => panic!(
-            "assemble_mass_diagonal: nonzero mass on a rigid-diaphragm-affine-constrained dof isn't \
-             supported — the lumped mass diagonal can't represent the rotational inertia this would \
-             induce at the retained node; assign mass at the retained node (or an unconstrained node) \
-             instead"
+            "assemble_mass_diagonal: mass on a DOF constrained to a combination of several unknowns (a \
+             rigid diaphragm or rigid link slave) isn't supported — the lumped mass diagonal can't \
+             represent the rotational inertia this would induce at the master; assign the mass at the \
+             master node (or an unconstrained node) instead"
         ),
     }
 }
@@ -1094,7 +1155,7 @@ where
     ) {
         #[cfg(debug_assertions)]
         self.domain.assert_declared(dofs, Some(k), r.as_slice());
-        let dof_terms: [DofTerms; N] =
+        let dof_terms: [DofTerms<'_>; N] =
             std::array::from_fn(|a| self.domain.dof_terms(dofs[a].0, dofs[a].1 as usize));
         for (a, terms_a) in dof_terms.iter().enumerate() {
             for &(eq_a, coeff_a) in terms_a.iter() {
@@ -1226,13 +1287,28 @@ impl Domain {
             self.equal_dof(retained, c, &[0]);
         }
     }
+
+    /// Rigid link: `slave` moves with `master` as a rigid body. Its rotation
+    /// equals the master's and its translations equal the master's plus the
+    /// small-rotation lever arm, `u_s = u_m + theta_m x d` with
+    /// `d = pos(slave) - pos(master)` from the reference coordinates at the
+    /// time of the call (`ux_s = ux_m - theta*dy`, `uy_s = uy_m + theta*dx`).
+    /// Requires `ConstraintHandler::Transformation`.
+    pub fn rigid_link(&mut self, master: NodeId, slave: NodeId) {
+        let m = self.nodes[master].coords;
+        let s = self.nodes[slave].coords;
+        let (dx, dy) = (s[0] - m[0], s[1] - m[1]);
+        self.add_constraint((slave, 0), &[(master, 0, 1.0), (master, 2, -dy)]);
+        self.add_constraint((slave, 1), &[(master, 1, 1.0), (master, 2, dx)]);
+        self.add_constraint((slave, 2), &[(master, 2, 1.0)]);
+    }
 }
 
 /// Spatial rigid diaphragm: for each node in `constrained`, ties its two
 /// in-plane translational dofs (the two coordinate axes other than
 /// `normal`) to `retained`'s same in-plane translations plus a lever-arm
 /// term from `retained`'s rotation about `normal` — a genuine
-/// `AffineConstraint` (`ConstraintHandler::Transformation`), not a further
+/// general linear constraint (`ConstraintHandler::Transformation`), not a further
 /// identity alias like planar `Domain::rigid_diaphragm` (see its doc
 /// comment for why identity aliasing can't express a real diaphragm's
 /// lever-arm kinematics).
@@ -1306,14 +1382,43 @@ impl Domain3 {
             let coords = self.nodes[c].coords;
             let lever_a = coords[a] - retained_coords[a];
             let lever_b = coords[b] - retained_coords[b];
-            self.affine_constraints.push(AffineConstraint {
-                retained,
-                constrained: c,
-                ties: vec![
-                    (a, vec![(a, 1.0), (rot_normal, -lever_b)]),
-                    (b, vec![(b, 1.0), (rot_normal, lever_a)]),
-                ],
-            });
+            self.add_constraint(
+                (c, a),
+                &[(retained, a, 1.0), (retained, rot_normal, -lever_b)],
+            );
+            self.add_constraint(
+                (c, b),
+                &[(retained, b, 1.0), (retained, rot_normal, lever_a)],
+            );
+        }
+    }
+
+    /// Rigid link: `slave` moves with `master` as a rigid body. All six slave
+    /// DOFs are tied: its rotations equal the master's, and its translations
+    /// equal the master's plus the small-rotation lever arm,
+    /// `u_s = u_m + theta_m x d` with `d = pos(slave) - pos(master)` taken
+    /// from the reference coordinates at the time of the call. Joins, for
+    /// example, a beam end to the edge of a shell, or an eccentric load point
+    /// to the member it loads. Requires `ConstraintHandler::Transformation`.
+    pub fn rigid_link(&mut self, master: Node3Id, slave: Node3Id) {
+        let m = self.nodes[master].coords;
+        let s = self.nodes[slave].coords;
+        let (dx, dy, dz) = (s[0] - m[0], s[1] - m[1], s[2] - m[2]);
+        // Rotation dofs are 3 (rx), 4 (ry), 5 (rz).
+        self.add_constraint(
+            (slave, 0),
+            &[(master, 0, 1.0), (master, 4, dz), (master, 5, -dy)],
+        );
+        self.add_constraint(
+            (slave, 1),
+            &[(master, 1, 1.0), (master, 5, dx), (master, 3, -dz)],
+        );
+        self.add_constraint(
+            (slave, 2),
+            &[(master, 2, 1.0), (master, 3, dy), (master, 4, -dx)],
+        );
+        for rotation in 3..6 {
+            self.add_constraint((slave, rotation), &[(master, rotation, 1.0)]);
         }
     }
 }

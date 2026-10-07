@@ -472,7 +472,7 @@ crate-private `NodeView`; it checks `mask == stiffened slots` exactly for every 
 oriented 3D zero-length (covered, not exact). It runs in the default test profile, which is also
 where the debug-build guard is active.
 
-**1.4 General linear constraints, state mapping, prescription rule.**
+**1.4 General linear constraints, state mapping, prescription rule.** *Done; deviations below.*
 Implement sections 2.2 (state-mapping API) and 2.3: `LinearConstraint`, normalization
 and conflict checks, chain substitution with cycle detection, terms arena,
 `DofTerms::{None, Single{eq, coeff}, Many}`; re-express `equal_dof`,
@@ -499,6 +499,28 @@ the first link of a chain), and `step_prescribed` with such a target returns
 initial slave state rejected.
 Docs: `ConstraintHandler::Transformation` doc comment (it currently describes aliasing
 and says general affine ties are out of scope).
+
+As built: (1) Constraints live in a new `model/constraint.rs` (`LinearConstraint`, `normalize`,
+`resolve`); `DofTerms` is now a borrowed view over the table's term arena (`None | One | Many`),
+so there is no term cap, and a single scaled term (`u = 2 q`) is an ordinary `Many` of length one
+(only an exact unit single term becomes an alias of the master's equation, which keeps identity
+ties and `DisplacementControl` on a tied DOF working exactly as before). (2) State consumers are
+converted to `value_at`/`direction_incidence` (made public); the three remaining `equation_of`
+uses (`DisplacementControl`, arc-length seed) address *unknowns* on purpose and refuse a DOF that
+is a combination of several. The conversion fixed a latent bug: the wasm modal export read a
+rigid-diaphragm slave's mode shape as zero (`m10_spatial_input_v1`'s new test fails against the old
+read). (3) **Initial state, refined from decision 5:** a slave whose initial displacement,
+velocity or acceleration is exactly zero (the default, indistinguishable from "unset") takes the
+value its masters imply, in dependency order; a nonzero value that disagrees is
+`InconsistentInitialState`, never overwritten. A strict "reject any mismatch" would have rejected
+the default case of a slave under a master with an initial displacement, which the transient
+analysis already derived (`m20_rigid_diaphragm3.rs`). (4) Prescription: `can_prescribe` refuses
+any constraint master, so `step_prescribed` refuses before touching state (tested, including the
+first link of a chain). A master fixed at a nonzero initial value is `ConstraintOnPrescribedDof`.
+(5) Mass: a nodal mass on a slave that combines several unknowns is `MassOnConstrainedDof`
+from `validate` (so `TransientAnalysis::new` returns it); element lumped mass on such a slave
+(`assemble_mass_diagonal` called directly) still panics, as before.
+(6) Rigid-link wire tables and the general `linearConstraints` table are Phase 2 (2.1).
 
 **1.5 Phase 1 gate.** `cargo test --workspace`; `refactor_snapshot` identical;
 `benchmark_frame` within a few percent of the Phase 0 baseline in both native and

@@ -895,18 +895,16 @@ where
         modes: &[Mode],
     ) -> ModalStageResult {
         let mass = domain.assemble_mass_diagonal();
-        // Influence vector per global translation direction: 1 on every free equation a node's
-        // translation DOF maps to. (A rigid-diaphragm slave's translation is not exactly 1 on
-        // its retained equation, so ratios in models using one are approximate.)
+        // Influence vector per global translation direction: a rigid translation of the whole
+        // model in reduced coordinates (1 on every free unknown of that direction), which every
+        // rigid-body constraint (diaphragm, rigid link) satisfies exactly.
         let influence: Vec<Vec<f64>> = (0..NDIM)
             .map(|direction| {
-                let mut r = vec![0.0; mass.len()];
-                for &node in &self.node_ids {
-                    if let Some(eq) = domain.equation_of(node, direction) {
-                        r[eq] = 1.0;
-                    }
-                }
-                r
+                domain
+                    .direction_incidence(direction)
+                    .iter()
+                    .copied()
+                    .collect()
             })
             .collect();
         let total_mass: Vec<f64> = influence
@@ -929,11 +927,7 @@ where
                 let mut shape = Vec::with_capacity(self.node_ids.len() * NDOF);
                 for &node in &self.node_ids {
                     for dof in 0..NDOF {
-                        shape.push(
-                            domain
-                                .equation_of(node, dof)
-                                .map_or(0.0, |eq| sign * mode.shape[eq]),
-                        );
+                        shape.push(sign * domain.value_at(&mode.shape, node, dof));
                     }
                 }
                 let participation: Vec<f64> = influence
@@ -1056,13 +1050,11 @@ where
                     let Some(computed) = modes.get(mode as usize) else {
                         continue;
                     };
-                    // A fixed DOF has no free-DOF equation number and so no
-                    // entry in `Mode::shape` — its mode-shape component is
-                    // trivially zero (a fixed DOF can't participate in any
-                    // mode).
-                    let value = domain
-                        .equation_of(node, dof as usize)
-                        .map_or(0.0, |eq| computed.shape[eq]);
+                    // `value_at` reads a constrained DOF (a diaphragm or
+                    // rigid-link slave) through its constraint and is zero
+                    // for a fixed or inactive DOF, which can't participate
+                    // in any mode.
+                    let value = domain.value_at(&computed.shape, node, dof as usize);
                     batch.push((computed.frequency, value));
                 }
             }

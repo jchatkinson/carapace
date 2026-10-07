@@ -1,3 +1,4 @@
+mod constraint;
 mod dof_table;
 mod domain;
 mod elements;

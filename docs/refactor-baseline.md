@@ -89,6 +89,8 @@ still requires re-measuring in wasm because allocation behavior differs.
 
 | 1.3 DOF activation | identical (max relative diff 0) | 256 passed, debug and release (13 new: 10 activation core tests, 2 mask-conformance, 1 wasm) | elastic 30x6 about +10% (156 vs 141 ms), fiber 20x5 about +10% (160 vs 146 ms) in the default release profile; **parity** with `lto = "fat"` + `codegen-units = 1` (142-144 vs 139-141; 143-145 vs 146-147) | not measured (gate at 1.5) |
 
+| 1.4 general constraints | identical (max relative diff 0) | 278 passed, debug and release (19 new constraint/session tests) | not yet measured | not yet measured |
+
 Notes on 1.2:
 - The elastic 30x6 native gap (about 4-6 ms over 50 steps) is the one measurable cost of the sink
   indirection and table lookup. Two attempts to remove it (caching the per-node table lookup within

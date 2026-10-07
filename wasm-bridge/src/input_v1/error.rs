@@ -98,6 +98,30 @@ pub enum ModelErrorDetail {
         node: usize,
         dof: usize,
     },
+    DuplicateSlave {
+        node: usize,
+        dof: usize,
+    },
+    SlaveIsFixed {
+        node: usize,
+        dof: usize,
+    },
+    ConstraintCycle {
+        node: usize,
+        dof: usize,
+    },
+    ConstraintOnPrescribedDof {
+        node: usize,
+        dof: usize,
+    },
+    InconsistentInitialState {
+        node: usize,
+        dof: usize,
+    },
+    MassOnConstrainedDof {
+        node: usize,
+        dof: usize,
+    },
     InvalidElement {
         element: usize,
         reason: &'static str,
@@ -109,6 +133,22 @@ impl From<ModelError> for ModelErrorDetail {
         match error {
             ModelError::LoadOnInactiveDof { node, dof } => {
                 ModelErrorDetail::LoadOnInactiveDof { node, dof }
+            }
+            ModelError::DuplicateSlave { node, dof } => {
+                ModelErrorDetail::DuplicateSlave { node, dof }
+            }
+            ModelError::SlaveIsFixed { node, dof } => ModelErrorDetail::SlaveIsFixed { node, dof },
+            ModelError::ConstraintCycle { node, dof } => {
+                ModelErrorDetail::ConstraintCycle { node, dof }
+            }
+            ModelError::ConstraintOnPrescribedDof { node, dof } => {
+                ModelErrorDetail::ConstraintOnPrescribedDof { node, dof }
+            }
+            ModelError::InconsistentInitialState { node, dof } => {
+                ModelErrorDetail::InconsistentInitialState { node, dof }
+            }
+            ModelError::MassOnConstrainedDof { node, dof } => {
+                ModelErrorDetail::MassOnConstrainedDof { node, dof }
             }
             ModelError::InvalidElement { element, reason } => {
                 ModelErrorDetail::InvalidElement { element, reason }

@@ -284,9 +284,12 @@ fn rigid_diaphragm_about_z_normal_matches_opensees_rigid_diaphragm_equations() {
 /// master) term, which this crate's dynamics don't support yet (see
 /// `spatial-architecture.md`). A clear panic, not a silently-wrong lumped
 /// mass, is the intended failure mode — same "loud, not silent" reasoning
-/// `GeomTransf3::local_axes`'s degenerate-input asserts already use.
+/// `GeomTransf3::local_axes`'s degenerate-input asserts already use. (Models
+/// that go through `validate`, `AnalysisBuilder`, `modal_analysis` or
+/// `TransientAnalysis` get the same condition as a `ModelError` instead; see
+/// `linear_constraints.rs`.)
 #[test]
-#[should_panic(expected = "rigid-diaphragm-affine-constrained dof")]
+#[should_panic(expected = "combination of several unknowns")]
 fn nodal_mass_on_a_diaphragm_tied_translation_panics_rather_than_silently_dropping_inertia() {
     let mut domain = Domain3::new();
     let master = domain.add_node(
