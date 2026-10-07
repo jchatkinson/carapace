@@ -27,19 +27,23 @@ example payload.
 - **Indices** are 0-based row indices into the named table. They are validated
   by the decoder and failures surface as a `DecodeError`.
 - **Strided arrays.** Some flat arrays pack several values per row, for example
-  `NodeTable.coords` (stride 2 in 2D, stride 3 in 3D).
-- **Sparse tables** are lists of tuples keyed by a row index, such as
-  `[row, dof, materialIndex]`, because most rows have no entry.
-- **Offset-indexed tables** (fibers) flatten variable-length groups: group `k`
-  occupies `sectionOffsets[k]..sectionOffsets[k+1]`, so `sectionOffsets` has
-  `numSections + 1` entries.
-- **2D and 3D profiles.** `header.space` selects 2D (`2`: 2 coordinates, 3 DOFs
-  per node `ux, uy, rz`) or 3D (`3`: 3 coordinates, 6 DOFs
-  `ux, uy, uz, rx, ry, rz`). Every table is always present, but the decoder
-  reads only the set matching `header.space`: unsuffixed tables for 2D,
-  `*3` tables for 3D. The other set is ignored (use empty tables).
-  `materials`, `loadPatterns` and `nodalLoads` are shared; `nodalLoads3` reuses
-  the `NodalLoadTable` type.
+  `NodeTable.coords` (stride `ndm`).
+- **Sparse tables** are lists of tuples or small objects keyed by a row index,
+  such as `[row, dof, materialIndex]`, because most rows have no entry.
+- **Offset-indexed tables** (fibers, linear constraints) flatten variable-length
+  groups: group `k` occupies `offsets[k]..offsets[k+1]`, so the offsets array has
+  `numGroups + 1` entries.
+- **2D and 3D.** One format serves both. `header.ndm` selects 2D (`2`: 2
+  coordinates, 3 DOFs per node `ux, uy, rz`) or 3D (`3`: 3 coordinates, 6 DOFs
+  `ux, uy, uz, rx, ry, rz`); anything else is `unsupportedNdm`. Entities whose
+  data is the same in both (nodes, trusses, zero-lengths, fibers, constraints,
+  loads, the sequence) have one table. Formulations that differ (beam-columns)
+  have one table per formulation, suffixed `2d`/`3d`. The table of the other
+  profile must be empty or omitted: a non-empty one is `tableNotInProfile`, and
+  an element kind of the other profile in a load or recorder is
+  `elementKindNotInProfile`. The decoder picks the profile once from `ndm`.
+- **Every table is optional.** An omitted table is an empty one, so a model
+  lists only what it uses.
 - **Plain JS values.** The boundary accepts ordinary objects and arrays. A
   transferable typed-array format is planned but not implemented.
 
@@ -61,49 +65,54 @@ are milestone verification functions, not part of the model API.
 
 ## `CarapaceInputV1`
 
+Only `header` is required.
+
 | Field | Type | Profile |
 |---|---|---|
 | `header` | `Header` | both |
+| `nodes` | `NodeTable` | both |
 | `materials` | `MaterialSpec[]` | both (shared arena) |
+| `fibers` | `FiberTable` | both |
+| `trusses` | `TrussTable` | both |
+| `elasticBeamColumns2d` / `elasticBeamColumns3d` | `ElasticBeamColumn2dTable` / `ElasticBeamColumn3dTable` | 2D / 3D |
+| `dispBeamColumns2d` / `dispBeamColumns3d` | `FiberBeamColumn2dTable` / `FiberBeamColumn3dTable` | 2D / 3D |
+| `forceBeamColumns2d` / `forceBeamColumns3d` | `FiberBeamColumn2dTable` / `FiberBeamColumn3dTable` | 2D / 3D |
+| `zeroLengths` | `ZeroLengthTable` | both |
+| `zeroLengthSections` | `ZeroLengthSectionTable` | both |
+| `equalDofs` | `EqualDofTable` | both |
+| `rigidDiaphragms` | `RigidDiaphragmTable` | both |
+| `rigidLinks` | `RigidLinkTable` | both |
+| `linearConstraints` | `LinearConstraintTable` | both |
 | `loadPatterns` | `LoadPatternTable` | both |
-| `nodalLoads` / `nodalLoads3` | `NodalLoadTable` | 2D / 3D |
-| `nodes` / `nodes3` | `NodeTable` / `NodeTable3` | 2D / 3D |
-| `fibers` / `fibers3` | `FiberTable` / `FiberTable3` | 2D / 3D |
-| `trusses` / `trusses3` | `TrussTable` / `TrussTable3` | 2D / 3D |
-| `elasticBeamColumns` / `…3` | `ElasticBeamColumnTable` / `…3` | 2D / 3D |
-| `dispBeamColumns` / `…3` | `FiberBeamColumnTable` / `…3` | 2D / 3D |
-| `forceBeamColumns` / `…3` | `FiberBeamColumnTable` / `…3` | 2D / 3D |
-| `zeroLengths` / `…3` | `ZeroLengthTable` / `…3` | 2D / 3D |
-| `zeroLengthSections` / `…3` | `ZeroLengthSectionTable` / `…3` | 2D / 3D |
-| `equalDofs` / `…3` | `EqualDofTable` / `…3` | 2D / 3D |
-| `rigidDiaphragms` / `…3` | `RigidDiaphragmTable` / `…3` | 2D / 3D |
-| `elementLoads` / `elementLoads3` | `ElementLoadTable` / `…3` | 2D / 3D |
-| `sequence` / `sequence3` | `SequenceSpec` / `SequenceSpec3` | 2D / 3D |
+| `nodalLoads` | `NodalLoadTable` | both |
+| `elementLoads` | `ElementLoadTable` | both |
+| `sequence` | `SequenceSpec` | both |
 
 ### `Header`
 
 | Field | Type | Notes |
 |---|---|---|
 | `schemaVersion` | `number` | Wire format version, independent of the engine. |
-| `space` | `number` | `2` or `3`; anything else is `unsupportedSpace`. |
+| `ndm` | `number` | `2` or `3`; anything else is `unsupportedNdm`. |
 | `engineVersion` | `string` | `carapace-core` version, recorded for provenance. |
+| `recordInitial` | `boolean?` | See the analysis sequence. |
 
 ## Nodes
 
-`NodeTable` (2D) / `NodeTable3` (3D):
+`NodeTable`:
 
-| Field | 2D | 3D |
-|---|---|---|
-| `coords` | stride 2 `(x, y)` | stride 3 `(x, y, z)` |
-| `fixed` | one bitmask per node: bit 0 `ux`, 1 `uy`, 2 `rz` | bits 0..5 `ux, uy, uz, rx, ry, rz` |
+| Field | Meaning |
+|---|---|
+| `coords` | stride `ndm`: `(x, y)` in 2D, `(x, y, z)` in 3D |
+| `fixed` | one bitmask per node, bit `k` = DOF `k`: `ux, uy, rz` in 2D; `ux, uy, uz, rx, ry, rz` in 3D |
+| `massNodeIndex` | node indices that carry mass (sparse) |
+| `mass` | stride `ndf` (3 in 2D, 6 in 3D): one value per DOF, parallel to `massNodeIndex` |
 
 A DOF is an equation only if an element stiffens it, a constraint uses it as a master, it carries
 a nonzero mass, or `fixed` pins it. DOFs nothing uses (a truss's rotations) need not be fixed.
 A nodal load on such a DOF is rejected: `advance` returns `error.kind = "invalidModel"` with
 `error.error = { kind: "loadOnInactiveDof", node, dof }`, and `decodeInput` rejects element
 geometry problems the same way (`DecodeError` `invalidModel`).
-| `massNodeIndex` | node indices that carry mass (sparse) | same |
-| `mass` | stride 3 `(mx, my, mrz)`, parallel to `massNodeIndex` | stride 6, parallel to `massNodeIndex` |
 
 ## Materials
 
@@ -134,29 +143,31 @@ where present, a `density` array for mass.
 
 | Table | Fields beyond `nodeI`, `nodeJ`, `density` |
 |---|---|
-| `TrussTable` / `TrussTable3` | `area`, `material` (arena index) |
-| `ElasticBeamColumnTable` | `e`, `a`, `iz`, `transform: TransformSpec[]` |
-| `ElasticBeamColumnTable3` | `e`, `g`, `a`, `j`, `iy`, `iz`, `transform: TransformSpec3[]` |
-| `FiberBeamColumnTable` (disp and force) | `fiberSection` (index into `FiberTable.sectionOffsets`), `integration: IntegrationSpec[]`, `corotational: boolean[]` |
-| `FiberBeamColumnTable3` (disp and force) | `g`, `j` (decoupled elastic torsion), `vecXz: [x,y,z][]`, `fiberSection`, `integration` |
-| `ZeroLengthTable` | `materials: [row, dof, material][]` (sparse), `friction: [row, normalDof, shearDof, mu, k0, b][]` (at most one per row), `orient?: [row, x1, x2, x3][]` (at most one per row) |
-| `ZeroLengthTable3` | same, with `friction: [row, normalDof, shearDof0, shearDof1, mu, k0, b][]` and `orient?: [row, x1, x2, x3, yp1, yp2, yp3][]` |
-| `ZeroLengthSectionTable` | `fiberSection`, `materials: [row, dof, material][]` for DOFs the section does not drive (`uy`), `orient?: [row, x1, x2, x3][]` |
-| `ZeroLengthSectionTable3` | same; extra springs for `uy`, `uz`, `rx`; `orient?` as in `ZeroLengthTable3` |
+| `TrussTable` (2D and 3D) | `area`, `material` (arena index) |
+| `ElasticBeamColumn2dTable` | `e`, `a`, `iz`, `transform: TransformSpec[]` |
+| `ElasticBeamColumn3dTable` | `e`, `g`, `a`, `j`, `iy`, `iz`, `transform: TransformSpec3[]` |
+| `FiberBeamColumn2dTable` (disp and force) | `fiberSection` (index into `FiberTable.sectionOffsets`), `integration: IntegrationSpec[]`, `corotational: boolean[]` |
+| `FiberBeamColumn3dTable` (disp and force) | `g`, `j` (decoupled elastic torsion), `vecXz: [x,y,z][]`, `fiberSection`, `integration` |
+| `ZeroLengthTable` (2D and 3D) | `materials: [row, dof, material][]` (sparse), `friction?: FrictionRow[]`, `orient?: OrientRow[]` |
+| `ZeroLengthSectionTable` (2D and 3D) | `fiberSection`, `materials: [row, dof, material][]` for DOFs the section does not drive (`uy` in 2D; `uy`, `uz`, `rx` in 3D), `orient?: OrientRow[]` |
 
 Notes:
 
-- Zero-length `orient` follows OpenSees' `-orient`. 2D rows are
-  `[row, x1, x2, x3]`: local x is `(x1, x2)` (`x3` must be 0) and local y is
-  local x turned 90° counter-clockwise, so `rz` is unchanged. 3D rows are
-  `[row, x1, x2, x3, yp1, yp2, yp3]`: local z is `x × yp`, local y is `z × x`.
-  Every per-DOF material, friction coupling and the section's axial/flexural
-  directions are evaluated on the relative displacement and rotation projected
-  onto those axes (translations and rotations share the frame). Rows without an
-  entry use the global axes, and the field may be omitted. A zero vector (or, in
-  3D, parallel vectors; in 2D, `x3 != 0`) decodes to `InvalidOrientation`.
+- `FrictionRow`: `{ row, normalDof, shearDofs, mu, k0, b }`, at most one per row.
+  `shearDofs` has one entry in 2D and two in 3D (both coupled to the same normal
+  force); any other length is `invalidRow`.
+- `OrientRow`: `{ row, x: [x1, x2, x3], yp?: [yp1, yp2, yp3] }`, at most one per
+  row, following OpenSees' `-orient`. In 2D, `yp` must be absent, `x3` must be 0,
+  local x is `(x1, x2)` and local y is local x turned 90° counter-clockwise, so
+  `rz` is unchanged. In 3D, `yp` is required: local z is `x × yp`, local y is
+  `z × x`. Every per-DOF material, friction coupling and the section's
+  axial/flexural directions are evaluated on the relative displacement and
+  rotation projected onto those axes (translations and rotations share the
+  frame). Rows without an entry use the global axes, and the field may be
+  omitted. A zero vector (or, in 3D, parallel vectors; in 2D, `x3 != 0`) decodes
+  to `invalidOrientation`; a `yp` in 2D, or none in 3D, to `invalidRow`.
   Element forces recorded for an oriented element are still in global DOFs.
-- `TransformSpec`: `"linear" | "pDelta" | "corotational"`.
+- `TransformSpec` (2D): `"linear" | "pDelta" | "corotational"`.
   `TransformSpec3`: `{ kind: "linear3" | "pDelta3", vecXz: [x,y,z] }`. There is
   no 3D corotational transform. `vecXz` is a vector not parallel to the
   member axis; it fixes the local y/z orientation.
@@ -165,21 +176,36 @@ Notes:
 
 ### Fiber sections
 
-`FiberTable` (`y`, `area`, `material`) and `FiberTable3` (`y`, `z`, `area`,
-`material`) hold fibers for all sections, flattened and offset-indexed by
-`sectionOffsets` (see conventions). `material` is an arena index parallel to the
-coordinate arrays. Fiber sections carry no torsion; 3D elements supply it
-through their own `g`/`j`.
+`FiberTable` (`y`, `z?`, `area`, `material`) holds fibers for all sections,
+flattened and offset-indexed by `sectionOffsets` (see conventions). `material`
+is an arena index parallel to the coordinate arrays. `z` is omitted (or empty)
+for a 2D model and parallel to `y` in a 3D model (biaxial bending); a mismatch
+is `invalidRow`. Fiber sections carry no torsion; 3D elements supply it through
+their own `g`/`j`.
 
 ## Constraints
 
-- `EqualDofTable` / `EqualDofTable3`: row `i` ties `constrained[i]` to
-  `retained[i]` for each `[row, dof]` in the sparse `dofs`.
-- `RigidDiaphragmTable`: `retained[]`, `constrained: [row, node][]`. Ties each
-  listed node's `ux` to the retained node.
-- `RigidDiaphragmTable3`: adds `normal: ("x" | "y" | "z")[]`, the diaphragm
-  normal per row. Ties the two in-plane translations including the rotation
-  lever-arm term.
+All constraints are linear multi-point constraints resolved by the transformation
+handler (the session chooses it when the model has any).
+
+- `EqualDofTable`: row `i` ties `constrained[i]` to `retained[i]` for each
+  `[row, dof]` in the sparse `dofs`.
+- `RigidDiaphragmTable`: `retained[]`, `constrained: [row, node][]`, and in 3D
+  only `normal?: ("x" | "y" | "z")[]` (one per row; omitted means `"y"` for
+  every row; a 2D model must omit it). In 2D it ties each listed node's `ux` to
+  the retained node. In 3D it ties the two in-plane translations (perpendicular
+  to the normal) including the rotation lever-arm term.
+- `RigidLinkTable`: `master[]`, `slave[]` node pairs. The slave moves with the
+  master as a rigid body: its rotations equal the master's and its translations
+  equal the master's plus the small-rotation lever arm, taken from the node
+  coordinates (`core::Domain::rigid_link`).
+- `LinearConstraintTable`: general `u[slaveNode, slaveDof] = Σ coeff · u[node,
+  dof]`, as flattened sparse rows: `slaveNode[]`, `slaveDof[]`, `termOffsets[]`
+  (`rows + 1` entries, ending at the term count; may be omitted for an empty
+  table), and the parallel term arrays `termNode[]`, `termDof[]`, `termCoeff[]`.
+  Row `i` uses terms `termOffsets[i]..termOffsets[i + 1]`. Structural problems
+  (a slave defined twice, a fixed slave, a dependency cycle, a prescribed
+  master) are reported as `invalidModel`.
 
 ## Loads
 
@@ -189,22 +215,24 @@ through their own `g`/`j`.
 - `NodalLoadTable`: `pattern`, `node`, `dof`, `value`, `stage`. `stage` is the
   index of the stage at whose start the load is registered, which matters when
   an earlier stage must not ramp this pattern.
-- `ElementLoadTable` / `ElementLoadTable3`: `pattern`, `elementKind`,
-  `elementIndex` (row in the table named by `elementKind`), `load`, `stage`.
-  - `elementKind`: `"truss" | "elasticBeamColumn" | "dispBeamColumn" | "forceBeamColumn" | "zeroLength" | "zeroLengthSection"`.
-  - `load`: `{ kind: "uniform", wx, wy }` (2D) or
-    `{ kind: "uniform", wx, wy, wz }` (3D). Uniform force per length in the
+- `ElementLoadTable`: `pattern`, `elementKind`, `elementIndex` (row in the table
+  named by `elementKind`), `load`, `stage`.
+  - `elementKind` (shared with recorders): `"truss" | "elasticBeamColumn2d" |
+    "elasticBeamColumn3d" | "dispBeamColumn2d" | "dispBeamColumn3d" |
+    "forceBeamColumn2d" | "forceBeamColumn3d" | "zeroLength" | "zeroLengthSection"`.
+    A kind of the other profile is `elementKindNotInProfile`.
+  - `load`: `{ kind: "uniform", wx, wy, wz? }`. Uniform force per length in the
     element's **local** axes: `wx` along the member axis, `wy`/`wz` transverse
-    (3D local `y`/`z` come from the element's `vecXz`). All fields are
-    required. The beam-column kinds (`elasticBeamColumn`, `dispBeamColumn`, `forceBeamColumn`) accept element loads today; any other
-    `elementKind` fails decode with `unsupportedElementLoad`. Several rows
-    for the same element and pattern sum.
+    (3D local `y`/`z` come from the element's `vecXz`). `wz` is 3D only (omitted
+    means 0; a nonzero value in 2D is `invalidRow`). The beam-column kinds accept
+    element loads today; any other `elementKind` fails decode with
+    `unsupportedElementLoad`. Several rows for the same element and pattern sum.
   - `elementForce` recorders report member end forces including the fixed-end
     effect of element loads (the free end of a loaded cantilever reports zero).
 
 ## Analysis sequence
 
-`SequenceSpec` / `SequenceSpec3`: `{ stages: StageSpec[], recorders: RecorderSpec[] }`.
+`SequenceSpec`: `{ stages: StageSpec[], recorders: RecorderSpec[] }`.
 Stages run in order.
 
 ### `StageSpec`
@@ -263,14 +291,17 @@ load factor/time `0`: the stage's initial conditions, i.e. step 0 of that analys
 
 ### Recorders
 
-Each recorder is one scalar channel, tagged by `response`. The 3D form
-(`RecorderSpec3`) is identical except that `elementKind` names a 3D kind
-and `component` indexes a width-12 local force vector (width-6 for 2D).
+Each recorder is one scalar channel, tagged by `response`. `elementKind` is the
+shared kind enum above. `dof` is bounded by the profile's DOFs per node
+(`invalidDof`). `component` of an `elementForce` recorder indexes the element's
+local force vector (width 6 in 2D, 12 in 3D) and of an `elementLoad` recorder
+the load (`wx, wy` in 2D; `wx, wy, wz` in 3D); one past the width is
+`invalidRecorderComponent`.
 
 | `response` | Fields |
 |---|---|
 | `nodeDisp`, `nodeVel`, `nodeAccel`, `reaction` | `node`, `dof` |
-| `elementForce` | `elementKind`, `elementIndex`, `component` |
+| `elementForce`, `elementLoad` | `elementKind`, `elementIndex`, `component` |
 | `modeShape` | `mode`, `node`, `dof` |
 | `fiber` | `elementKind`, `elementIndex`, `point`, `fiber`, `quantity: "strain" \| "stress"` |
 
@@ -339,13 +370,19 @@ condensed; at least `modes` DOFs must carry mass.
 | `kind` | Extra fields |
 |---|---|
 | `invalidAnalysisOption` | `stage`, `field` |
-| `unsupportedSpace` | `got` |
+| `unsupportedNdm` | `got` |
 | `unknownNodeIndex`, `unknownMaterialIndex`, `unknownPatternIndex`, `unknownElementIndex`, `unknownStageIndex` | `table`, `row` |
 | `cyclicMaterialReference` | `index` |
 | `unknownFiberSectionIndex` | `row` |
 | `unsupportedElementLoad` | `elementKind` |
 | `invalidDof` | `table`, `row`, `dof` |
 | `unknownConstraintRow` | `table`, `row` |
+| `tableNotInProfile` | `table` (a 2D/3D formulation table of the other profile is not empty) |
+| `elementKindNotInProfile` | `table` (an element kind of the other profile in a load or recorder) |
+| `invalidRecorderComponent` | `recorder` (index), `component`, `width` |
+| `invalidRow` | `table`, `row`, `reason` (a row shape that is wrong for the profile or its sparse encoding) |
+| `invalidOrientation` | `table`, `row` |
+| `invalidModel` | `error` (a `core` model error, e.g. `{ kind: "loadOnInactiveDof", node, dof }`) |
 
 ## Extending the format
 
@@ -353,3 +390,17 @@ Add or change the Rust types and decoder, then rebuild to regenerate the
 TypeScript definitions, and update this page. A new binding is only needed for
 a new operation exposed to JavaScript. A new material or solver behind the
 existing session interface does not need one.
+
+Rules for new tables:
+
+- Every core capability that a model can use gets a wire table in the same
+  change that adds it; nothing is reachable from core only.
+- One table per element *formulation*, not per profile. If the 2D and 3D
+  versions have the same fields (truss, zero-length), they share a table and the
+  decoder branches on `ndm` only where the element constructors differ. If the
+  fields differ, add `…2d`/`…3d` tables, a matching `ElementKind` variant for
+  each, and a `tableNotInProfile` check in the other profile's decoder.
+- Add the table to `CarapaceInputV1` with `#[serde(default)]` and
+  `#[tsify(optional)]`, add its decoding to `decode/shared.rs` if it is
+  dimension-agnostic (or `decode/elements_2d.rs` / `elements_3d.rs`), and a
+  `DecodeError` for any new way a row can be wrong.

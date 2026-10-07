@@ -262,7 +262,7 @@ undocumented.
    transferable typed array — `carapaceWorker.ts`'s `StorageStream` does
    the packing into a real `Float64Array`/`ArrayBuffer` itself, on the JS
    side, only for the next hop (to the storage worker).
-2. **Bound memory — done.** `PlanarSession` no longer holds
+2. **Bound memory — done.** `Session2`/`Session3` no longer hold
    `recorder_history: Vec<Vec<(f64, f64)>>`; `current_batch` is cleared at
    the top of every `advance()` call and drained into that call's
    `recorder_batches` at the end, with only a running

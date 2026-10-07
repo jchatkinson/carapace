@@ -110,7 +110,7 @@ numerical equivalence with another implementation.
 | `core/src/analysis/solver.rs` | Sparse LU can handle indefinite/nonsymmetric operators. Build an `(n+1)` bordered sparse matrix; verify singular and nonfinite solve outcomes and backward error. |
 | `core/src/model/domain.rs` | Reuse transformed assembly and displacement application. Add reduced-coordinate displacement access, scaling metadata, and inspection of active load-series kinds. |
 | `core/src/analysis/builder.rs`, `error.rs`, `mod.rs` | Initialize/export continuation settings and history, validate combinations, and add structured failures. |
-| `wasm-bridge/src/input_v1/sequence.rs`, `decode.rs`, `decode3.rs` | Add configuration and convergence wire variants and validation for both profiles. |
+| `wasm-bridge/src/input_v1/sequence.rs`, `decode/stages.rs` | Add configuration and convergence wire variants and validation for both profiles (one shared stage compiler). |
 | `wasm-bridge/src/input_v1/session.rs` | Accepted steps alone produce samples; expose useful retry/continuation diagnostics and preserve sample ordering when load factor decreases. |
 
 Preserve the existing load/displacement integrator API. Remove the source

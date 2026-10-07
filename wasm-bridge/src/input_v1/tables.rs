@@ -201,8 +201,10 @@ pub struct ZeroLengthTable {
     pub materials: Vec<(u32, u8, u32)>,
     /// At most one entry per row (`core::ZeroLength` allows only one friction).
     #[serde(default)]
+    #[tsify(optional)]
     pub friction: Vec<FrictionRow>,
     #[serde(default)]
+    #[tsify(optional)]
     pub orient: Vec<OrientRow>,
 }
 
@@ -222,6 +224,7 @@ pub struct ZeroLengthSectionTable {
     /// in 2D; `uy`/`uz` (shear) or `rx` (torsion) in 3D.
     pub materials: Vec<(u32, u8, u32)>,
     #[serde(default)]
+    #[tsify(optional)]
     pub orient: Vec<OrientRow>,
 }
 
@@ -238,6 +241,7 @@ pub struct FiberTable {
     pub section_offsets: Vec<u32>,
     pub y: Vec<f64>,
     #[serde(default)]
+    #[tsify(optional)]
     pub z: Vec<f64>,
     pub area: Vec<f64>,
     /// Index into the material arena, parallel to `y`/`area`.
@@ -426,6 +430,7 @@ pub enum Axis3Spec {
 pub struct RigidDiaphragmTable {
     pub retained: Vec<u32>,
     #[serde(default)]
+    #[tsify(optional)]
     pub normal: Vec<Axis3Spec>,
     pub constrained: Vec<(u32, u32)>,
 }

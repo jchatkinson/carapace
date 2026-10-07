@@ -1,65 +1,35 @@
 // Run with Node 22.18+ after wasm-pack build; also type-check against generated .d.ts.
 import { decodeInput, axial_displacement } from "../../pkg/carapace_wasm.js";
 import type {
-  AlgorithmSpec, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, StepOutcome,
+  AlgorithmSpec, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, SequenceSpec, StepOutcome,
 } from "../../pkg/carapace_wasm.js";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-function emptyInput(space: number): CarapaceInputV1 {
-  const nodes = { coords: [], fixed: [], massNodeIndex: [], mass: [] };
-  const trusses = { nodeI: [], nodeJ: [], area: [], material: [], density: [] };
-  const fibers = { sectionOffsets: [], y: [], area: [], material: [] };
-  const fiberBeams = { nodeI: [], nodeJ: [], fiberSection: [], integration: [], corotational: [], density: [] };
-  const zeroLengths = { nodeI: [], nodeJ: [], materials: [], friction: [] };
-  const zeroLengthSections = { nodeI: [], nodeJ: [], fiberSection: [], materials: [] };
-  const equalDofs = { retained: [], constrained: [], dofs: [] };
-  const nodalLoads = { pattern: [], node: [], dof: [], value: [], stage: [] };
-  const elementLoads = { pattern: [], elementKind: [], elementIndex: [], load: [], stage: [] };
-  const spatialFiberBeams = { nodeI: [], nodeJ: [], g: [], j: [], vecXz: [], fiberSection: [], integration: [], density: [] };
-  return {
-    header: { schemaVersion: 1, space, engineVersion: "smoke" },
-    nodes, materials: [], fibers, trusses,
-    elasticBeamColumns: { nodeI: [], nodeJ: [], e: [], a: [], iz: [], transform: [], density: [] },
-    dispBeamColumns: fiberBeams, forceBeamColumns: fiberBeams,
-    zeroLengths, zeroLengthSections, equalDofs,
-    rigidDiaphragms: { retained: [], constrained: [] },
-    loadPatterns: { series: [], scaleFactor: [] }, nodalLoads, elementLoads,
-    sequence: { stages: [], recorders: [] },
-    nodes3: nodes, fibers3: { ...fibers, z: [] }, trusses3: trusses,
-    elasticBeamColumns3: { nodeI: [], nodeJ: [], e: [], g: [], a: [], j: [], iy: [], iz: [], transform: [], density: [] },
-    dispBeamColumns3: spatialFiberBeams, forceBeamColumns3: spatialFiberBeams,
-    zeroLengths3: zeroLengths, zeroLengthSections3: zeroLengthSections, equalDofs3: equalDofs,
-    rigidDiaphragms3: { retained: [], normal: [], constrained: [] },
-    nodalLoads3: nodalLoads, elementLoads3: elementLoads,
-    sequence3: { stages: [], recorders: [] },
-  };
+// Every table is optional on the wire, so an empty model is just a header.
+function emptyInput(ndm: number): CarapaceInputV1 {
+  return { header: { schemaVersion: 1, ndm, engineVersion: "smoke" } };
 }
 
-// Exercise both profile decoders through the generated JS glue and typed API.
-for (const space of [2, 3]) {
-  const input = emptyInput(space);
+// Exercise both profiles through the generated JS glue and typed API.
+for (const ndm of [2, 3]) {
+  const input = emptyInput(ndm);
   const nodes = {
-    coords: space === 2 ? [0, 0, 100, 0] : [0, 0, 0, 100, 0, 0],
-    fixed: space === 2 ? [0b111, 0b110] : [0b111111, 0b111110],
+    coords: ndm === 2 ? [0, 0, 100, 0] : [0, 0, 0, 100, 0, 0],
+    fixed: ndm === 2 ? [0b111, 0b110] : [0b111111, 0b111110],
     massNodeIndex: [], mass: [],
   };
   const trusses = { nodeI: [0], nodeJ: [1], area: [2], material: [0], density: [0] };
   const loads = { pattern: [0], node: [1], dof: [0], value: [50], stage: [0] };
-  const stages: CarapaceInputV1["sequence"]["stages"] = [{
+  const stages: SequenceSpec["stages"] = [{
     kind: "static", id: "load", steps: 2,
     integrator: { kind: "loadControl", increment: 0.5 }, algorithm: "linear",
     convergence: undefined, holdPatternsAfter: [],
   }];
-  if (space === 2) {
-    input.nodes = nodes; input.trusses = trusses; input.nodalLoads = loads;
-    input.sequence = { stages, recorders: [{ response: "nodeDisp", node: 1, dof: 0 }] };
-  } else {
-    input.nodes3 = nodes; input.trusses3 = trusses; input.nodalLoads3 = loads;
-    input.sequence3 = { stages, recorders: [{ response: "nodeDisp", node: 1, dof: 0 }] };
-  }
+  input.nodes = nodes; input.trusses = trusses; input.nodalLoads = loads;
+  input.sequence = { stages, recorders: [{ response: "nodeDisp", node: 1, dof: 0 }] };
   input.materials = [{ kind: "elastic", e: 30000 }];
   input.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
   const session = decodeInput(input);
@@ -91,7 +61,7 @@ function expectThrow(call: () => unknown): unknown {
 }
 
 const error = expectThrow(() => decodeInput(emptyInput(4))) as DecodeError;
-assert(error.kind === "unsupportedSpace" && error.got === 4, "structured decode error");
+assert(error.kind === "unsupportedNdm" && error.got === 4, "structured decode error");
 const malformed = expectThrow(() => {
   // @ts-expect-error Missing fields must be rejected by TypeScript and at runtime.
   decodeInput({ header: {} });
@@ -99,19 +69,19 @@ const malformed = expectThrow(() => {
 assert(String(malformed).includes("malformed CarapaceInputV1"), "malformed input error");
 assert(Math.abs(axial_displacement(50, 100, 2, 30000) - 1 / 12) < 1e-12, "legacy export");
 
-function yieldingInput(space: number, transient: boolean, algorithm?: AlgorithmSpec): CarapaceInputV1 {
-  const input = emptyInput(space);
+function yieldingInput(ndm: number, transient: boolean, algorithm?: AlgorithmSpec): CarapaceInputV1 {
+  const input = emptyInput(ndm);
   const nodes = {
-    coords: space === 2 ? [0, 0, 0, 0] : [0, 0, 0, 0, 0, 0],
-    fixed: space === 2 ? [0b111, 0b110] : [0b111111, 0b111110],
-    massNodeIndex: [1], mass: space === 2 ? [1, 0, 0] : [1, 0, 0, 0, 0, 0],
+    coords: ndm === 2 ? [0, 0, 0, 0] : [0, 0, 0, 0, 0, 0],
+    fixed: ndm === 2 ? [0b111, 0b110] : [0b111111, 0b111110],
+    massNodeIndex: [1], mass: ndm === 2 ? [1, 0, 0] : [1, 0, 0, 0, 0, 0],
   };
-  const springs = { nodeI: [0, 0], nodeJ: [1, 1], materials: [[0, 0, 0], [1, 0, 1]] as [number, number, number][], friction: [] };
+  const springs = { nodeI: [0, 0], nodeJ: [1, 1], materials: [[0, 0, 0], [1, 0, 1]] as [number, number, number][] };
   const loads = { pattern: [0], node: [1], dof: [0], value: [transient ? 1000 : 5], stage: [0] };
   input.materials = [{ kind: "elastic", e: 50 }, { kind: "elasticPp", e: 100, eyp: 0.01 }];
   input.loadPatterns = { series: [transient ? { kind: "linear", slope: 10 } : { kind: "constant" }], scaleFactor: [1] };
   const convergence = { kind: "normUnbalance" as const, tol: transient ? 1e-6 : 1e-9, maxIter: 120 };
-  const sequence: CarapaceInputV1["sequence"] = {
+  const sequence: SequenceSpec = {
     stages: [transient ? {
       kind: "transient", id: "yield", steps: 1, dt: 0.1,
       damping: { alphaM: 0, betaK: 0 }, groundMotions: [],
@@ -123,11 +93,7 @@ function yieldingInput(space: number, transient: boolean, algorithm?: AlgorithmS
       algorithm: algorithm ?? "linear", convergence, holdPatternsAfter: [],
     }], recorders: [{ response: "nodeDisp", node: 1, dof: 0 }],
   };
-  if (space === 2) {
-    input.nodes = nodes; input.zeroLengths = springs; input.nodalLoads = loads; input.sequence = sequence;
-  } else {
-    input.nodes3 = nodes; input.zeroLengths3 = springs; input.nodalLoads3 = loads; input.sequence3 = sequence;
-  }
+  input.nodes = nodes; input.zeroLengths = springs; input.nodalLoads = loads; input.sequence = sequence;
   return input;
 }
 
@@ -138,10 +104,10 @@ for (const tangent of ["current", "reuseAtStepStart", "initial"] as const) {
     algorithms.push({ kind: "newton", tangent, lineSearch: { kind, tol: 1e-10, maxIter: 30, maxEta: 16 } });
   }
 }
-for (const space of [2, 3]) {
+for (const ndm of [2, 3]) {
   for (const transient of [false, true]) {
     for (const algorithm of [undefined, "linear", { kind: "linear" }, ...algorithms] as const) {
-      const session = decodeInput(yieldingInput(space, transient, algorithm));
+      const session = decodeInput(yieldingInput(ndm, transient, algorithm));
       try {
         const result = session.advance(1);
         assert(result.done && result.error === undefined, `solver failed: ${JSON.stringify(algorithm)}`);
@@ -168,7 +134,7 @@ for (const [algorithm, field] of invalidAlgorithms) {
 for (const field of ["tol", "maxIter"] as const) {
   for (const value of field === "tol" ? [0, -1, NaN, Infinity] : [0]) {
     const input = yieldingInput(2, true, "newtonRaphson");
-    const stage = input.sequence.stages[0];
+    const stage = input.sequence!.stages[0];
     assert(stage.kind === "transient", "validation stage");
     stage.convergence = { kind: "normUnbalance", tol: 1e-6, maxIter: 100, [field]: value };
     const error = expectThrow(() => decodeInput(input)) as DecodeError;
@@ -177,14 +143,14 @@ for (const field of ["tol", "maxIter"] as const) {
 }
 for (const dt of [0, -0.1, NaN, Infinity]) {
   const input = yieldingInput(2, true);
-  const stage = input.sequence.stages[0];
+  const stage = input.sequence!.stages[0];
   assert(stage.kind === "transient", "validation stage");
   stage.dt = dt;
   const error = expectThrow(() => decodeInput(input)) as DecodeError;
   assert(error.kind === "invalidAnalysisOption" && error.field === "dt", "invalid timestep");
 }
 const failureInput = yieldingInput(2, true, "newtonRaphson");
-const stage = failureInput.sequence.stages[0];
+const stage = failureInput.sequence!.stages[0];
 assert(stage.kind === "transient", "transient test stage");
 stage.convergence = { kind: "normUnbalance", tol: 1e-6, maxIter: 1 };
 const failureSession = decodeInput(failureInput);
@@ -194,18 +160,18 @@ try {
   assert(failureSession.advance(1).error?.kind === "failedToConverge", "sticky failure");
 } finally { failureSession.free(); }
 
-// Arc-length continuation past a degrading-strength peak in both profiles:
+// Arc-length continuation past a degrading-strength peak in 2D and 3D:
 // load factors fall after the peak while sample indices keep increasing,
 // the stop criterion ends the stage before its step cap, and continuation
 // diagnostics cross the boundary.
-function softeningInput(space: number, integrator: IntegratorSpec): CarapaceInputV1 {
-  const input = emptyInput(space);
+function softeningInput(ndm: number, integrator: IntegratorSpec): CarapaceInputV1 {
+  const input = emptyInput(ndm);
   const nodes = {
-    coords: space === 2 ? [0, 0, 0, 0] : [0, 0, 0, 0, 0, 0],
-    fixed: space === 2 ? [0b111, 0b110] : [0b111111, 0b111110],
+    coords: ndm === 2 ? [0, 0, 0, 0] : [0, 0, 0, 0, 0, 0],
+    fixed: ndm === 2 ? [0b111, 0b110] : [0b111111, 0b111110],
     massNodeIndex: [], mass: [],
   };
-  const springs = { nodeI: [0], nodeJ: [1], materials: [[0, 0, 0]] as [number, number, number][], friction: [] };
+  const springs = { nodeI: [0], nodeJ: [1], materials: [[0, 0, 0]] as [number, number, number][] };
   const loads = { pattern: [0], node: [1], dof: [0], value: [1], stage: [0] };
   input.materials = [{
     kind: "hysteretic", mom1p: 10, rot1p: 0.01, mom2p: 6, rot2p: 0.02, mom3p: 2, rot3p: 0.03,
@@ -213,18 +179,14 @@ function softeningInput(space: number, integrator: IntegratorSpec): CarapaceInpu
     pinchX: 1, pinchY: 1, damfc1: 0, damfc2: 0, beta: 0,
   }];
   input.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
-  const sequence: CarapaceInputV1["sequence"] = {
+  const sequence: SequenceSpec = {
     stages: [{
       kind: "static", id: "push", steps: 200, integrator,
       algorithm: "newtonRaphson", convergence: undefined, holdPatternsAfter: [],
     }],
     recorders: [{ response: "nodeDisp", node: 1, dof: 0 }],
   };
-  if (space === 2) {
-    input.nodes = nodes; input.zeroLengths = springs; input.nodalLoads = loads; input.sequence = sequence;
-  } else {
-    input.nodes3 = nodes; input.zeroLengths3 = springs; input.nodalLoads3 = loads; input.sequence3 = sequence;
-  }
+  input.nodes = nodes; input.zeroLengths = springs; input.nodalLoads = loads; input.sequence = sequence;
   return input;
 }
 
@@ -234,8 +196,8 @@ const arcLength: IntegratorSpec = {
   arcTolerance: 1e-9,
   stop: { displacement: { node: 1, dof: 0, value: 0.02, exact: true } },
 };
-for (const space of [2, 3]) {
-  const session = decodeInput(softeningInput(space, arcLength));
+for (const ndm of [2, 3]) {
+  const session = decodeInput(softeningInput(ndm, arcLength));
   try {
     const result: StepOutcome = session.advance(1000);
     assert(result.done && result.stageComplete && result.error === undefined, "arc length completes");
@@ -261,7 +223,7 @@ const arcErrors: [IntegratorSpec, AlgorithmSpec, string][] = [
 ];
 for (const [integrator, algorithm, field] of arcErrors) {
   const input = softeningInput(2, integrator);
-  const stage = input.sequence.stages[0];
+  const stage = input.sequence!.stages[0];
   assert(stage.kind === "static", "static stage");
   stage.algorithm = algorithm;
   const error = expectThrow(() => decodeInput(input)) as DecodeError;
@@ -274,4 +236,28 @@ const typo = expectThrow(() => decodeInput(softeningInput(2, {
 })));
 assert(String(typo).includes("malformed CarapaceInputV1"), "unknown arc-length field");
 
-console.log("Wasm boundary smoke passed: both profiles, configurable static/transient solvers, arc length, legacy inputs, errors.");
+// Unified tables: a profile mismatch is a structured error; rigid links and general constraints decode.
+const wrongProfile = emptyInput(2);
+wrongProfile.elasticBeamColumns3d = { nodeI: [0], nodeJ: [], e: [], g: [], a: [], j: [], iy: [], iz: [], transform: [], density: [] };
+const profileError = expectThrow(() => decodeInput(wrongProfile)) as DecodeError;
+assert(profileError.kind === "tableNotInProfile" && profileError.table === "elastic_beam_columns_3d", "table not in profile");
+for (const ndm of [2, 3]) {
+  const input = emptyInput(ndm);
+  input.nodes = {
+    coords: ndm === 2 ? [0, 0, 1, 0, 2, 0] : [0, 0, 0, 1, 0, 0, 2, 0, 0],
+    fixed: ndm === 2 ? [0b111, 0, 0] : [0b111111, 0, 0], massNodeIndex: [], mass: [],
+  };
+  input.rigidLinks = { master: [0], slave: [1] };
+  input.linearConstraints = { slaveNode: [2], slaveDof: [0], termOffsets: [0, 1], termNode: [1], termDof: [0], termCoeff: [1] };
+  const session = decodeInput(input);
+  session.free();
+}
+const badComponent = emptyInput(2);
+badComponent.sequence = { stages: [], recorders: [{ response: "elementLoad", elementKind: "truss", elementIndex: 0, component: 2 }] };
+badComponent.nodes = { coords: [0, 0, 1, 0], fixed: [7, 6], massNodeIndex: [], mass: [] };
+badComponent.materials = [{ kind: "elastic", e: 1 }];
+badComponent.trusses = { nodeI: [0], nodeJ: [1], area: [1], material: [0], density: [0] };
+const componentError = expectThrow(() => decodeInput(badComponent)) as DecodeError;
+assert(componentError.kind === "invalidRecorderComponent" && componentError.width === 2, "recorder component bound");
+
+console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, configurable static/transient solvers, arc length, legacy inputs, errors.");

@@ -135,3 +135,34 @@ Reading: the browser target (wasm) is at parity or slightly faster. The native g
 profile is an inlining artifact (it disappears under LTO with one codegen unit), not extra work per
 step. Whether to adopt `[profile.release] lto = "fat", codegen-units = 1` is an open decision (it
 changes native and wasm builds; wasm-pack uses the same profile).
+
+## Phase 2 gate (wire-format unification, steps 2.1-2.4)
+
+Correctness: `comparison/check_refactor.sh` reports all 1318 dump values and the cyclic material
+CSVs identical to the baseline (largest relative difference 0). `cargo test --workspace` passes in
+both profiles: 289 passed, 0 failed, 1 ignored (Phase 1: 278; 11 new wire-format tests in
+`wasm-bridge/tests/unified_wire.rs`, none removed). `node wasm-bridge/tests/boundary-smoke.ts` and its
+`tsc --strict` check pass against the regenerated `pkg/`.
+
+| Step | Dump vs baseline | Tests | Wasm perf (medians of 3 runs, 2 warm runs) | Wasm size |
+|---|---|---|---|---|
+| 2.1-2.4 unified wire format | identical (max relative diff 0) | 289 passed | elastic 30x6 159-167 ms (Phase 1: 161), fiber 10x3 28.6-29.4 ms (29.4), fiber 20x5 164 ms (168) | 1,442,744 bytes (Phase 1: 1,511,474; -4.5%) |
+
+The smaller binary comes from the single shared decoder (one generic implementation for both
+profiles instead of two) and the dropped `*3` serde types. Core is unchanged apart from two
+read-only accessors, so native timing was not re-measured.
+
+### `[profile.release] lto = "fat", codegen-units = 1` for the wasm build (not adopted)
+
+Measured with environment overrides (`CARGO_PROFILE_RELEASE_LTO=fat
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 wasm-pack build ...`); `Cargo.toml` is unchanged. Two
+interleaved rounds, medians of 3 runs each:
+
+| Build | elastic 30x6 | fiber 10x3 | fiber 20x5 | wasm size | `wasm-pack` build |
+|---|---|---|---|---|---|
+| default release | 166.6 / 159.2 ms | 29.4 / 28.6 ms | 163.7 / 163.7 ms | 1,442,744 bytes | about 32 s |
+| fat LTO, 1 codegen unit | 158.3 / 158.4 ms | 28.2 / 27.9 ms | 162.7 / 165.0 ms | 1,381,355 bytes (-4.3%) | about 78 s |
+
+Wasm timing is within noise (at most about 3%, and not consistently in one direction); the size
+saving is real but small, and the build is about 2.4 times slower. Native is where LTO closed the
+8% elastic gap (Phase 1 gate). The decision is still open and belongs to the project owner.

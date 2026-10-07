@@ -27,31 +27,14 @@ function buildInput() {
   const all = [...columns, ...beams];
   const empty = () => ({ nodeI: [], nodeJ: [], density: [] });
   const input = {
-    header: { schemaVersion: 1, space: 2, engineVersion: "bench" },
+    header: { schemaVersion: 1, ndm: 2, engineVersion: "bench" },
     nodes: { coords, fixed, massNodeIndex: [], mass: [] },
     materials: [], fibers: { sectionOffsets: [], y: [], area: [], material: [] },
-    trusses: { ...empty(), area: [], material: [] },
-    elasticBeamColumns: { ...empty(), e: [], a: [], iz: [], transform: [] },
-    dispBeamColumns: { ...empty(), fiberSection: [], integration: [], corotational: [] },
-    forceBeamColumns: { ...empty(), fiberSection: [], integration: [], corotational: [] },
-    zeroLengths: { nodeI: [], nodeJ: [], materials: [], friction: [] },
-    zeroLengthSections: { nodeI: [], nodeJ: [], fiberSection: [], materials: [] },
-    equalDofs: { retained: [], constrained: [], dofs: [] },
-    rigidDiaphragms: { retained: [], constrained: [] },
+    elasticBeamColumns2d: { ...empty(), e: [], a: [], iz: [], transform: [] },
+    dispBeamColumns2d: { ...empty(), fiberSection: [], integration: [], corotational: [] },
     loadPatterns: { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] },
     nodalLoads: { pattern: [], node: [], dof: [], value: [], stage: [] },
-    elementLoads: { pattern: [], elementKind: [], elementIndex: [], load: [], stage: [] },
   };
-  // The decoder requires the 3D tables to be present even for a 2D model.
-  const nodes3 = { coords: [], fixed: [], massNodeIndex: [], mass: [] }, spatialFiber = { nodeI: [], nodeJ: [], g: [], j: [], vecXz: [], fiberSection: [], integration: [], density: [] };
-  Object.assign(input, {
-    nodes3, fibers3: { sectionOffsets: [], y: [], z: [], area: [], material: [] }, trusses3: { ...empty(), area: [], material: [] },
-    elasticBeamColumns3: { nodeI: [], nodeJ: [], e: [], g: [], a: [], j: [], iy: [], iz: [], transform: [], density: [] },
-    dispBeamColumns3: spatialFiber, forceBeamColumns3: spatialFiber,
-    zeroLengths3: input.zeroLengths, zeroLengthSections3: input.zeroLengthSections, equalDofs3: input.equalDofs,
-    rigidDiaphragms3: { retained: [], normal: [], constrained: [] },
-    nodalLoads3: input.nodalLoads, elementLoads3: input.elementLoads, sequence3: { stages: [], recorders: [] },
-  });
   if (model === "fiber") {
     input.materials = [{ kind: "steel01", fy: 355, e0: E, b: 0.02, a1: 0, a2: 1, a3: 0, a4: 1 }];
     const sections = [[colA, colI], [beamA, beamI]];
@@ -62,14 +45,14 @@ function buildInput() {
     }
     input.fibers.sectionOffsets.push(input.fibers.y.length);
     all.forEach(([i, j], k) => {
-      const t = input.dispBeamColumns;
+      const t = input.dispBeamColumns2d;
       t.nodeI.push(i); t.nodeJ.push(j); t.density.push(0);
       t.fiberSection.push(k < columns.length ? 0 : 1);
       t.integration.push({ kind: "legendre", points: 3 }); t.corotational.push(false);
     });
   } else {
     all.forEach(([i, j], k) => {
-      const t = input.elasticBeamColumns, col = k < columns.length;
+      const t = input.elasticBeamColumns2d, col = k < columns.length;
       t.nodeI.push(i); t.nodeJ.push(j); t.density.push(0); t.e.push(E);
       t.a.push(col ? colA : beamA); t.iz.push(col ? colI : beamI); t.transform.push("linear");
     });
