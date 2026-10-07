@@ -104,30 +104,96 @@ fn path_slope(times: &[f64], factors: &[f64], pseudo_time: f64) -> f64 {
     (factors[i + 1] - factors[i]) / (t1 - t0)
 }
 
-/// An element load kind — currently just a uniform distributed load on
-/// `ElasticBeamColumn` (§3.4). Closed enum (§2.1); grow it only when a
-/// second element-load type is actually needed.
+/// The load on a 2D element: an additive accumulator with one field group per
+/// load kind, so that the sum of every pattern's load on an element (each
+/// scaled by its factor) is just a field-wise sum. `Uniform + Body` is simply
+/// both fields set. Which kinds an element accepts is decided by
+/// `ElementOps::accepts_load`, checked by `Domain::validate` before any load
+/// is accumulated.
 ///
-/// Components are always in the element's *local* axes (local `x` is the
-/// member axis), as in OpenSees's `-beamUniform` — never global.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ElementLoad {
-    /// Uniform load (force/length): `wx` along the member axis, `wy`
-    /// transverse in local +y.
-    Uniform { wx: f64, wy: f64 },
+/// Component frames differ by kind: `beam_uniform` is in the element's
+/// *local* axes (local `x` is the member axis), as in OpenSees's
+/// `-beamUniform`; `body`, `edge_traction` and `edge_pressure` are in *global*
+/// axes (pressure along the inward normal).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ElementLoad {
+    /// Beam-columns: uniform load (force/length) `[wx, wy]`, `wx` along the
+    /// member axis and `wy` transverse in local +y.
+    pub beam_uniform: [f64; 2],
+    /// Continuum elements: body force per unit volume `[bx, by]`.
+    pub body: [f64; 2],
+    /// Continuum elements: traction `[tx, ty]` per unit edge length on edge
+    /// `k`, which joins local node `k` to `k + 1`.
+    pub edge_traction: [[f64; 2]; 4],
+    /// Continuum elements: pressure on edge `k`, positive acting into the
+    /// element along the inward normal.
+    pub edge_pressure: [f64; 4],
+}
+
+impl ElementLoad {
+    /// A uniform beam load (the former `ElementLoad::Uniform { wx, wy }`).
+    pub fn uniform(wx: f64, wy: f64) -> Self {
+        ElementLoad {
+            beam_uniform: [wx, wy],
+            ..Default::default()
+        }
+    }
+
+    /// A body force per unit volume in global axes.
+    pub fn body(bx: f64, by: f64) -> Self {
+        ElementLoad {
+            body: [bx, by],
+            ..Default::default()
+        }
+    }
+
+    /// A global-axes traction per unit length on edge `edge` (`0..4`).
+    pub fn edge_traction(edge: usize, tx: f64, ty: f64) -> Self {
+        let mut load = ElementLoad::default();
+        load.edge_traction[edge] = [tx, ty];
+        load
+    }
+
+    /// A pressure on edge `edge` (`0..4`), positive into the element.
+    pub fn edge_pressure(edge: usize, pressure: f64) -> Self {
+        let mut load = ElementLoad::default();
+        load.edge_pressure[edge] = pressure;
+        load
+    }
+
+    /// Whether any beam-load field is nonzero.
+    pub fn has_beam(&self) -> bool {
+        self.beam_uniform != [0.0; 2]
+    }
+
+    /// Whether the body force is nonzero.
+    pub fn has_body(&self) -> bool {
+        self.body != [0.0; 2]
+    }
+
+    /// Whether any edge `>= edges` carries a traction or pressure.
+    pub fn has_edge_from(&self, edges: usize) -> bool {
+        (edges..4).any(|k| self.edge_traction[k] != [0.0; 2] || self.edge_pressure[k] != 0.0)
+    }
+
+    /// Whether any edge carries a traction or pressure.
+    pub fn has_edge(&self) -> bool {
+        self.has_edge_from(0)
+    }
 }
 
 impl std::ops::Add for ElementLoad {
     type Output = ElementLoad;
 
-    /// Loads of the same kind sum component-wise — several `eleLoad`s on
-    /// one element in one pattern accumulate, as in OpenSees.
+    /// Field-wise sum — several loads on one element accumulate, as in OpenSees.
     fn add(self, other: ElementLoad) -> ElementLoad {
-        let (ElementLoad::Uniform { wx: ax, wy: ay }, ElementLoad::Uniform { wx: bx, wy: by }) =
-            (self, other);
-        ElementLoad::Uniform {
-            wx: ax + bx,
-            wy: ay + by,
+        ElementLoad {
+            beam_uniform: std::array::from_fn(|i| self.beam_uniform[i] + other.beam_uniform[i]),
+            body: std::array::from_fn(|i| self.body[i] + other.body[i]),
+            edge_traction: std::array::from_fn(|k| {
+                std::array::from_fn(|i| self.edge_traction[k][i] + other.edge_traction[k][i])
+            }),
+            edge_pressure: std::array::from_fn(|k| self.edge_pressure[k] + other.edge_pressure[k]),
         }
     }
 }
@@ -144,12 +210,24 @@ pub trait ElementLoadComponents {
     fn component(&self, index: usize) -> f64;
 }
 
+/// Component layout: `[wx, wy, bx, by, t0x, t0y, p0, t1x, t1y, p1, t2x, t2y, p2, t3x, t3y, p3]`
+/// (beam uniform, body force, then traction and pressure per edge).
 impl ElementLoadComponents for ElementLoad {
-    const COUNT: usize = 2;
+    const COUNT: usize = 16;
 
     fn component(&self, index: usize) -> f64 {
-        let ElementLoad::Uniform { wx, wy } = *self;
-        [wx, wy].get(index).copied().unwrap_or(0.0)
+        match index {
+            0 | 1 => self.beam_uniform[index],
+            2 | 3 => self.body[index - 2],
+            4..=15 => {
+                let (edge, slot) = ((index - 4) / 3, (index - 4) % 3);
+                match slot {
+                    0 | 1 => self.edge_traction[edge][slot],
+                    _ => self.edge_pressure[edge],
+                }
+            }
+            _ => 0.0,
+        }
     }
 }
 
@@ -166,10 +244,11 @@ impl std::ops::Mul<f64> for ElementLoad {
     type Output = ElementLoad;
 
     fn mul(self, factor: f64) -> ElementLoad {
-        let ElementLoad::Uniform { wx, wy } = self;
-        ElementLoad::Uniform {
-            wx: wx * factor,
-            wy: wy * factor,
+        ElementLoad {
+            beam_uniform: self.beam_uniform.map(|v| v * factor),
+            body: self.body.map(|v| v * factor),
+            edge_traction: self.edge_traction.map(|t| t.map(|v| v * factor)),
+            edge_pressure: self.edge_pressure.map(|v| v * factor),
         }
     }
 }
@@ -325,6 +404,10 @@ where
 
     pub(crate) fn nodal_load(&self, node: NId) -> Option<&[f64; NDOF]> {
         self.nodal_loads.get(&node)
+    }
+
+    pub(crate) fn element_loads(&self) -> impl Iterator<Item = (&EId, &EL)> {
+        self.element_loads.iter()
     }
 
     pub(crate) fn element_load(&self, element: EId) -> Option<&EL> {

@@ -64,7 +64,7 @@ fn planar_disp_beam_matches_elastic_beam_under_axial_and_transverse_udl() {
             )))
         };
         let pattern = domain.default_pattern();
-        domain.add_element_load(pattern, beam, ElementLoad::Uniform { wx, wy });
+        domain.add_element_load(pattern, beam, ElementLoad::uniform(wx, wy));
         (solve_linear(domain), beam, j)
     };
 
@@ -230,7 +230,7 @@ fn yielding_cantilever(n: usize, points: usize) -> (f64, f64) {
             fibers(),
             BeamIntegration::Lobatto { points },
         )));
-        domain.add_element_load(pattern, beam, ElementLoad::Uniform { wx: 0.0, wy: -5.5 });
+        domain.add_element_load(pattern, beam, ElementLoad::uniform(0.0, -5.5));
     }
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)

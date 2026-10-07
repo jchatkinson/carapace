@@ -295,7 +295,7 @@ Each recorder is one scalar channel, tagged by `response`. `elementKind` is the
 shared kind enum above. `dof` is bounded by the profile's DOFs per node
 (`invalidDof`). `component` of an `elementForce` recorder indexes the element's
 local force vector (width 6 in 2D, 12 in 3D) and of an `elementLoad` recorder
-the load (`wx, wy` in 2D; `wx, wy, wz` in 3D); one past the width is
+the load (3D: `wx, wy, wz`; 2D: 16 components, `[wx, wy, bx, by, t0x, t0y, p0, ..., t3x, t3y, p3]` for beam uniform, body force, then traction and pressure of each edge); one past the width is
 `invalidRecorderComponent`.
 
 | `response` | Fields |

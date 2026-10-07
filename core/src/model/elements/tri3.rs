@@ -4,11 +4,11 @@
 use nalgebra::{SMatrix, SVector};
 
 use super::plane_common::{
-    b_matrix, check_section, plane_coords, plane_displacement, plane_dofs, PlaneView,
+    b_matrix, check_section, load_vector, plane_coords, plane_displacement, plane_dofs, PlaneView,
 };
 use super::{DofMask, ElementForce, GaussResponse, TangentSink, VectorSink};
 use crate::model::continuum::{physical_derivatives, tri3_dshape, validate_triangle, Jacobian};
-use crate::model::{NodeId, PlaneMaterial, PlaneVector};
+use crate::model::{ElementLoad, NodeId, PlaneMaterial, PlaneVector};
 
 #[derive(Debug, Clone)]
 pub struct Tri3 {
@@ -106,6 +106,30 @@ impl Tri3 {
         );
     }
 
+    /// Consistent nodal forces of `load` (global DOF order): body force
+    /// `b t A / 3` per node, plus edge tractions and pressures.
+    pub(super) fn load_vector(&self, view: &PlaneView<'_>, load: &ElementLoad) -> SVector<f64, 6> {
+        let share = self.thickness * self.geometry(view).area / 3.0;
+        load_vector(
+            &plane_coords(&self.nodes, view),
+            &[share; 3],
+            self.thickness,
+            load,
+        )
+    }
+
+    pub(super) fn assemble_load<S: VectorSink<NodeId>>(
+        &self,
+        view: &PlaneView<'_>,
+        load: &ElementLoad,
+        sink: &mut S,
+    ) {
+        sink.add(
+            &plane_dofs::<3, 6>(&self.nodes),
+            &self.load_vector(view, load),
+        );
+    }
+
     pub(super) fn commit(&mut self, view: &PlaneView<'_>) {
         let g = self.geometry(view);
         self.material = self.material.commit(&self.strain(&g, view));
@@ -140,7 +164,7 @@ mod tests {
     use slotmap::SlotMap;
 
     use super::*;
-    use crate::model::{DofRef, Node};
+    use crate::model::{DofRef, ElementLoad, Node};
 
     struct Collect {
         k: SMatrix<f64, 6, 6>,
@@ -331,5 +355,34 @@ mod tests {
         assert!(
             (PlaneVector::from(response[0].stress) - material.d_matrix() * strain).norm() < 1e-12
         );
+    }
+
+    #[test]
+    fn body_force_and_edge_loads_total_their_resultants() {
+        let (nodes, [a, b, c]) = setup([[0.0, 0.0], [4.0, 0.0], [1.0, 3.0]]);
+        let el = Tri3::new(a, b, c, 0.2, PlaneMaterial::plane_stress(1.0, 0.0).unwrap());
+        let view = PlaneView::new(&nodes);
+        let sums = |v: SVector<f64, 6>| {
+            [
+                (0..3).map(|i| v[2 * i]).sum::<f64>(),
+                (0..3).map(|i| v[2 * i + 1]).sum::<f64>(),
+            ]
+        };
+        let body = sums(el.load_vector(&view, &ElementLoad::body(1.5, -4.0)));
+        assert!(
+            (body[0] - 1.5 * 0.2 * 6.0).abs() < 1e-14 && (body[1] + 4.0 * 0.2 * 6.0).abs() < 1e-14
+        );
+        // Edge 0 is the base (length 4), edge 1 runs (4,0) -> (1,3) (length sqrt(18)).
+        let base = sums(el.load_vector(&view, &ElementLoad::edge_traction(0, 2.0, 3.0)));
+        assert!(
+            (base[0] - 2.0 * 0.2 * 4.0).abs() < 1e-13 && (base[1] - 3.0 * 0.2 * 4.0).abs() < 1e-13
+        );
+        // Pressure on the base pushes up (+y, the inward normal of a counter-clockwise triangle).
+        let pressure = sums(el.load_vector(&view, &ElementLoad::edge_pressure(0, 5.0)));
+        assert!(pressure[0].abs() < 1e-13 && (pressure[1] - 5.0 * 0.2 * 4.0).abs() < 1e-13);
+        // Edge 1's pressure resultant is its length times the unit inward normal, i.e. (-3, -3) * p t / ... .
+        let slanted = sums(el.load_vector(&view, &ElementLoad::edge_pressure(1, 1.0)));
+        // Tangent (-3, 3), inward (left) normal (-3, -3)/|.|; resultant = p t |edge| n = p t (-3, -3).
+        assert!((slanted[0] + 0.6).abs() < 1e-13 && (slanted[1] + 0.6).abs() < 1e-13);
     }
 }

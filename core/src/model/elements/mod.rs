@@ -121,14 +121,14 @@ impl Element {
         load: Option<&ElementLoad>,
     ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
-            (Element::ElasticBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
-                b.form_load_vector(node_i, node_j, *wx, *wy)
+            (Element::ElasticBeamColumn(b), Some(load)) => {
+                b.form_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
-            (Element::DispBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
-                b.form_load_vector(node_i, node_j, *wx, *wy)
+            (Element::DispBeamColumn(b), Some(load)) => {
+                b.form_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
-            (Element::ForceBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
-                b.form_load_vector(node_i, node_j, *wx, *wy)
+            (Element::ForceBeamColumn(b), Some(load)) => {
+                b.form_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
             _ => SVector::<f64, ELEMENT_DOF>::zeros(),
         }
@@ -142,14 +142,14 @@ impl Element {
         load: Option<&ElementLoad>,
     ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
-            (Element::ElasticBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
-                b.form_local_load_vector(node_i, node_j, *wx, *wy)
+            (Element::ElasticBeamColumn(b), Some(load)) => {
+                b.form_local_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
-            (Element::DispBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
-                b.form_local_load_vector(node_i, node_j, *wx, *wy)
+            (Element::DispBeamColumn(b), Some(load)) => {
+                b.form_local_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
-            (Element::ForceBeamColumn(b), Some(ElementLoad::Uniform { wx, wy })) => {
-                b.form_local_load_vector(node_i, node_j, *wx, *wy)
+            (Element::ForceBeamColumn(b), Some(load)) => {
+                b.form_local_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
             _ => SVector::<f64, ELEMENT_DOF>::zeros(),
         }
@@ -250,6 +250,19 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         }
     }
 
+    fn accepts_load(&self, load: &ElementLoad) -> bool {
+        match self {
+            Element::ElasticBeamColumn(_)
+            | Element::DispBeamColumn(_)
+            | Element::ForceBeamColumn(_) => !load.has_body() && !load.has_edge(),
+            Element::Tri3(_) => !load.has_beam() && !load.has_edge_from(3),
+            Element::Quad4(_) => !load.has_beam(),
+            Element::Truss(_) | Element::ZeroLength(_) | Element::ZeroLengthSection(_) => {
+                !load.has_beam() && !load.has_body() && !load.has_edge()
+            }
+        }
+    }
+
     fn prepare(&mut self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) {
         match self {
             Element::Tri3(t) => t.prepare(nodes),
@@ -291,8 +304,14 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         load: Option<&ElementLoad>,
         sink: &mut S,
     ) {
-        if let Element::Tri3(_) | Element::Quad4(_) = self {
-            return; // continuum loads arrive with step 3.6
+        match (self, load) {
+            (Element::Tri3(t), load) => {
+                return load.map_or((), |load| t.assemble_load(nodes, load, sink))
+            }
+            (Element::Quad4(q), load) => {
+                return load.map_or((), |load| q.assemble_load(nodes, load, sink))
+            }
+            _ => {}
         }
         let [i, j] = Element::pair(self);
         let v = Element::form_load_vector(self, nodes.get(i), nodes.get(j), load);
@@ -352,8 +371,16 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         load: Option<&ElementLoad>,
     ) -> ElementForce {
         match self {
-            Element::Tri3(_) => return SVector::<f64, 6>::zeros().into(),
-            Element::Quad4(_) => return SVector::<f64, 8>::zeros().into(),
+            Element::Tri3(t) => {
+                return load
+                    .map_or(SVector::<f64, 6>::zeros(), |l| t.load_vector(nodes, l))
+                    .into()
+            }
+            Element::Quad4(q) => {
+                return load
+                    .map_or(SVector::<f64, 8>::zeros(), |l| q.load_vector(nodes, l))
+                    .into()
+            }
             _ => {}
         }
         let [i, j] = Element::pair(self);

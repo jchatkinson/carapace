@@ -31,7 +31,7 @@ fn solve_planar_cantilever(
     )));
     let pattern = domain.default_pattern();
     for &(wx, wy) in loads {
-        domain.add_element_load(pattern, beam, ElementLoad::Uniform { wx, wy });
+        domain.add_element_load(pattern, beam, ElementLoad::uniform(wx, wy));
     }
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)

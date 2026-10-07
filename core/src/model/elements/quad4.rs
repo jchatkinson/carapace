@@ -35,13 +35,13 @@
 use nalgebra::{SMatrix, SVector};
 
 use super::plane_common::{
-    b_matrix, check_section, plane_coords, plane_displacement, plane_dofs, PlaneView,
+    b_matrix, check_section, load_vector, plane_coords, plane_displacement, plane_dofs, PlaneView,
 };
 use super::{DofMask, ElementForce, GaussResponse, TangentSink, VectorSink};
 use crate::model::continuum::{
     physical_derivatives, quad4_dshape, quad4_shape, validate_quad, Jacobian, QUAD4_GAUSS_2X2,
 };
-use crate::model::{NodeId, PlaneMaterial, PlaneMatrix, PlaneVector};
+use crate::model::{ElementLoad, NodeId, PlaneMaterial, PlaneMatrix, PlaneVector};
 
 /// Which displacement field the element uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -273,20 +273,48 @@ impl Quad4 {
         sink.add(&plane_dofs::<4, 8>(&self.nodes), &k, &r);
     }
 
-    /// Row-sum lumped mass `m_i = sum_g rho t N_i(g) det J(g) w(g)`, applied to
-    /// each translational DOF of node `i`. Exact for the consistent mass here
-    /// (bilinear `N_i` times linear `det J`), and equal to `rho t A / 4` only
-    /// for parallelograms.
-    pub(super) fn assemble_mass<S: VectorSink<NodeId>>(&self, view: &PlaneView<'_>, sink: &mut S) {
-        let mut m = SVector::<f64, 8>::zeros();
+    /// `t * integral(N_i dA)` per node: the body-force share, and (times density) the
+    /// row-sum lumped mass `m_i = sum_g rho t N_i(g) det J(g) w(g)`. Exact for the
+    /// consistent mass here (bilinear `N_i` times linear `det J`), and equal to
+    /// `t A / 4` only for parallelograms.
+    fn nodal_weights(&self, view: &PlaneView<'_>) -> [f64; 4] {
+        let mut weights = [0.0; 4];
         for g in self.cache_or_compute(view).points {
-            for i in 0..4 {
-                let share = self.density * self.thickness * g.n[i] * g.weight;
-                m[2 * i] += share;
-                m[2 * i + 1] += share;
+            for (i, w) in weights.iter_mut().enumerate() {
+                *w += self.thickness * g.n[i] * g.weight;
             }
         }
+        weights
+    }
+
+    /// Row-sum lumped mass, applied to each translational DOF of node `i`.
+    pub(super) fn assemble_mass<S: VectorSink<NodeId>>(&self, view: &PlaneView<'_>, sink: &mut S) {
+        let weights = self.nodal_weights(view);
+        let m = SVector::<f64, 8>::from_fn(|a, _| self.density * weights[a / 2]);
         sink.add(&plane_dofs::<4, 8>(&self.nodes), &m);
+    }
+
+    /// Consistent nodal forces of `load` (global DOF order), sharing the mass weights
+    /// for the body force.
+    pub(super) fn load_vector(&self, view: &PlaneView<'_>, load: &ElementLoad) -> SVector<f64, 8> {
+        load_vector(
+            &plane_coords(&self.nodes, view),
+            &self.nodal_weights(view),
+            self.thickness,
+            load,
+        )
+    }
+
+    pub(super) fn assemble_load<S: VectorSink<NodeId>>(
+        &self,
+        view: &PlaneView<'_>,
+        load: &ElementLoad,
+        sink: &mut S,
+    ) {
+        sink.add(
+            &plane_dofs::<4, 8>(&self.nodes),
+            &self.load_vector(view, load),
+        );
     }
 
     pub(super) fn commit(&mut self, view: &PlaneView<'_>) {
@@ -341,7 +369,7 @@ mod tests {
     use slotmap::SlotMap;
 
     use super::*;
-    use crate::model::{DofRef, Node};
+    use crate::model::{DofRef, ElementLoad, Node};
 
     struct Collect {
         k: SMatrix<f64, 8, 8>,
@@ -657,5 +685,75 @@ mod tests {
             (stretch.transpose() * ke * stretch)[0],
         );
         assert!((ef - ee).abs() < 1e-12 * ef);
+    }
+
+    fn force_sums(v: &SVector<f64, 8>) -> [f64; 2] {
+        [
+            (0..4).map(|i| v[2 * i]).sum(),
+            (0..4).map(|i| v[2 * i + 1]).sum(),
+        ]
+    }
+
+    #[test]
+    fn body_force_totals_b_t_a_and_edge_loads_total_traction_times_length() {
+        let (nodes, ids) = setup([[0.0, 0.0], [2.0, 0.0], [1.5, 1.0], [0.5, 1.0]]);
+        let el = Quad4::new(ids, 0.4, material());
+        let view = PlaneView::new(&nodes);
+        let area = 1.5; // trapezoid with parallel sides 2 and 1, height 1
+        let body = force_sums(&el.load_vector(&view, &ElementLoad::body(3.0, -2.0)));
+        assert!(
+            (body[0] - 3.0 * 0.4 * area).abs() < 1e-14
+                && (body[1] + 2.0 * 0.4 * area).abs() < 1e-14
+        );
+        // Edge 1 joins node 1 (2, 0) to node 2 (1.5, 1): length sqrt(1.25).
+        let length = 1.25_f64.sqrt();
+        let traction =
+            force_sums(&el.load_vector(&view, &ElementLoad::edge_traction(1, 5.0, -7.0)));
+        assert!((traction[0] - 5.0 * 0.4 * length).abs() < 1e-13);
+        assert!((traction[1] + 7.0 * 0.4 * length).abs() < 1e-13);
+        // Only the edge's own two nodes receive it.
+        let v = el.load_vector(&view, &ElementLoad::edge_traction(1, 5.0, -7.0));
+        assert!(v[0] == 0.0 && v[1] == 0.0 && v[6] == 0.0 && v[7] == 0.0);
+    }
+
+    #[test]
+    fn pressure_acts_along_the_inward_normal() {
+        let (nodes, ids) = setup([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        let el = Quad4::new(ids, 1.0, material());
+        let view = PlaneView::new(&nodes);
+        // Counter-clockwise square: the inward normals of edges 0..4 are +y, -x, -y, +x.
+        for (edge, expected) in [[0.0, 1.0], [-1.0, 0.0], [0.0, -1.0], [1.0, 0.0]]
+            .into_iter()
+            .enumerate()
+        {
+            let sum = force_sums(&el.load_vector(&view, &ElementLoad::edge_pressure(edge, 2.0)));
+            assert!(
+                (sum[0] - 2.0 * expected[0]).abs() < 1e-14,
+                "edge {edge}: {sum:?}"
+            );
+            assert!(
+                (sum[1] - 2.0 * expected[1]).abs() < 1e-14,
+                "edge {edge}: {sum:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gauss_responses_equal_d_b_u_for_the_plain_element() {
+        let (mut nodes, ids) = setup(SKEW);
+        let mat = material();
+        let el = Quad4::new(ids, 1.0, mat.clone());
+        // A bilinear displacement field: strains vary across the four Gauss points.
+        for id in ids {
+            let [x, y] = nodes[id].coords;
+            nodes[id].displacement = [1e-3 * x * y, -2e-3 * x + 5e-4 * y, 0.0];
+        }
+        let view = PlaneView::new(&nodes);
+        let u = plane_displacement::<4, 8>(&el.nodes, &view);
+        let geometry = point_geometry(&plane_coords(&el.nodes, &view));
+        for (g, response) in el.gauss_responses(&view).iter().enumerate() {
+            let expected = mat.d_matrix() * (geometry[g].b * u);
+            assert!((PlaneVector::from(response.stress) - expected).norm() < 1e-12);
+        }
     }
 }

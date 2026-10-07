@@ -145,7 +145,7 @@ impl ForceBeamColumn {
             q_commit: SVector::<f64, NBD>::zeros(),
             e_commit: vec![(0.0, 0.0); n_points],
             v_commit: SVector::<f64, NBD>::zeros(),
-            load_commit: ElementLoad::Uniform { wx: 0.0, wy: 0.0 },
+            load_commit: ElementLoad::default(),
             max_iters: 50,
             tolerance: 1e-12,
             local_force: SVector::<f64, 6>::zeros(),
@@ -232,7 +232,7 @@ impl ForceBeamColumn {
     /// system (see the type doc comment) — sagging-positive `M`, matching
     /// `b_matrix`.
     fn section_load(xi: f64, length: f64, load: &ElementLoad) -> SVector<f64, NSD> {
-        let ElementLoad::Uniform { wx, wy } = *load;
+        let [wx, wy] = load.beam_uniform;
         SVector::<f64, NSD>::new(
             wx * length * (1.0 - xi),
             wy * length * length * xi * (xi - 1.0) / 2.0,
@@ -408,9 +408,7 @@ impl ForceBeamColumn {
         node_j: &Node,
         load: Option<&ElementLoad>,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
-        let load = load
-            .copied()
-            .unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
+        let load = load.copied().unwrap_or(ElementLoad::default());
         let corotational = (self.transform == GeomTransf::Corotational)
             .then(|| Corotational2d::new(node_i, node_j));
         let (length, t, d_local) = if let Some(state) = &corotational {
@@ -443,9 +441,7 @@ impl ForceBeamColumn {
     }
 
     pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
-        let load = load
-            .copied()
-            .unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
+        let load = load.copied().unwrap_or(ElementLoad::default());
         let (length, d_local, corotational) = if self.transform == GeomTransf::Corotational {
             let state = Corotational2d::new(node_i, node_j);
             (

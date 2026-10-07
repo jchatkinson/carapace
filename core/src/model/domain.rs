@@ -532,6 +532,14 @@ where
                 })?;
             element.prepare(&view);
         }
+        for pattern in self.load_patterns.values() {
+            for (id, load) in pattern.element_loads() {
+                if !self.elements[*id].accepts_load(load) {
+                    let element = self.elements.keys().position(|key| key == *id).unwrap_or(0);
+                    return Err(ModelError::IncompatibleElementLoad { element });
+                }
+            }
+        }
         for (index, (id, _)) in self.nodes.iter().enumerate() {
             for dof in 0..NDOF {
                 if self.dofs.entry(id, dof) != DofEntry::Inactive {

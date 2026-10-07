@@ -64,7 +64,7 @@ fn planar_force_beam_matches_elastic_beam_under_axial_and_transverse_udl() {
             )))
         };
         let pattern = domain.default_pattern();
-        domain.add_element_load(pattern, beam, ElementLoad::Uniform { wx, wy });
+        domain.add_element_load(pattern, beam, ElementLoad::uniform(wx, wy));
         (solve_linear(domain), beam, j)
     };
 
@@ -231,7 +231,7 @@ fn yielding_member(n: usize, points: usize, wx: f64, wy: f64, fixed_both: bool) 
             fibers(),
             BeamIntegration::Lobatto { points },
         )));
-        domain.add_element_load(pattern, beam, ElementLoad::Uniform { wx, wy });
+        domain.add_element_load(pattern, beam, ElementLoad::uniform(wx, wy));
     }
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
@@ -354,7 +354,7 @@ fn frozen_udl_then_displacement_controlled_tip_load_matches_opensees() {
             fibers(),
             BeamIntegration::Lobatto { points: 5 },
         )));
-        domain.add_element_load(gravity, beam, ElementLoad::Uniform { wx: 0.0, wy: -4.5 });
+        domain.add_element_load(gravity, beam, ElementLoad::uniform(0.0, -4.5));
     }
     let newton = || Algorithm::Newton {
         tangent: TangentStrategy::Current,

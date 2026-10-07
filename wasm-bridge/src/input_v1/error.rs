@@ -147,6 +147,9 @@ pub enum ModelErrorDetail {
         node: usize,
         dof: usize,
     },
+    IncompatibleElementLoad {
+        element: usize,
+    },
     InvalidElement {
         element: usize,
         reason: &'static str,
@@ -174,6 +177,9 @@ impl From<ModelError> for ModelErrorDetail {
             }
             ModelError::MassOnConstrainedDof { node, dof } => {
                 ModelErrorDetail::MassOnConstrainedDof { node, dof }
+            }
+            ModelError::IncompatibleElementLoad { element } => {
+                ModelErrorDetail::IncompatibleElementLoad { element }
             }
             ModelError::InvalidElement { element, reason } => {
                 ModelErrorDetail::InvalidElement { element, reason }

@@ -27,6 +27,10 @@ pub enum ModelError {
     /// Nodal mass on a slave that combines several unknowns, which a
     /// diagonal mass matrix cannot represent.
     MassOnConstrainedDof { node: usize, dof: usize },
+    /// An element load assigned to an element that cannot carry that kind of
+    /// load (a body force on a beam, a beam load on a continuum element, an
+    /// edge load past the element's last edge).
+    IncompatibleElementLoad { element: usize },
     /// An element rejected its own geometry or parameters.
     InvalidElement {
         element: usize,
@@ -66,6 +70,10 @@ impl fmt::Display for ModelError {
                 f,
                 "DOF {dof} of node {node} is constrained to several unknowns and carries a nodal mass; \
                  assign the mass at a master node"
+            ),
+            ModelError::IncompatibleElementLoad { element } => write!(
+                f,
+                "element {element} cannot carry the kind of element load assigned to it"
             ),
             ModelError::InvalidElement { element, reason } => {
                 write!(f, "element {element} is invalid: {reason}")

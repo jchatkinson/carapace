@@ -147,7 +147,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
 
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
     finish(domain, &input, node_ids, elements, |wx, wy, _| {
-        ElementLoad::Uniform { wx, wy }
+        ElementLoad::uniform(wx, wy)
     })
 }
 

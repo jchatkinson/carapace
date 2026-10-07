@@ -5,7 +5,8 @@
 use nalgebra::{SMatrix, SVector};
 
 use super::{DofRef, NodeView};
-use crate::model::{NodeId, NDF, PLANAR_NDIM};
+use crate::model::continuum::EDGE_GAUSS_2;
+use crate::model::{ElementLoad, NodeId, NDF, PLANAR_NDIM};
 
 pub(super) type PlaneView<'a> = NodeView<'a, PLANAR_NDIM, NDF, NodeId>;
 
@@ -58,4 +59,45 @@ pub(super) fn check_section(
         return Err("density must be non-negative");
     }
     material.validate().map_err(|error| error.message())
+}
+
+/// Consistent nodal forces of a continuum element's load, in global DOF order.
+/// `weights[i]` is `t * integral(N_i dA)` for node `i` (the body-force share, which
+/// is also the lumped-mass share per unit density); edge loads are integrated on the
+/// edge with the 2-point Gauss rule and the edge's length scale, edge `k` joining
+/// local node `k` to `k + 1`. A pressure acts along the inward normal, which for
+/// counter-clockwise nodes is the left normal of the edge direction.
+pub(super) fn load_vector<const NN: usize, const N: usize>(
+    coords: &[[f64; 2]; NN],
+    weights: &[f64; NN],
+    thickness: f64,
+    load: &ElementLoad,
+) -> SVector<f64, N> {
+    debug_assert_eq!(N, 2 * NN);
+    let mut f = SVector::<f64, N>::zeros();
+    for (i, w) in weights.iter().enumerate() {
+        f[2 * i] += w * load.body[0];
+        f[2 * i + 1] += w * load.body[1];
+    }
+    for edge in 0..NN {
+        let (a, b) = (edge, (edge + 1) % NN);
+        let (dx, dy) = (coords[b][0] - coords[a][0], coords[b][1] - coords[a][1]);
+        let length = dx.hypot(dy);
+        let p = load.edge_pressure[edge];
+        let traction = [
+            load.edge_traction[edge][0] - p * dy / length,
+            load.edge_traction[edge][1] + p * dx / length,
+        ];
+        if traction == [0.0, 0.0] {
+            continue;
+        }
+        for &(s, w) in &EDGE_GAUSS_2 {
+            let scale = w * 0.5 * length * thickness;
+            for (node, shape) in [(a, 0.5 * (1.0 - s)), (b, 0.5 * (1.0 + s))] {
+                f[2 * node] += scale * shape * traction[0];
+                f[2 * node + 1] += scale * shape * traction[1];
+            }
+        }
+    }
+    f
 }

@@ -204,6 +204,13 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         Ok(())
     }
 
+    /// Whether this element can carry every kind of load present in `load`.
+    /// Checked by `Domain::validate` on each pattern's load, before anything is
+    /// accumulated; the default accepts everything.
+    fn accepts_load(&self, _load: &Self::Load) -> bool {
+        true
+    }
+
     /// Caches geometry-only quantities (shape-function derivatives, areas)
     /// once the model is final; called by `Domain::validate` after `validate`
     /// succeeds. Must be idempotent, and every method must give the same

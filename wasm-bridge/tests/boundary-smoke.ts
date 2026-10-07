@@ -253,11 +253,11 @@ for (const ndm of [2, 3]) {
   session.free();
 }
 const badComponent = emptyInput(2);
-badComponent.sequence = { stages: [], recorders: [{ response: "elementLoad", elementKind: "truss", elementIndex: 0, component: 2 }] };
+badComponent.sequence = { stages: [], recorders: [{ response: "elementLoad", elementKind: "truss", elementIndex: 0, component: 16 }] };
 badComponent.nodes = { coords: [0, 0, 1, 0], fixed: [7, 6], massNodeIndex: [], mass: [] };
 badComponent.materials = [{ kind: "elastic", e: 1 }];
 badComponent.trusses = { nodeI: [0], nodeJ: [1], area: [1], material: [0], density: [0] };
 const componentError = expectThrow(() => decodeInput(badComponent)) as DecodeError;
-assert(componentError.kind === "invalidRecorderComponent" && componentError.width === 2, "recorder component bound");
+assert(componentError.kind === "invalidRecorderComponent" && componentError.width === 16, "recorder component bound");
 
 console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, configurable static/transient solvers, arc length, legacy inputs, errors.");
