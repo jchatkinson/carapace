@@ -68,6 +68,7 @@ where
     NId: Key,
     E: ElementOps<NDIM, NDOF, NId>,
 {
+    domain.validate().map_err(AnalysisError::InvalidModel)?;
     let mass = domain.assemble_mass_diagonal();
     let n = domain.num_free_dofs();
 

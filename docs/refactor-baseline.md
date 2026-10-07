@@ -87,6 +87,8 @@ still requires re-measuring in wasm because allocation behavior differs.
 | 1.1 `DofTable` | identical (max relative diff 0) | 240 passed | elastic 30x6 about +2% (141.5 vs 138.5 ms) | not measured |
 | 1.2 element interface | identical (max relative diff 0) | 243 passed (3 new multi-node tests) | elastic 30x6 about +5% (147.6 vs 141.5 ms); elastic 10x3, fiber 10x3/15x4/20x5 within noise | elastic 30x6 166 ms (+1%), fiber 10x3 30.0 ms, fiber 20x5 172 ms (+2%, noisy); wasm 1,482,444 bytes (-0.9%) |
 
+| 1.3 DOF activation | identical (max relative diff 0) | 256 passed, debug and release (13 new: 10 activation core tests, 2 mask-conformance, 1 wasm) | elastic 30x6 about +10% (156 vs 141 ms), fiber 20x5 about +10% (160 vs 146 ms) in the default release profile; **parity** with `lto = "fat"` + `codegen-units = 1` (142-144 vs 139-141; 143-145 vs 146-147) | not measured (gate at 1.5) |
+
 Notes on 1.2:
 - The elastic 30x6 native gap (about 4-6 ms over 50 steps) is the one measurable cost of the sink
   indirection and table lookup. Two attempts to remove it (caching the per-node table lookup within
@@ -95,3 +97,14 @@ Notes on 1.2:
   directly, so this is carried forward rather than chased now.
 - `cargo fmt` is not clean on the baseline for files unrelated to this work (for example
   `benchmark_frame.rs`, `decode.rs`); commits only reformat files they otherwise change.
+
+Notes on 1.3:
+- Activation adds no work per step (identical equation counts for these models); the native gap
+  appears only in the default release profile (16 codegen units, no LTO) and disappears with
+  `lto = "fat"`, `codegen-units = 1`, on the branch, with the baseline essentially unchanged by the
+  same settings. So it is an inlining artifact of the generic sink path, not extra computation.
+  Timings drift by a few percent over a session on this machine, so only same-session A/B runs are
+  meaningful. A `[profile.release]` change would also affect the wasm build and is left as an explicit
+  decision for the Phase 1 gate (1.5), not made silently.
+- `cargo test` (debug) is where the assembly guard against under-declared `dof_mask`s is active
+  (`#[cfg(debug_assertions)]`); the gate runs both profiles.

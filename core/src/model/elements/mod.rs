@@ -203,7 +203,15 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     }
 
     fn dof_mask(&self) -> DofMask {
-        DofMask::all(NDF)
+        match self {
+            // A truss carries no moment: translations only.
+            Element::Truss(_) => DofMask::none().with(0).with(1),
+            Element::ZeroLength(z) => z.dof_mask(),
+            Element::ZeroLengthSection(z) => z.dof_mask(),
+            Element::ElasticBeamColumn(_)
+            | Element::DispBeamColumn(_)
+            | Element::ForceBeamColumn(_) => DofMask::all(NDF),
+        }
     }
 
     fn assemble_tangent<S: TangentSink<NodeId>>(
@@ -420,7 +428,14 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
     }
 
     fn dof_mask(&self) -> DofMask {
-        DofMask::all(SPATIAL_NDF)
+        match self {
+            Element3::Truss3(_) => DofMask::none().with(0).with(1).with(2),
+            Element3::ZeroLength3(z) => z.dof_mask(),
+            Element3::ZeroLengthSection3(z) => z.dof_mask(),
+            Element3::ElasticBeamColumn3(_)
+            | Element3::DispBeamColumn3(_)
+            | Element3::ForceBeamColumn3(_) => DofMask::all(SPATIAL_NDF),
+        }
     }
 
     fn assemble_tangent<S: TangentSink<Node3Id>>(
@@ -501,5 +516,342 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
     ) -> Option<Vec<Vec<(f64, f64)>>> {
         let [i, j] = Element3::nodes(self);
         Element3::fiber_responses(self, nodes.get(i), nodes.get(j))
+    }
+}
+
+/// `ElementOps::dof_mask` must cover every node DOF slot on which an element
+/// produces stiffness or resistance: a slot outside the mask that nothing
+/// else uses is not an equation, so the contribution would be silently
+/// dropped. This drives every element kind at a generic nonzero state and
+/// compares the slots it actually stiffens with its declared mask. Any new
+/// element kind needs an entry here.
+#[cfg(test)]
+mod mask_conformance {
+    use std::collections::BTreeSet;
+
+    use slotmap::{Key, SlotMap};
+
+    use super::*;
+    use crate::model::{
+        BeamIntegration, ElasticBeamColumn, ElasticBeamColumn3, Fiber, Fiber3, FiberSection,
+        FiberSection3, ForceBeamColumn, ForceBeamColumn3, Friction, Friction3, GeomTransf,
+        GeomTransf3, Material, Orientation, Truss, Truss3, ZeroLength, ZeroLength3,
+        ZeroLengthSection, ZeroLengthSection3,
+    };
+
+    /// Records which `(node, slot)` an element's tangent or resistance is
+    /// nonzero on, relative to the element's own largest entry.
+    struct Touched<NId> {
+        slots: BTreeSet<u8>,
+        _marker: std::marker::PhantomData<NId>,
+    }
+
+    impl<NId: Key> TangentSink<NId> for Touched<NId> {
+        fn add<const N: usize>(
+            &mut self,
+            dofs: &[DofRef<NId>; N],
+            k: &SMatrix<f64, N, N>,
+            r: &SVector<f64, N>,
+        ) {
+            let k_scale = (0..N).map(|i| k[(i, i)].abs()).fold(0.0, f64::max);
+            let r_scale = r.iter().map(|v| v.abs()).fold(0.0, f64::max);
+            for (a, &(_, slot)) in dofs.iter().enumerate() {
+                if k[(a, a)].abs() > 1e-10 * k_scale || r[a].abs() > 1e-10 * r_scale {
+                    self.slots.insert(slot);
+                }
+            }
+        }
+    }
+
+    fn touched<const NDIM: usize, const NDOF: usize, NId: Key, E: ElementOps<NDIM, NDOF, NId>>(
+        element: &E,
+        nodes: &SlotMap<NId, Node<NDIM, NDOF>>,
+    ) -> BTreeSet<u8> {
+        let mut sink = Touched::<NId> {
+            slots: BTreeSet::new(),
+            _marker: std::marker::PhantomData,
+        };
+        element.assemble_tangent(&NodeView::new(nodes), None, &mut sink);
+        sink.slots
+    }
+
+    fn mask_slots<const NDOF: usize>(mask: DofMask) -> BTreeSet<u8> {
+        (0..NDOF)
+            .filter(|&s| mask.contains(s))
+            .map(|s| s as u8)
+            .collect()
+    }
+
+    /// `exact`: the mask must equal the touched slots (no needless
+    /// activation); otherwise it only has to cover them.
+    fn check<const NDIM: usize, const NDOF: usize, NId: Key, E: ElementOps<NDIM, NDOF, NId>>(
+        name: &str,
+        element: &E,
+        nodes: &SlotMap<NId, Node<NDIM, NDOF>>,
+        exact: bool,
+    ) {
+        let touched = touched::<NDIM, NDOF, NId, E>(element, nodes);
+        let mask = mask_slots::<NDOF>(element.dof_mask());
+        assert!(
+            touched.is_subset(&mask),
+            "{name}: stiffens slots {touched:?} but declares only {mask:?}"
+        );
+        if exact {
+            assert_eq!(
+                touched, mask,
+                "{name}: declared mask is wider than what it stiffens"
+            );
+        }
+    }
+
+    /// Two 2D nodes with a generic nonzero state on every DOF, skew to the axes
+    /// (so a truss uses both translations).
+    fn nodes_2d() -> (SlotMap<NodeId, Node>, NodeId, NodeId) {
+        let mut nodes = SlotMap::with_key();
+        let a = nodes.insert(Node::new([0.0, 0.0]));
+        let mut j = Node::new([300.0, 200.0]);
+        j.displacement = [0.4, -0.7, 0.003];
+        let b = nodes.insert(j);
+        (nodes, a, b)
+    }
+
+    fn nodes_3d() -> (SlotMap<Node3Id, Node3>, Node3Id, Node3Id) {
+        let mut nodes = SlotMap::with_key();
+        let a = nodes.insert(Node3::new([0.0, 0.0, 0.0]));
+        let mut j = Node3::new([300.0, 200.0, 150.0]);
+        j.displacement = [0.4, -0.7, 0.3, 0.002, -0.003, 0.004];
+        let b = nodes.insert(j);
+        (nodes, a, b)
+    }
+
+    fn steel() -> Material {
+        Material::Elastic { e: 200_000.0 }
+    }
+
+    #[test]
+    fn planar_elements_declare_the_slots_they_stiffen() {
+        let (nodes, a, b) = nodes_2d();
+        let fibers = || {
+            vec![
+                Fiber::new(10.0, 100.0, steel()),
+                Fiber::new(-10.0, 100.0, steel()),
+            ]
+        };
+        let rot = 30.0_f64.to_radians();
+        let oriented =
+            || Orientation::new([rot.cos(), rot.sin(), 0.0], [-rot.sin(), rot.cos(), 0.0]).unwrap();
+
+        check(
+            "Truss",
+            &Element::Truss(Truss::new(a, b, 10.0, steel())),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLength ux only",
+            &Element::ZeroLength(ZeroLength::new(a, b).with_material(0, steel())),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLength rz only",
+            &Element::ZeroLength(ZeroLength::new(a, b).with_material(2, steel())),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLength oriented",
+            &Element::ZeroLength(
+                ZeroLength::new(a, b)
+                    .with_material(0, steel())
+                    .with_material(1, steel())
+                    .with_orientation(oriented())
+                    .unwrap(),
+            ),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLength friction",
+            &Element::ZeroLength(
+                ZeroLength::new(a, b)
+                    .with_material(0, steel())
+                    .with_friction(Friction::new(0, 1, 0.3, 500.0, 0.01)),
+            ),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLengthSection",
+            &Element::ZeroLengthSection(ZeroLengthSection::new(a, b, FiberSection::new(fibers()))),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLengthSection + shear spring",
+            &Element::ZeroLengthSection(
+                ZeroLengthSection::new(a, b, FiberSection::new(fibers())).with_material(1, steel()),
+            ),
+            &nodes,
+            true,
+        );
+        check(
+            "ElasticBeamColumn",
+            &Element::ElasticBeamColumn(ElasticBeamColumn::new(
+                a,
+                b,
+                200_000.0,
+                1e4,
+                1e8,
+                GeomTransf::PDelta,
+            )),
+            &nodes,
+            true,
+        );
+        check(
+            "DispBeamColumn",
+            &Element::DispBeamColumn(DispBeamColumn::new(
+                a,
+                b,
+                fibers(),
+                BeamIntegration::Lobatto { points: 3 },
+            )),
+            &nodes,
+            true,
+        );
+        check(
+            "ForceBeamColumn",
+            &Element::ForceBeamColumn(ForceBeamColumn::new(
+                a,
+                b,
+                fibers(),
+                BeamIntegration::Lobatto { points: 3 },
+            )),
+            &nodes,
+            true,
+        );
+    }
+
+    #[test]
+    fn spatial_elements_declare_the_slots_they_stiffen() {
+        let (nodes, a, b) = nodes_3d();
+        let fibers = || {
+            vec![
+                Fiber3::new(10.0, 10.0, 50.0, steel()),
+                Fiber3::new(10.0, -10.0, 50.0, steel()),
+                Fiber3::new(-10.0, 10.0, 50.0, steel()),
+                Fiber3::new(-10.0, -10.0, 50.0, steel()),
+            ]
+        };
+        let tilt = Orientation::new([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]).unwrap();
+
+        check(
+            "Truss3",
+            &Element3::Truss3(Truss3::new(a, b, 10.0, steel())),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLength3 translations",
+            &Element3::ZeroLength3(
+                ZeroLength3::new(a, b)
+                    .with_material(0, steel())
+                    .with_material(1, steel())
+                    .with_material(2, steel()),
+            ),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLength3 torsion only",
+            &Element3::ZeroLength3(ZeroLength3::new(a, b).with_material(3, steel())),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLength3 oriented",
+            &Element3::ZeroLength3(
+                ZeroLength3::new(a, b)
+                    .with_material(0, steel())
+                    .with_orientation(tilt.clone()),
+            ),
+            &nodes,
+            false,
+        );
+        check(
+            "ZeroLength3 friction",
+            &Element3::ZeroLength3(
+                ZeroLength3::new(a, b)
+                    .with_material(0, steel())
+                    .with_friction(Friction3::new(0, [1, 2], 0.3, 500.0, 0.01)),
+            ),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLengthSection3",
+            &Element3::ZeroLengthSection3(ZeroLengthSection3::new(
+                a,
+                b,
+                FiberSection3::new(fibers()),
+            )),
+            &nodes,
+            true,
+        );
+        check(
+            "ZeroLengthSection3 + torsion spring",
+            &Element3::ZeroLengthSection3(
+                ZeroLengthSection3::new(a, b, FiberSection3::new(fibers()))
+                    .with_material(3, steel()),
+            ),
+            &nodes,
+            true,
+        );
+        check(
+            "ElasticBeamColumn3",
+            &Element3::ElasticBeamColumn3(ElasticBeamColumn3::new(
+                a,
+                b,
+                200_000.0,
+                80_000.0,
+                1e4,
+                1e7,
+                5e7,
+                1e8,
+                GeomTransf3::Linear3 {
+                    vec_xz: [0.0, 0.0, 1.0],
+                },
+            )),
+            &nodes,
+            true,
+        );
+        check(
+            "DispBeamColumn3",
+            &Element3::DispBeamColumn3(DispBeamColumn3::new(
+                a,
+                b,
+                80_000.0,
+                1e7,
+                [0.0, 0.0, 1.0],
+                fibers(),
+                BeamIntegration::Lobatto { points: 3 },
+            )),
+            &nodes,
+            true,
+        );
+        check(
+            "ForceBeamColumn3",
+            &Element3::ForceBeamColumn3(ForceBeamColumn3::new(
+                a,
+                b,
+                80_000.0,
+                1e7,
+                [0.0, 0.0, 1.0],
+                fibers(),
+                BeamIntegration::Lobatto { points: 3 },
+            )),
+            &nodes,
+            true,
+        );
     }
 }

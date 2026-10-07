@@ -1,7 +1,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use super::super::{
-    FiberSection, FiberSection3, Material, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF,
+    DofMask, FiberSection, FiberSection3, Material, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF,
     SPATIAL_NDF,
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
@@ -125,6 +125,32 @@ fn local_relative<const N: usize>(
     uj: &[f64; N],
 ) -> f64 {
     (0..N).map(|c| frame[(dof, c)] * (uj[c] - ui[c])).sum()
+}
+
+/// Node slots touched by local direction `dof`: the nonzero entries of its
+/// frame row (round-off from an orientation is not a coupling).
+fn frame_row_mask<const N: usize>(frame: &SMatrix<f64, N, N>, dof: usize) -> DofMask {
+    (0..N)
+        .filter(|&slot| frame[(dof, slot)].abs() > 1e-12)
+        .fold(DofMask::none(), |mask, slot| mask.with(slot))
+}
+
+fn frame_mask<const N: usize>(
+    frame: &SMatrix<f64, N, N>,
+    dofs: impl IntoIterator<Item = usize>,
+) -> DofMask {
+    dofs.into_iter().fold(DofMask::none(), |mask, dof| {
+        mask.union(frame_row_mask(frame, dof))
+    })
+}
+
+fn material_dofs<const N: usize>(
+    materials: &[Option<Material>; N],
+) -> impl Iterator<Item = usize> + '_ {
+    materials
+        .iter()
+        .enumerate()
+        .filter_map(|(dof, m)| m.is_some().then_some(dof))
 }
 
 /// Strain-displacement row for local `dof`: `-row` on node i's DOFs and
@@ -348,6 +374,16 @@ impl ZeroLength {
         self
     }
 
+    /// Node slots touched: every local direction with a material or a
+    /// friction coupling, through the orientation frame.
+    pub(super) fn dof_mask(&self) -> DofMask {
+        let friction = self
+            .friction
+            .iter()
+            .flat_map(|f| [f.normal_dof, f.shear_dof]);
+        frame_mask(&self.frame, material_dofs(&self.materials).chain(friction))
+    }
+
     pub(super) fn form_tangent_and_resistance(
         &self,
         node_i: &Node,
@@ -509,6 +545,16 @@ impl ZeroLength3 {
         self
     }
 
+    /// See `ZeroLength::dof_mask`; friction couples its normal and both shear
+    /// directions.
+    pub(super) fn dof_mask(&self) -> DofMask {
+        let friction = self
+            .friction
+            .iter()
+            .flat_map(|f| [f.normal_dof, f.shear_dofs[0], f.shear_dofs[1]]);
+        frame_mask(&self.frame, material_dofs(&self.materials).chain(friction))
+    }
+
     pub(super) fn form_tangent_and_resistance(
         &self,
         node_i: &Node3,
@@ -661,6 +707,15 @@ impl ZeroLengthSection {
         Ok(self)
     }
 
+    /// The section drives local `ux` (axial) and `rz` (flexure); springs add
+    /// whatever other directions carry a material.
+    pub(super) fn dof_mask(&self) -> DofMask {
+        frame_mask(
+            &self.frame,
+            [0, 2].into_iter().chain(material_dofs(&self.materials)),
+        )
+    }
+
     pub(super) fn form_tangent_and_resistance(
         &self,
         node_i: &Node,
@@ -758,6 +813,15 @@ impl ZeroLengthSection3 {
     pub fn with_orientation(mut self, orientation: Orientation) -> Self {
         self.frame = orientation.frame3();
         self
+    }
+
+    /// The section drives local `ux`, `ry` and `rz`; springs add the other
+    /// directions that carry a material.
+    pub(super) fn dof_mask(&self) -> DofMask {
+        frame_mask(
+            &self.frame,
+            [0, 4, 5].into_iter().chain(material_dofs(&self.materials)),
+        )
     }
 
     pub(super) fn form_tangent_and_resistance(

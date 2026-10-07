@@ -113,6 +113,7 @@ where
     ) -> Result<Self, AnalysisError> {
         assert!(dt > 0.0, "Newmark dt must be positive");
 
+        domain.validate().map_err(AnalysisError::InvalidModel)?;
         let mass = domain.assemble_mass_diagonal();
         let n = domain.num_free_dofs();
         for i in 0..n {

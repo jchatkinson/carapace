@@ -264,6 +264,87 @@ fn decodes_a_single_truss_and_matches_the_closed_form_displacement() {
     assert_eq!(batch.samples.len(), 1);
 }
 
+/// A single truss, solved for the tip displacement, with node rotations left
+/// free (`rz` not fixed) and an optional extra nodal load.
+fn truss_with_unfixed_rotations(extra_load: Option<(u32, u8, f64)>) -> CarapaceInputV1 {
+    let (length, area, e, load) = (100.0, 2.0, 30000.0, 50.0);
+    let mut input = empty_input(2);
+    input.nodes = NodeTable {
+        coords: vec![0.0, 0.0, length, 0.0],
+        fixed: vec![0b011, 0b010], // only the unneeded rz rows are left free
+        mass_node_index: vec![],
+        mass: vec![],
+    };
+    input.materials = vec![MaterialSpec::Elastic { e }];
+    input.trusses = TrussTable {
+        node_i: vec![0],
+        node_j: vec![1],
+        area: vec![area],
+        material: vec![0],
+        density: vec![0.0],
+    };
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
+        scale_factor: vec![1.0],
+    };
+    let mut loads = NodalLoadTable {
+        pattern: vec![0],
+        node: vec![1],
+        dof: vec![0],
+        value: vec![load],
+        stage: vec![0],
+    };
+    if let Some((node, dof, value)) = extra_load {
+        loads.pattern.push(0);
+        loads.node.push(node);
+        loads.dof.push(dof);
+        loads.value.push(value);
+        loads.stage.push(0);
+    }
+    input.nodal_loads = loads;
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Static {
+            id: "only".to_string(),
+            steps: 1,
+            integrator: IntegratorSpec::LoadControl { increment: 1.0 },
+            algorithm: AlgorithmSpec::Linear,
+            convergence: Some(ConvergenceSpec::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 10,
+            }),
+            hold_patterns_after: vec![],
+        }],
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
+    };
+    input
+}
+
+/// DOF activation through the wire: a model that leaves a truss's rotations
+/// unfixed (the compiler no longer has to fix them) solves, and a nodal load
+/// on a DOF nothing resists comes back as a structured error from
+/// `advance`, not a panic.
+#[test]
+fn truss_with_unfixed_rotations_solves_and_a_load_on_an_unused_dof_is_a_structured_error() {
+    use carapace_wasm::input_v1::AnalysisErrorDetail;
+    use carapace_wasm::input_v1::error::ModelErrorDetail;
+
+    let mut session = decode(truss_with_unfixed_rotations(None)).expect("decodes");
+    let outcome = session.advance(10);
+    assert!(outcome.error.is_none(), "unexpected outcome: {outcome:?}");
+    let (_, got) = last_sample(&outcome, 0).expect("one recorded sample");
+    assert!((got - 50.0 * 100.0 / (2.0 * 30000.0)).abs() < 1e-9);
+
+    // A moment (dof 2) on the tip: the truss has no rotational stiffness.
+    let mut session = decode(truss_with_unfixed_rotations(Some((1, 2, 1.0)))).expect("decodes");
+    let outcome = session.advance(10);
+    assert_eq!(
+        outcome.error,
+        Some(AnalysisErrorDetail::InvalidModel {
+            error: ModelErrorDetail::LoadOnInactiveDof { node: 1, dof: 2 }
+        })
+    );
+}
+
 /// The second recorder kind (results-storage-indexeddb.md's "several more
 /// types of recorders" plan): an `ElementForce` recorder alongside a
 /// `NodeDisp` one, on a horizontal cantilever `ElasticBeamColumn` — a

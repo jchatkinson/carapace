@@ -5,6 +5,7 @@
 //! against a newer/older wasm build) — the compiler is expected to catch
 //! entity-level problems (missing tags, unsupported materials, ...) first.
 
+use carapace_core::model::ModelError;
 use serde::Serialize;
 
 /// `Serialize`, not `Deserialize` — a `DecodeError` only ever flows *out*
@@ -76,4 +77,42 @@ pub enum DecodeError {
         table: &'static str,
         row: u32,
     },
+    /// The assembled model failed `core`'s `Domain::validate` (a nodal load
+    /// on a DOF nothing uses, an element rejecting its own geometry, ...).
+    InvalidModel {
+        error: ModelErrorDetail,
+    },
+}
+
+/// `core::ModelError`, restated for the wire. Node and element indices are
+/// the rows of the node table and of the element tables in insertion order
+/// (all element kinds in decode order), so a caller can map them back.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelErrorDetail {
+    LoadOnInactiveDof {
+        node: usize,
+        dof: usize,
+    },
+    InvalidElement {
+        element: usize,
+        reason: &'static str,
+    },
+}
+
+impl From<ModelError> for ModelErrorDetail {
+    fn from(error: ModelError) -> Self {
+        match error {
+            ModelError::LoadOnInactiveDof { node, dof } => {
+                ModelErrorDetail::LoadOnInactiveDof { node, dof }
+            }
+            ModelError::InvalidElement { element, reason } => {
+                ModelErrorDetail::InvalidElement { element, reason }
+            }
+        }
+    }
 }

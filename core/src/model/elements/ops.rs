@@ -39,6 +39,22 @@ impl DofMask {
         DofMask(((1u16 << ndof) - 1) as u8)
     }
 
+    /// No slots.
+    pub const fn none() -> Self {
+        DofMask(0)
+    }
+
+    /// This mask plus `slot`.
+    pub const fn with(self, slot: usize) -> Self {
+        assert!(slot < 8);
+        DofMask(self.0 | (1 << slot))
+    }
+
+    /// Every slot in either mask.
+    pub const fn union(self, other: DofMask) -> Self {
+        DofMask(self.0 | other.0)
+    }
+
     pub const fn contains(self, slot: usize) -> bool {
         slot < 8 && (self.0 >> slot) & 1 == 1
     }
@@ -165,7 +181,19 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
     fn nodes(&self) -> NodeList<NId>;
 
     /// The node DOF slots this element stiffens (the same for each node).
+    /// Must cover every slot on which `assemble_tangent` can produce a
+    /// nonzero stiffness or resistance: a slot outside the mask that no
+    /// other element, constraint or boundary condition uses is not an
+    /// equation at all, so such a contribution would be silently dropped
+    /// (debug builds assert against it).
     fn dof_mask(&self) -> DofMask;
+
+    /// Rejects an element whose geometry or parameters make it unusable
+    /// (coincident nodes, inverted orientation, ...); called by
+    /// `Domain::validate`. The default accepts everything.
+    fn validate(&self, _nodes: &NodeView<'_, NDIM, NDOF, NId>) -> Result<(), &'static str> {
+        Ok(())
+    }
 
     /// Tangent and internal resisting force at the current nodal state.
     /// `load` is the effective element load at the pseudo-time being

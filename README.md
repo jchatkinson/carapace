@@ -56,6 +56,10 @@ see each element/section entry below for which profile(s) it covers.
   above)
 
 **Analysis**
+- [x] DOF activation: a node DOF is an equation only if an element stiffens it, a
+  constraint uses it as a master, it carries a mass, or it is fixed — truss-only
+  nodes need no rotations fixed by hand, and a nodal load on a DOF nothing
+  resists is reported as a model error instead of silently dropped
 - [x] Static analysis: load control, displacement control; `Linear` and
   `Newton` (full/modified/initial-tangent, optional line search) algorithms
 - [x] Arc-length continuation (`Integrator::ArcLength`): scaled spherical

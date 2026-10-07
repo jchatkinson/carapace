@@ -9,9 +9,9 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, LoadPatternId, LoadSeries, Node,
-    Node3Id, NodeId, NodeView, SparseMatrix, TangentSink, VectorSink, NDF, PLANAR_NDIM,
-    SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, LoadPatternId, LoadSeries,
+    ModelError, Node, Node3Id, NodeId, NodeView, SparseMatrix, TangentSink, VectorSink, NDF,
+    PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// A multi-point constraint tying `dofs` of `constrained` exactly to the
@@ -455,7 +455,7 @@ where
     pub fn equation_of(&self, node: NId, dof: usize) -> Option<usize> {
         match self.dofs.entry(node, dof) {
             DofEntry::Free(eq) => Some(eq),
-            DofEntry::Fixed | DofEntry::Affine { .. } => None,
+            DofEntry::Fixed | DofEntry::Inactive | DofEntry::Affine { .. } => None,
         }
     }
 
@@ -486,6 +486,47 @@ where
             .any(|(_, pattern)| pattern.is_unfrozen_path())
     }
 
+    /// Whether `(node, dof)` can take part in the analysis: it is fixed,
+    /// constrained, stiffened by some element, used as a constraint master,
+    /// or carries a nodal mass. A DOF that is none of these has no equation
+    /// and nothing to resist a load. Reflects the last numbering
+    /// (`validate`/`AnalysisBuilder::build` run it).
+    pub fn is_active(&self, node: NId, dof: usize) -> bool {
+        self.dofs.entry(node, dof) != DofEntry::Inactive
+    }
+
+    /// Numbers the DOFs and checks the model for mistakes that would
+    /// otherwise be silently wrong: an element rejecting its own geometry,
+    /// and nodal loads on DOFs nothing uses. Called by
+    /// `AnalysisBuilder::build`, `modal_analysis` and `TransientAnalysis`.
+    pub fn validate(&mut self) -> Result<(), ModelError> {
+        self.number_dofs();
+        let view = self.node_view();
+        for (index, (_, element)) in self.elements.iter().enumerate() {
+            element
+                .validate(&view)
+                .map_err(|reason| ModelError::InvalidElement {
+                    element: index,
+                    reason,
+                })?;
+        }
+        for (index, (id, _)) in self.nodes.iter().enumerate() {
+            for dof in 0..NDOF {
+                if self.dofs.entry(id, dof) != DofEntry::Inactive {
+                    continue;
+                }
+                let loaded = self
+                    .load_patterns
+                    .values()
+                    .any(|pattern| pattern.nodal_load(id).is_some_and(|load| load[dof] != 0.0));
+                if loaded {
+                    return Err(ModelError::LoadOnInactiveDof { node: index, dof });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Assign a sequential equation number to every free, unconstrained
     /// DOF, in node insertion order, then alias every multi-point-
     /// constrained DOF to its retained node's equation number for that DOF
@@ -513,11 +554,48 @@ where
             )
             .collect();
 
+        // A DOF is active if an element stiffens it, a constraint uses it as
+        // a master (a diaphragm's retained node typically has no element at
+        // all), or it carries a nodal mass. Everything else is not an
+        // equation.
+        let mut active: HashSet<(NId, usize)> = HashSet::new();
+        for (_, element) in self.elements.iter() {
+            let mask = element.dof_mask();
+            for node in element.nodes() {
+                for dof in (0..NDOF).filter(|&dof| mask.contains(dof)) {
+                    active.insert((node, dof));
+                }
+            }
+        }
+        // A nodal mass gives its DOF inertia even with no stiffness (a free
+        // mass integrates fine in a transient analysis), so it is active.
+        for (id, node) in self.nodes.iter() {
+            for dof in (0..NDOF).filter(|&dof| node.mass[dof] != 0.0) {
+                active.insert((id, dof));
+            }
+        }
+        for constraint in &self.mp_constraints {
+            for &dof in &constraint.dofs {
+                active.insert((constraint.retained, dof));
+            }
+        }
+        for constraint in &self.affine_constraints {
+            for (_, terms) in &constraint.ties {
+                for &(retained_dof, _) in terms {
+                    active.insert((constraint.retained, retained_dof));
+                }
+            }
+        }
+
         let mut table = DofTable::<NId, NDOF>::for_nodes(self.nodes.keys());
         let mut next = 0;
         for (id, node) in self.nodes.iter() {
             for dof in 0..NDOF {
                 if node.fixed[dof] || constrained_dofs.contains(&(id, dof)) {
+                    continue;
+                }
+                if !active.contains(&(id, dof)) {
+                    table.set(id, dof, DofEntry::Inactive);
                     continue;
                 }
                 table.set(id, dof, DofEntry::Free(next));
@@ -600,7 +678,40 @@ where
         match self.dofs.entry(node_id, dof) {
             DofEntry::Free(eq) => DofTerms::single(eq),
             DofEntry::Affine { start, len } => DofTerms::from_slice(self.dofs.terms(start, len)),
-            DofEntry::Fixed => DofTerms::empty(),
+            DofEntry::Fixed | DofEntry::Inactive => DofTerms::empty(),
+        }
+    }
+
+    /// Debug-build guard behind `ElementOps::dof_mask`: an element that
+    /// produces a stiffness, resistance, load or mass on a DOF that is
+    /// inactive (not fixed, not constrained, not stiffened by any element,
+    /// not a constraint master, no nodal mass) has under-declared its mask, and the
+    /// contribution would be silently dropped. Contributions below a
+    /// relative 1e-10 of the element's largest are treated as zero (an
+    /// orientation frame leaves round-off in entries that are zero in exact
+    /// arithmetic).
+    #[cfg(debug_assertions)]
+    fn assert_declared<const N: usize>(
+        &self,
+        dofs: &[DofRef<NId>; N],
+        k: Option<&SMatrix<f64, N, N>>,
+        values: &[f64],
+    ) {
+        let scale = |it: &mut dyn Iterator<Item = f64>| it.fold(0.0_f64, |m, v| m.max(v.abs()));
+        let vector_scale = scale(&mut values.iter().copied());
+        let diagonal_scale = k.map_or(0.0, |k| scale(&mut (0..N).map(|i| k[(i, i)])));
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if self.dofs.entry(node, slot as usize) != DofEntry::Inactive {
+                continue;
+            }
+            let stray_value = values[a].abs() > 1e-10 * vector_scale;
+            let stray_stiffness = k.is_some_and(|k| k[(a, a)].abs() > 1e-10 * diagonal_scale);
+            assert!(
+                !(stray_value || stray_stiffness),
+                "an element contributes to DOF {slot} of a node on which it did not declare a DOF in \
+                 `ElementOps::dof_mask` (and nothing else uses that DOF), so the contribution would be \
+                 silently dropped"
+            );
         }
     }
 
@@ -827,7 +938,7 @@ where
                             .sum();
                         node.displacement[dof] += delta;
                     }
-                    DofEntry::Fixed => {}
+                    DofEntry::Fixed | DofEntry::Inactive => {}
                 }
             }
         }
@@ -883,7 +994,7 @@ where
                         node.velocity[dof] = dv;
                         node.acceleration[dof] = da;
                     }
-                    DofEntry::Fixed => {}
+                    DofEntry::Fixed | DofEntry::Inactive => {}
                 }
             }
         }
@@ -981,6 +1092,8 @@ where
         k: &SMatrix<f64, N, N>,
         r: &SVector<f64, N>,
     ) {
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared(dofs, Some(k), r.as_slice());
         let dof_terms: [DofTerms; N] =
             std::array::from_fn(|a| self.domain.dof_terms(dofs[a].0, dofs[a].1 as usize));
         for (a, terms_a) in dof_terms.iter().enumerate() {
@@ -1015,6 +1128,8 @@ where
     E: ElementOps<NDIM, NDOF, NId>,
 {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared(dofs, None, v.as_slice());
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             for &(eq, coeff) in self.domain.dof_terms(node, slot as usize).iter() {
                 self.load[eq] += coeff * self.factor * v[a];
@@ -1040,6 +1155,8 @@ where
     E: ElementOps<NDIM, NDOF, NId>,
 {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared(dofs, None, v.as_slice());
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             accumulate_mass(self.mass, self.domain.dof_terms(node, slot as usize), v[a]);
         }
@@ -1287,7 +1404,7 @@ mod numbering_tests {
         // `a` is fully fixed, so `d`'s tied DOF has no equation.
         domain.equal_dof(a, d, &[1]);
 
-        assert_eq!(domain.number_dofs(), 3);
+        assert_eq!(domain.number_dofs(), 2);
         assert_eq!(domain.equation_of(a, 0), None);
         assert_eq!(domain.equation_of(b, 0), Some(0));
         assert_eq!(domain.equation_of(b, 1), Some(1));
@@ -1297,7 +1414,9 @@ mod numbering_tests {
             "tied dof shares the retained equation"
         );
         assert_eq!(domain.equation_of(c, 1), None);
-        assert_eq!(domain.equation_of(d, 0), Some(2));
+        // No element stiffens `d`'s ux, so it is not an equation at all.
+        assert_eq!(domain.equation_of(d, 0), None);
+        assert!(!domain.is_active(d, 0));
         assert_eq!(domain.equation_of(d, 1), None);
         assert_eq!(
             domain.dof_terms(c, 0).iter().copied().collect::<Vec<_>>(),

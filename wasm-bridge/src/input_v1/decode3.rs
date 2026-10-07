@@ -270,6 +270,12 @@ pub(super) fn decode_spatial(input: CarapaceInputV1) -> Result<SpatialSession, D
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;
 
+        domain
+        .validate()
+        .map_err(|error| DecodeError::InvalidModel {
+            error: error.into(),
+        })?;
+
     Ok(SpatialSession::new(domain, node_ids, stages, recorders, input.header.record_initial))
 }
 

@@ -408,7 +408,9 @@ impl ForceBeamColumn {
         node_j: &Node,
         load: Option<&ElementLoad>,
     ) -> (SMatrix<f64, 6, 6>, SVector<f64, 6>) {
-        let load = load.copied().unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
+        let load = load
+            .copied()
+            .unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
         let corotational = (self.transform == GeomTransf::Corotational)
             .then(|| Corotational2d::new(node_i, node_j));
         let (length, t, d_local) = if let Some(state) = &corotational {
@@ -441,7 +443,9 @@ impl ForceBeamColumn {
     }
 
     pub(super) fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
-        let load = load.copied().unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
+        let load = load
+            .copied()
+            .unwrap_or(ElementLoad::Uniform { wx: 0.0, wy: 0.0 });
         let (length, d_local, corotational) = if self.transform == GeomTransf::Corotational {
             let state = Corotational2d::new(node_i, node_j);
             (

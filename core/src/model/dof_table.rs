@@ -6,6 +6,12 @@ pub(crate) enum DofEntry {
     /// No equation: a fixed DOF, a DOF identity-tied to a fixed one, or an
     /// affine tie whose every term is fixed.
     Fixed,
+    /// No equation because nothing uses the DOF: no element stiffens it, no
+    /// constraint refers to it as a master, and it is not fixed or
+    /// constrained either. Distinct from `Fixed` so that a load, a mass or a
+    /// stray element contribution on such a DOF can be reported instead of
+    /// silently ignored.
+    Inactive,
     /// A free unknown (or a DOF identity-tied to one: tied DOFs share the
     /// retained DOF's equation number).
     Free(usize),

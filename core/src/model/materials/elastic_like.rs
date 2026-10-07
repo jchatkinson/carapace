@@ -20,7 +20,8 @@ pub(super) fn evaluate_elastic_pp(e: f64, eyp: f64, ep: f64, strain: f64) -> (f6
     // sends Newton oscillating between the two kinks when unloading from a
     // yielded state (OpenSees itself fails `material_state.rs`'s
     // unload-from-yield case). Elastic on the surface converges.
-    if trial_stress.abs() <= yield_stress {        (trial_stress, e, Material::ElasticPP { e, eyp, ep })
+    if trial_stress.abs() <= yield_stress {
+        (trial_stress, e, Material::ElasticPP { e, eyp, ep })
     } else {
         let stress = yield_stress.copysign(trial_stress);
         // Return to the yield surface: the plastic strain

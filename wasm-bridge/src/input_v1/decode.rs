@@ -292,6 +292,12 @@ fn decode_planar(input: CarapaceInputV1) -> Result<PlanarSession, DecodeError> {
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;
 
+        domain
+        .validate()
+        .map_err(|error| DecodeError::InvalidModel {
+            error: error.into(),
+        })?;
+
     Ok(PlanarSession::new(domain, node_ids, stages, recorders, input.header.record_initial))
 }
 

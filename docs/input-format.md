@@ -96,6 +96,12 @@ are milestone verification functions, not part of the model API.
 |---|---|---|
 | `coords` | stride 2 `(x, y)` | stride 3 `(x, y, z)` |
 | `fixed` | one bitmask per node: bit 0 `ux`, 1 `uy`, 2 `rz` | bits 0..5 `ux, uy, uz, rx, ry, rz` |
+
+A DOF is an equation only if an element stiffens it, a constraint uses it as a master, it carries
+a nonzero mass, or `fixed` pins it. DOFs nothing uses (a truss's rotations) need not be fixed.
+A nodal load on such a DOF is rejected: `advance` returns `error.kind = "invalidModel"` with
+`error.error = { kind: "loadOnInactiveDof", node, dof }`, and `decodeInput` rejects element
+geometry problems the same way (`DecodeError` `invalidModel`).
 | `massNodeIndex` | node indices that carry mass (sparse) | same |
 | `mass` | stride 3 `(mx, my, mrz)`, parallel to `massNodeIndex` | stride 6, parallel to `massNodeIndex` |
 

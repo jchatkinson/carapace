@@ -1,6 +1,6 @@
 use slotmap::Key;
 
-use crate::model::{Domain, ElementOps, NodeId};
+use crate::model::{Domain, ElementOps, ModelError, NodeId};
 
 use super::bordered::BorderedSolver;
 use super::{Algorithm, Analysis, ConstraintHandler, ConvergenceTest, Integrator, SparseSolver};
@@ -107,21 +107,40 @@ impl<NId> AnalysisBuilder<WithAlgorithm<NId>> {
 impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
     /// Numbers DOFs and builds the sparsity/solver setup once, here — not
     /// re-checked every step (§4.4; no live re-solve loop per §1). Generic
-    /// over the rest of the profile (`NDIM`/`NDOF`/`ELEMENT_DOF`/`E::Id`/`E`),
-    /// inferred from `domain`'s type — this is what lets one `.build()`
-    /// serve both `Domain`/`Analysis` and `Domain3`/`Analysis3`.
+    /// over the rest of the profile (`NDIM`/`NDOF`/`E::Id`/`E`), inferred
+    /// from `domain`'s type — this is what lets one `.build()` serve both
+    /// `Domain`/`Analysis` and `Domain3`/`Analysis3`.
     ///
     /// # Panics
     /// If `domain` has any `equal_dof`/`rigid_diaphragm` constraint but
     /// `ConstraintHandler::Plain` was selected — `Plain` can't resolve
     /// multi-point constraints (see its doc comment); use `Transformation`.
-    /// This is a model-construction error, not a runtime condition, so it's
-    /// caught here rather than threaded through `Result` (§2.8 is about
-    /// real runtime failure, not misuse of the builder).
+    /// Also if the model fails `Domain::validate` (use [`try_build`] to
+    /// receive that as an error instead). Both are model-construction
+    /// errors, not runtime conditions, so `build` reports them by panicking
+    /// (§2.8 is about real runtime failure, not misuse of the builder).
+    ///
+    /// [`try_build`]: AnalysisBuilder::try_build
     pub fn build<const NDIM: usize, const NDOF: usize, E>(
         self,
-        mut domain: Domain<NDIM, NDOF, NId, E>,
+        domain: Domain<NDIM, NDOF, NId, E>,
     ) -> Analysis<NDIM, NDOF, NId, E>
+    where
+        NId: Key,
+        E: ElementOps<NDIM, NDOF, NId>,
+    {
+        self.try_build(domain)
+            .unwrap_or_else(|error| panic!("invalid model: {error}"))
+    }
+
+    /// `build`, but a model that fails `Domain::validate` is returned as a
+    /// `ModelError` — what a caller that must not panic (the wasm session)
+    /// uses. Still panics on a `ConstraintHandler::Plain` / constraint
+    /// mismatch, which is a programming error rather than a model problem.
+    pub fn try_build<const NDIM: usize, const NDOF: usize, E>(
+        self,
+        mut domain: Domain<NDIM, NDOF, NId, E>,
+    ) -> Result<Analysis<NDIM, NDOF, NId, E>, ModelError>
     where
         NId: Key,
         E: ElementOps<NDIM, NDOF, NId>,
@@ -130,8 +149,8 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
             !(matches!(self.state.constraint_handler, ConstraintHandler::Plain) && domain.has_mp_constraints()),
             "ConstraintHandler::Plain can't resolve multi-point constraints (equal_dof/rigid_diaphragm) — use ConstraintHandler::Transformation"
         );
-        domain.number_dofs();
-        Analysis {
+        domain.validate()?;
+        Ok(Analysis {
             domain,
             constraint_handler: self.state.constraint_handler,
             integrator: self.state.integrator,
@@ -143,6 +162,6 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
             cached_factorization: None,
             arc: None,
             bordered: BorderedSolver::default(),
-        }
+        })
     }
 }

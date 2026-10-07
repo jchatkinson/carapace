@@ -49,6 +49,9 @@ pub enum AnalysisError {
     /// An arc-length stop criterion was already met; the phase is over and
     /// further steps are refused without changing any state.
     ContinuationComplete,
+    /// The model failed `Domain::validate` (for example a nodal load on a
+    /// DOF no element stiffens).
+    InvalidModel(crate::model::ModelError),
 }
 
 /// Why one arc-length attempt was rejected. Attempts are retried with a

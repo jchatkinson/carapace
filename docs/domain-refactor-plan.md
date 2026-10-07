@@ -422,7 +422,7 @@ them, so concrete element files were not touched. `Domain::reaction` only evalua
 touch the node (as before). Result: dump identical to baseline, 243 tests pass, native elastic
 30x6 about 5% slower and wasm within noise (see [refactor-baseline.md](refactor-baseline.md)).
 
-**1.3 DOF activation (behavior change).**
+**1.3 DOF activation (behavior change).** *Done; deviations below.*
 Implement section 2.2's activation rule on top of the `DofTable`: activation pass
 (element masks, then constraint masters), `Domain::is_active`, `Domain::validate() ->
 Result<(), ModelError>` (inactive-DOF loads/mass, element `validate`, `prepare`), the
@@ -456,6 +456,21 @@ rotation scale when no rotation is active. Existing tests that fix unused DOFs b
 keep their fixes.
 Docs: README note about manually fixing unused rotations removed; `Truss`/`Truss3` doc
 comments updated.
+
+As built: (1) **A nonzero nodal mass also activates its DOF**, and `MassOnInactiveDof` was dropped.
+The plan treated mass on an unused DOF as an error, but `core/tests/m20_rigid_diaphragm3.rs`
+deliberately builds mass-only DOFs (a free mass is legal under Newmark), so treating mass as
+inertia keeps that behavior exactly; only loads on unused DOFs are errors. (2) Validation reaches
+callers as values, not panics: `AnalysisBuilder::try_build`, `AnalysisError::InvalidModel`,
+`modal_analysis` and `TransientAnalysis::new` validate, and the wasm session maps the error to
+`AnalysisErrorDetail::InvalidModel` at stage start (stage loads are registered then) while
+`decode` reports geometry/mass problems as `DecodeError::InvalidModel`; a panic would abort the
+wasm module. (3) `ElementOps::validate` exists with a default of "accept"; no element overrides
+it yet (the first real use is Phase 3). `prepare` and `accepts_load` remain deferred. (4) The
+mask conformance test lives in `elements/mod.rs` (`mask_conformance`) because it needs the
+crate-private `NodeView`; it checks `mask == stiffened slots` exactly for every element kind except
+oriented 3D zero-length (covered, not exact). It runs in the default test profile, which is also
+where the debug-build guard is active.
 
 **1.4 General linear constraints, state mapping, prescription rule.**
 Implement sections 2.2 (state-mapping API) and 2.3: `LinearConstraint`, normalization

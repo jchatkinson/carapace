@@ -1,6 +1,7 @@
 mod dof_table;
 mod domain;
 mod elements;
+mod error;
 mod fiber_section;
 mod integration;
 mod load_pattern;
@@ -16,6 +17,7 @@ pub use elements::{
     OrientationError, SpatialElementMatrix, SpatialElementVector, TangentSink, Truss, Truss3,
     VectorSink, ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3, MAX_ELEMENT_NODES,
 };
+pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
 pub use integration::BeamIntegration;
 pub use load_pattern::{
@@ -30,10 +32,10 @@ pub use transform::{GeomTransf, GeomTransf3};
 
 /// Degrees of freedom per node: 2D translation (x, y) plus in-plane
 /// rotation (z). Bumped from 2 to 3 at M3 to carry `ElasticBeamColumn`'s
-/// bending DOF — `Truss`/`ZeroLength` only ever populate the translational
-/// entries, so existing models need the rotation DOF fixed at any node not
-/// otherwise connected to a beam-column element (see M3 note in the
-/// implementation plan), or the global system is singular in that DOF.
+/// bending DOF. A node's DOF becomes an equation only if something uses it
+/// (an element stiffens it, a constraint ties to it, it carries a mass, or
+/// it is fixed), so a node connected only to trusses has no rotation
+/// unknown and needs none fixed by hand (see `Domain::is_active`).
 pub const NDF: usize = 3;
 
 /// `2 * NDF` — the size of a 2-node element's local/global stiffness and

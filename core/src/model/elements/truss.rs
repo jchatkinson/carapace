@@ -11,10 +11,10 @@ pub type SpatialElementVector = SVector<f64, SPATIAL_ELEMENT_DOF>;
 
 /// A 2-node axial truss: fixed-size element-local linear algebra (§2.4), no
 /// heap allocation in the hot path. Only ever populates the translational
-/// DOF entries of the (now 3-DOF-per-node) local/global matrices — the
-/// rotation entries stay zero, so a node connected only to `Truss`/
-/// `ZeroLength` elements needs its rotation DOF fixed by the model, or the
-/// global system is singular in that DOF.
+/// DOF entries of the (3-DOF-per-node) local/global matrices; the rotation
+/// entries stay zero. Its `dof_mask` is therefore translations only, so a
+/// node connected only to trusses has no rotation unknown and the model
+/// need not fix it.
 #[derive(Debug, Clone)]
 pub struct Truss {
     pub node_i: NodeId,
@@ -109,10 +109,10 @@ impl Truss {
 
 /// A small-displacement axial 3D truss.
 ///
-/// The bar has three translational components at each end; its six rotational
-/// rows/columns remain zero. A model made solely of `Truss3` therefore must
-/// restrain unused rotations, exactly as a planar truss-only model restrains
-/// its unused `rz` DOFs. The future `Domain3` will enforce this at solve time.
+/// The bar has three translational components at each end; its rotational
+/// rows/columns remain zero. Its `dof_mask` is translations only, so a node
+/// connected only to `Truss3` elements has no rotation unknowns and the model
+/// need not fix them.
 #[derive(Debug, Clone)]
 pub struct Truss3 {
     pub node_i: Node3Id,

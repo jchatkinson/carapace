@@ -26,6 +26,7 @@ use carapace_core::model::{
 use serde::Serialize;
 use slotmap::Key;
 
+use super::error::ModelErrorDetail;
 use super::sequence::FiberResponseKind;
 
 /// Shared by `record_sample`'s `Static`/`Transient` arms: resolves a
@@ -100,6 +101,12 @@ pub enum AnalysisErrorDetail {
     },
     /// An arc-length stop criterion already ended the stage.
     ContinuationComplete,
+    /// The model failed `core`'s `Domain::validate` when the stage started,
+    /// for example a nodal load registered by this stage on a DOF nothing
+    /// uses.
+    InvalidModel {
+        error: ModelErrorDetail,
+    },
 }
 
 /// `core::ArcFailure`, restated for the wire.
@@ -233,6 +240,9 @@ impl From<AnalysisError> for AnalysisErrorDetail {
                 last_failure: last_failure.into(),
             },
             AnalysisError::ContinuationComplete => AnalysisErrorDetail::ContinuationComplete,
+            AnalysisError::InvalidModel(error) => AnalysisErrorDetail::InvalidModel {
+                error: error.into(),
+            },
         }
     }
 }
@@ -719,16 +729,21 @@ where
                 convergence,
                 ..
             } => {
-                let analysis = AnalysisBuilder::new()
+                match AnalysisBuilder::new()
                     .constraint_handler(constraint_handler)
                     .integrator(integrator.clone())
                     .algorithm(*algorithm)
                     .test(*convergence)
-                    .build(domain);
-                self.runner = Some(StageRunner::Static {
-                    analysis,
-                    steps_remaining: stage.steps,
-                });
+                    .try_build(domain)
+                {
+                    Ok(analysis) => {
+                        self.runner = Some(StageRunner::Static {
+                            analysis,
+                            steps_remaining: stage.steps,
+                        });
+                    }
+                    Err(error) => self.error = Some(AnalysisError::InvalidModel(error).into()),
+                }
             }
             // The eigensolve runs immediately, here, rather than lazily on
             // the first `step_once` call — there's no cheaper "start" step
