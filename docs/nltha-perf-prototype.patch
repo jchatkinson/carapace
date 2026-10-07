@@ -1,0 +1,172 @@
+diff --git a/core/src/analysis/transient.rs b/core/src/analysis/transient.rs
+index acb835b..668d2e0 100644
+--- a/core/src/analysis/transient.rs
++++ b/core/src/analysis/transient.rs
+@@ -360,13 +360,14 @@ where
+                     |domain, _scalar| {
+                         let u_trial = domain.gather_displacement();
+                         let (v_trial, a_trial) = newmark_state(&u_trial);
+-                        let (k_eff, resistance) = domain.assemble_newmark_system(
++                        let (k_eff, resistance, k_v) = domain.assemble_newmark_system_kv(
+                             mass,
+                             mass_coeff,
+                             stiffness_coeff,
+                             time,
++                            Some(&v_trial),
+                         );
+-                        let k_v = domain.multiply_stiffness(&v_trial, time);
++                        let k_v = k_v.unwrap();
+ 
+                         let n = resistance.len();
+                         let mut residual = external.clone();
+diff --git a/core/src/model/domain.rs b/core/src/model/domain.rs
+index 2c8c814..7de9590 100644
+--- a/core/src/model/domain.rs
++++ b/core/src/model/domain.rs
+@@ -995,8 +995,27 @@ where
+         stiffness_coeff: f64,
+         pseudo_time: f64,
+     ) -> (SparseMatrix, DVector<f64>) {
++        let (k, r, _) = self.assemble_newmark_system_kv(mass, mass_coeff, stiffness_coeff, pseudo_time, None);
++        (k, r)
++    }
++
++    pub(crate) fn assemble_newmark_system_kv(
++        &self,
++        mass: &DVector<f64>,
++        mass_coeff: f64,
++        stiffness_coeff: f64,
++        pseudo_time: f64,
++        v: Option<&DVector<f64>>,
++    ) -> (SparseMatrix, DVector<f64>, Option<DVector<f64>>) {
+         let n = self.num_free_dofs;
+         let (triplets, resistance) = self.assemble_stiffness_triplets(pseudo_time);
++        let kv = v.map(|v| {
++            let mut out = DVector::<f64>::zeros(n);
++            for t in &triplets {
++                out[t.row] += t.val * v[t.col];
++            }
++            out
++        });
+ 
+         let mut eff_triplets = Vec::with_capacity(triplets.len() + n);
+         for t in &triplets {
+@@ -1008,7 +1027,7 @@ where
+ 
+         let k_eff = SparseMatrix::try_new_from_triplets(n, n, &eff_triplets)
+             .expect("equation numbers are always in [0, num_free_dofs)");
+-        (k_eff, resistance)
++        (k_eff, resistance, kv)
+     }
+ }
+ 
+diff --git a/core/src/model/materials/concrete02.rs b/core/src/model/materials/concrete02.rs
+index cefde53..1911ca1 100644
+--- a/core/src/model/materials/concrete02.rs
++++ b/core/src/model/materials/concrete02.rs
+@@ -38,6 +38,17 @@ impl Material {
+ 
+ /// Ported from `Concrete02::setTrialStrain` (`Concrete02.cpp`).
+ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
++    let (s, t, n) = evaluate_impl::<true>(m, strain);
++    (s, t, n.unwrap())
++}
++
++pub(super) fn trial(m: &Material, strain: f64) -> (f64, f64) {
++    let (s, t, _) = evaluate_impl::<false>(m, strain);
++    (s, t)
++}
++
++#[inline(always)]
++fn evaluate_impl<const NEXT: bool>(m: &Material, strain: f64) -> (f64, f64, Option<Material>) {
+     let Material::Concrete02 {
+         fc,
+         epsc0,
+@@ -63,7 +74,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
+ 
+     // `Concrete02::setTrialStrain` returns early below `DBL_EPSILON`.
+     if (strain - cstrain).abs() < f64::EPSILON {
+-        return (cstress, *ctangent, m.clone());
++        return (cstress, *ctangent, NEXT.then(|| m.clone()));
+     }
+ 
+     let (stress, tangent) = if strain < min_strain {
+@@ -123,7 +134,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
+     (
+         stress,
+         tangent,
+-        Material::Concrete02 {
++        NEXT.then(|| Material::Concrete02 {
+             fc,
+             epsc0,
+             fcu,
+@@ -136,7 +147,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
+             strain,
+             stress,
+             tangent,
+-        },
++        }),
+     )
+ }
+ 
+diff --git a/core/src/model/materials/mod.rs b/core/src/model/materials/mod.rs
+index 1220473..8ba1b2c 100644
+--- a/core/src/model/materials/mod.rs
++++ b/core/src/model/materials/mod.rs
+@@ -311,8 +311,14 @@ impl Material {
+     /// safe to call any number of times from any Newton iteration. See the
+     /// type-level doc comment for why this must never mutate `self`.
+     pub fn trial_stress_tangent(&self, strain: f64) -> (f64, f64) {
+-        let (stress, tangent, _next) = self.evaluate(strain);
+-        (stress, tangent)
++        match self {
++            Material::Steel02 { .. } => steel02::trial(self, strain),
++            Material::Concrete02 { .. } => concrete02::trial(self, strain),
++            _ => {
++                let (stress, tangent, _next) = self.evaluate(strain);
++                (stress, tangent)
++            }
++        }
+     }
+ 
+     /// The new committed `Material` if `strain` were accepted as the
+diff --git a/core/src/model/materials/steel02.rs b/core/src/model/materials/steel02.rs
+index 61af45c..c8666ca 100644
+--- a/core/src/model/materials/steel02.rs
++++ b/core/src/model/materials/steel02.rs
+@@ -67,6 +67,17 @@ impl Material {
+ /// idempotent, since the committed state was itself produced by this
+ /// same formula.
+ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
++    let (s, t, n) = evaluate_impl::<true>(m, strain);
++    (s, t, n.unwrap())
++}
++
++pub(super) fn trial(m: &Material, strain: f64) -> (f64, f64) {
++    let (s, t, _) = evaluate_impl::<false>(m, strain);
++    (s, t)
++}
++
++#[inline(always)]
++fn evaluate_impl<const NEXT: bool>(m: &Material, strain: f64) -> (f64, f64, Option<Material>) {
+     let Material::Steel02 {
+         fy,
+         e0,
+@@ -173,7 +184,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
+     (
+         stress,
+         tangent,
+-        Material::Steel02 {
++        NEXT.then(|| Material::Steel02 {
+             fy,
+             e0,
+             b,
+@@ -194,7 +205,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
+             kon,
+             strain,
+             stress,
+-        },
++        }),
+     )
+ }
+ 
