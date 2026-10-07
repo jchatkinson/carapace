@@ -220,3 +220,28 @@ agree too.
   elements therefore cannot share a node with a rigid-link slave; put the mass on the master side.
 - The wire cannot yet express a nonlinear plane material, so "enhanced Quad4 with a nonlinear material"
   is rejected by core's `validate` (unit tested) but cannot be reached from a decode test.
+
+## Phase 4 results: continuum performance
+
+`core/examples/benchmark_continuum.rs` (native, with per-phase times from `Domain::bench_assembly`) and
+`comparison/wasm_continuum.mjs` (wasm under Node). N x N Quad4 panel, clamped left edge, shear on the
+right edge; one load step, Newton, 2 iterations. Release builds, medians.
+
+| N | DOF | elements | matrix build | first factor | repeat factor | solve |
+|---|---|---|---|---|---|---|
+| 50 | 5,100 | 2.5 ms | 2.7 ms | 20.5 ms | 19.1 ms | 1.1 ms |
+| 100 | 20,200 | 8.5 ms | 14.8 ms | 131.9 ms | 99.9 ms | 4.5 ms |
+| 100, enhanced | 20,200 | 5.5 ms | 13.4 ms | 136.9 ms | 100.1 ms | 4.9 ms |
+
+At 100 x 100 one iteration is about 160 ms: numeric factorization about 85%, matrix construction about
+9%, element kernels about 5%, solve about 3%. wasm, 100 x 100: decode 22 ms, advance 381 ms (full) /
+366 ms (enhanced); 50 x 50: decode 9 ms, advance 58 ms. The tip deflection is identical to the native
+run to all printed digits.
+
+Decision against the plan's gates (4.3): matrix construction is far below the quarter-of-iteration
+threshold and element kernels are about 5%, so **pattern-cached assembly and cached element stiffness
+are not adopted**; the reference geometry cache (4.2) already shipped with the elements. What dominates is
+sparse LU, which is outside the plan's options. Observations, not acted on: a linear panel takes two
+Newton iterations (the second only confirms convergence), so `TangentStrategy::ReuseAtStepStart` would
+halve its factorization cost; and the matrix is symmetric, so an LDL^T/Cholesky path would be cheaper than
+LU. Both change solver behavior and need a decision.

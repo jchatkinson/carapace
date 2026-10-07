@@ -922,6 +922,36 @@ where
         (k, resistance)
     }
 
+    /// Benchmark hook (`core/examples/benchmark_continuum.rs`): wall time of
+    /// the element tangent loop, sparse-matrix construction, the first
+    /// factorization (symbolic + numeric), a repeat factorization (numeric
+    /// only) and one solve, as `[elements, matrix, first_factor,
+    /// repeat_factor, solve]` seconds plus the triplet count. Not for wasm
+    /// (it reads `Instant`).
+    #[doc(hidden)]
+    pub fn bench_assembly(&self, pseudo_time: f64) -> ([f64; 5], usize) {
+        let n = self.num_free_dofs;
+        let lap = |start: std::time::Instant| start.elapsed().as_secs_f64();
+        let start = std::time::Instant::now();
+        let (triplets, resistance) = self.assemble_stiffness_triplets(pseudo_time);
+        let elements = lap(start);
+        let start = std::time::Instant::now();
+        let k = SparseMatrix::try_new_from_triplets(n, n, &triplets)
+            .expect("equation numbers are always in [0, num_free_dofs)");
+        let matrix = lap(start);
+        let solver = crate::analysis::SparseSolver::new();
+        let start = std::time::Instant::now();
+        let factor = solver.factor(&k).expect("benchmark system is nonsingular");
+        let first = lap(start);
+        let start = std::time::Instant::now();
+        let _ = solver.factor(&k).expect("benchmark system is nonsingular");
+        let repeat = lap(start);
+        let rhs = DVector::from_element(n, 1.0) + resistance;
+        let start = std::time::Instant::now();
+        let _ = factor.solve(&rhs);
+        ([elements, matrix, first, repeat, lap(start)], triplets.len())
+    }
+
     /// Assemble the total applied load (every `LoadPattern`'s nodal +
     /// element equivalent loads, each scaled by its own factor at
     /// `pseudo_time` — frozen patterns use their frozen value regardless of
