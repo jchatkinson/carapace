@@ -25,7 +25,7 @@ mod zero_length;
 pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
-pub use quad4::Quad4;
+pub use quad4::{Quad4, Quad4Formulation};
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
 pub use zero_length::{
@@ -743,6 +743,15 @@ mod mask_conformance {
         check(
             "Quad4",
             &Element::Quad4(Quad4::new([a, b, c, d], 0.5, material())),
+            &nodes,
+            true,
+        );
+        check(
+            "Quad4 enhanced",
+            &Element::Quad4(
+                Quad4::new([a, b, c, d], 0.5, material())
+                    .with_formulation(crate::model::Quad4Formulation::Enhanced),
+            ),
             &nodes,
             true,
         );

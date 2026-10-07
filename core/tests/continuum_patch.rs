@@ -6,7 +6,7 @@
 use carapace_core::analysis::{
     Algorithm, Analysis, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
 };
-use carapace_core::model::{Domain, Element, ElementId, Node, NodeId, PlaneMaterial, Quad4, Tri3};
+use carapace_core::model::{Domain, Element, ElementId, Node, NodeId, PlaneMaterial, Quad4, Quad4Formulation, Tri3};
 
 const NX: usize = 4;
 const NY: usize = 3;
@@ -176,7 +176,10 @@ fn a_continuum_model_with_no_rotation_fixed_solves() {
     ));
 }
 
-fn quad4_mesh(material: &PlaneMaterial) -> (Domain, Vec<NodeId>, Vec<ElementId>) {
+fn quad4_mesh(
+    material: &PlaneMaterial,
+    formulation: Quad4Formulation,
+) -> (Domain, Vec<NodeId>, Vec<ElementId>) {
     let mut domain = Domain::new();
     let ids = add_nodes(&mut domain);
     let at = |i: usize, j: usize| ids[j * (NX + 1) + i];
@@ -184,26 +187,26 @@ fn quad4_mesh(material: &PlaneMaterial) -> (Domain, Vec<NodeId>, Vec<ElementId>)
     for j in 0..NY {
         for i in 0..NX {
             let nodes = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
-            elements.push(domain.add_element(Element::Quad4(Quad4::new(
-                nodes,
-                0.3,
-                material.clone(),
-            ))));
+            elements.push(domain.add_element(Element::Quad4(
+                Quad4::new(nodes, 0.3, material.clone()).with_formulation(formulation),
+            )));
         }
     }
     (domain, ids, elements)
 }
 
 #[test]
-fn quad4_patch_test_is_exact_on_a_distorted_mesh() {
+fn quad4_patch_test_is_exact_on_a_distorted_mesh_for_both_formulations() {
     for material in [
         PlaneMaterial::plane_stress(30e3, 0.2).unwrap(),
         PlaneMaterial::plane_strain(30e3, 0.3).unwrap(),
         PlaneMaterial::orthotropic(30e3, 10e3, 0.2, 4e3, 0.5).unwrap(),
     ] {
-        let (domain, ids, elements) = quad4_mesh(&material);
-        let analysis = run_patch(domain, &ids);
-        assert_field_reproduced(&analysis, &ids, 1e-12);
-        assert_constant_stress(&analysis, &elements, &material, 1e-12);
+        for formulation in [Quad4Formulation::Full, Quad4Formulation::Enhanced] {
+            let (domain, ids, elements) = quad4_mesh(&material, formulation);
+            let analysis = run_patch(domain, &ids);
+            assert_field_reproduced(&analysis, &ids, 1e-12);
+            assert_constant_stress(&analysis, &elements, &material, 1e-12);
+        }
     }
 }
