@@ -13,3 +13,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - run: cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
+  docs:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pages: write, id-token: write }
+    environment: { name: github-pages, url: "${{ steps.deploy.outputs.page_url }}" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with: { tool: "wasm-bindgen@0.2.128" }
+      - run: cargo doc --workspace --no-deps
+        env: { RUSTDOCFLAGS: "-D warnings" }
+      - run: cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
+      - run: wasm-bindgen target/wasm32-unknown-unknown/release/carapace_wasm.wasm --out-dir pkg --target web
+      - run: npx --yes typedoc@0.28 pkg/carapace_wasm.d.ts --out target/doc/wasm
+      - run: cp docs-site/index.html target/doc/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: target/doc }
+      - id: deploy
+        uses: actions/deploy-pages@v4

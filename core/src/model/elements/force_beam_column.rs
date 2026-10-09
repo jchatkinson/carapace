@@ -40,8 +40,8 @@ use super::truss::{SpatialElementMatrix, SpatialElementVector};
 /// `xara/SRC/element/Frame/Other/Force/ForceBeamColumn2d.cpp`'s
 /// `update()` (the Neuenhofer-Filippou/Spacone-Ciampi-Filippou algorithm
 /// that file's header cites), not re-derived by hand; see
-/// [`state_determination`](ForceBeamColumn::state_determination) and
-/// [`try_state_determination`](ForceBeamColumn::try_state_determination)'s
+/// `state_determination` and
+/// `try_state_determination`'s
 /// own doc comments for the mechanics (a two-stage per-section correction
 /// each outer iteration, an energy-based convergence check, and a
 /// bisection fallback when a single jump from `v_commit` to the target
