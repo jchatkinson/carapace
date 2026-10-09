@@ -35,11 +35,15 @@ TEST_RE = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED|ignored
 RUN_RE = re.compile(r"^\s*Running (unittests )?(\S+) \((?:.*/)?([^/)]+?)(?:-[0-9a-f]{8,})?\)")
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
 def parse_log(path):
     """Yields (package_dir, kind, area, test_path, status) for every test line."""
     pkg, kind, area = None, None, None
     out = []
     for line in open(path, errors="replace"):
+        line = ANSI_RE.sub("", line)  # CI sets CARGO_TERM_COLOR=always
         m = RUN_RE.match(line)
         if m:
             unit, src, binary = m.group(1), m.group(2), m.group(3)
