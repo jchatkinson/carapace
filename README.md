@@ -1,5 +1,7 @@
 # Carapace
 
+[![CI](https://github.com/jchatkinson/carapace/actions/workflows/ci.yml/badge.svg)](https://github.com/jchatkinson/carapace/actions/workflows/ci.yml)
+
 A thin, curated, WebAssembly-native finite element analysis engine, written
 in Rust, covering the subset of structural element formulations, material
 models, and analysis types actually used in practice by
