@@ -1,4 +1,4 @@
-//! Bulk per-(entity-kind) tables from pysees-handoff.md's wire format, one
+//! Bulk per-(entity-kind) tables of the wire format (`docs/input-format.md`), one
 //! set for both profiles (`header.ndm` 2 or 3). Dimension-agnostic entities
 //! (nodes, trusses, zero-lengths, fibers, constraints, loads) have one table;
 //! formulations that differ between 2D and 3D (beam-columns) have one table
@@ -8,12 +8,12 @@
 //! Node/element/pattern references inside these tables are already
 //! resolved to dense 0-based row indices by the (not-yet-written)
 //! `pysees` compiler — the "duplicate/missing tags and every reference
-//! between entities" validation the handoff assigns to the compiler
+//! between entities" validation the compiler is responsible for
 //! happens upstream of decode, so decode only ever sees plain array
 //! indices, never sparse OpenSees-style tags.
 //!
 //! Each field is a plain `Vec`, not yet the transferable `Float64Array`/
-//! `Uint8Array` values the handoff's wire format ultimately specifies for
+//! `Uint8Array` values the wire format ultimately specifies for
 //! `postMessage`: `boundary.rs`'s `serde-wasm-bindgen` decoding today
 //! accepts an ordinary JS array for each of these (or a typed array,
 //! copied element-by-element) rather than transferring one. Once real
@@ -22,7 +22,7 @@
 //! of [`super::CarapaceInputV1`] may be omitted, which is the same as empty.
 //!
 //! `#[serde(rename_all = "camelCase")]` throughout so the JS/TS shape
-//! matches pysees-handoff.md's own naming (`nodeI`, not `node_i`).
+//! matches the PySees naming (`nodeI`, not `node_i`).
 
 use serde::{Deserialize, Serialize};
 
@@ -288,7 +288,7 @@ pub struct NodalLoadTable {
     /// pseudo-time with every unfrozen pattern (core/src/analysis/
     /// integrator.rs) — a pattern's reference load must not exist yet if
     /// an earlier stage isn't meant to ramp it too (the same reason
-    /// core/tests/m8_force_beam_column.rs's native two-phase test adds its
+    /// core/tests/elements/force_beam.rs's native two-phase test adds its
     /// lateral pattern's load only between phases, not upfront).
     pub stage: Vec<u32>,
 }

@@ -8,13 +8,13 @@ use super::super::{
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 use super::uniform_load;
 
-/// A 2-node, displacement-based, fiber-discretized 2D beam-column (§3.1):
+/// A 2-node, displacement-based, fiber-discretized 2D beam-column:
 /// nodal displacements directly give the strain/curvature field along the
 /// length (cubic Hermite transverse + linear axial shape functions, same
 /// as `ElasticBeamColumn`'s), each `BeamIntegration` point's `FiberSection`
 /// converts that to stress-resultants, and one length-integral gives the
 /// element's resisting force/tangent — a single, direct evaluation, unlike
-/// `ForceBeamColumn` (M8), which needs its own internal equilibrium
+/// `ForceBeamColumn`, which needs its own internal equilibrium
 /// iteration per element.
 ///
 /// Prismatic-member assumption: every integration point starts from the
@@ -107,7 +107,7 @@ impl DispBeamColumn {
     /// `ElasticBeamColumn` uses, derived directly (not copied from a
     /// reference — this is standard Euler-Bernoulli/Hermite beam theory,
     /// verified against `ElasticBeamColumn`'s closed-form stiffness in
-    /// `core/tests/m7_disp_beam_column.rs`: for constant `EA`/`EI` a rule
+    /// `core/tests/elements/disp_beam.rs`: for constant `EA`/`EI` a rule
     /// of 2 or more points must reproduce it exactly, since `b_kappa` is
     /// linear in `xi` and its square is then only degree 2).
     fn strain_displacement(xi: f64, length: f64) -> (SVector<f64, 6>, SVector<f64, 6>) {
@@ -417,7 +417,7 @@ impl DispBeamColumn3 {
     /// unmodified `b_kappa_z` formula — the same substitution
     /// `ElasticBeamColumn3::geometric_stiffness`'s `y_block` uses relative
     /// to `z_block`. Verified, not just plausible-by-analogy, in
-    /// `core/tests/m17_disp_beam_column3.rs` against `ElasticBeamColumn3`'s
+    /// `core/tests/elements/disp_beam.rs` against `ElasticBeamColumn3`'s
     /// exact closed-form biaxial-bending stiffness.
     fn strain_displacement(
         xi: f64,

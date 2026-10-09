@@ -2,7 +2,7 @@ use nalgebra::{DMatrix, DVector};
 
 /// Krylov-subspace acceleration of a stale-tangent Newton correction —
 /// ported from Xara's `KrylovAccelerator.cpp` (`docs/algorithms.md` §5). A
-/// concrete struct, not a trait object (§2.1/§2.6): exactly one accelerator
+/// concrete struct, not a trait object: exactly one accelerator
 /// implementation exists, same reasoning as `SparseSolver` committing to
 /// one solver.
 ///

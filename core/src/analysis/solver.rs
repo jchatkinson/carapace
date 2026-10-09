@@ -9,15 +9,13 @@ use crate::model::SparseMatrix;
 
 use super::AnalysisError;
 
-/// The one linear solver Carapace ships (§2.6) — a concrete struct, not a
+/// The one linear solver Carapace ships — a concrete struct, not a
 /// trait or enum, since there is exactly one implementation to commit to.
 ///
-/// Resolves implementation-plan §5 open decision #1 for real: `faer`'s
+/// `faer`'s
 /// sparse LU (with built-in COLAMD/AMD fill-reducing ordering), not a dense
-/// `nalgebra` solve. The dense placeholder from M1 was fine while every
-/// test model had single-digit DOF counts, but a dense O(n^3) LU doesn't
-/// scale to real models — see the implementation plan's §5 decision #1 note
-/// for the wasm32 build/solve verification this choice is based on.
+/// `nalgebra` solve. A dense O(n^3) LU doesn't scale to real models. It builds and
+/// solves correctly under wasm32.
 pub struct SparseSolver {
     // Keep factor/solve callable through &self and preserve Send + Sync.
     // The lock is released before numeric factorization and solving.

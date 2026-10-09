@@ -314,10 +314,10 @@ impl Friction3 {
 }
 
 /// A 2-node, zero-length connector: no geometry or integration, just direct
-/// per-DOF material evaluation (§3.1) — each direction with a material
+/// per-DOF material evaluation — each direction with a material
 /// assigned independently relates that DOF's relative displacement between
 /// the two nodes to a force along that same direction. Directions are the
-/// global DOF axes (including rotation, since M3's DOF bump) unless an
+/// global DOF axes (including rotation) unless an
 /// `Orientation` (OpenSees' `-orient`) rotates them to local axes.
 ///
 /// `friction` adds one cross-DOF coupling term on top of the independent
@@ -494,7 +494,7 @@ impl ZeroLength {
 /// the six directions `[ux, uy, uz, rx, ry, rz]` — global by default, or the
 /// local axes of an `Orientation` (OpenSees' `-orient`).
 /// `friction` — see `ZeroLength`'s doc comment — adds two independent
-/// (Phase 2, see `Friction3`) shear-DOF couplings on top of the
+/// (see `Friction3`) shear-DOF couplings on top of the
 /// independent `materials`.
 #[derive(Debug, Clone)]
 pub struct ZeroLength3 {
@@ -890,11 +890,11 @@ mod tests {
     use crate::model::{Fiber, Fiber3, Material, Node};
 
     /// Proves the `Material` enum's dispatch generalizes to `ZeroLength`
-    /// across every M2 variant and regime (elastic, plastic plateau, open
+    /// across every material variant and regime (elastic, plastic plateau, open
     /// gap, closed gap, tension, compression) by driving the element
     /// directly off manually-set node displacements — independent of
-    /// `Analysis`/`Algorithm`, which for M2 is still linear-only (no
-    /// Newton iteration until M4) and so can't itself resolve equilibrium
+    /// `Analysis`/`Algorithm`, which is linear-only here (no
+    /// Newton iteration) and so can't itself resolve equilibrium
     /// across a material's nonlinear regimes in one step.
     #[test]
     fn zero_length_dispatches_across_material_regimes() {
@@ -1390,11 +1390,11 @@ mod tests {
         );
     }
 
-    /// Phase 2: `ZeroLength3` with one normal DOF and two independent shear
+    /// `ZeroLength3` with one normal DOF and two independent shear
     /// DOFs — each slides/sticks independently against the same normal
     /// force with no cross-talk between the two shear axes (the absence of
-    /// coupling that distinguishes Phase 2 from the deferred, circular-
-    /// interaction-surface Phase 3).
+    /// coupling that distinguishes this from the deferred, circular-
+    /// interaction-surface model).
     #[test]
     fn friction3_shear_axes_slide_independently_against_shared_normal_force() {
         let node_i = Node3::new([0.0, 0.0, 0.0]);

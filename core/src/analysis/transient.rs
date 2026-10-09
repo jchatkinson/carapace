@@ -37,7 +37,7 @@ pub struct TransientStepResult {
 /// Fixed at the "average acceleration" Newmark parameters
 /// (`beta = 1/4, gamma = 1/2`) — unconditionally stable, the standard
 /// default (matches OpenSees' own `Newmark` integrator default). Exact for
-/// genuinely linear elastic response (this milestone's scope: `Truss`/
+/// genuinely linear elastic response (`Truss`/
 /// `ZeroLength`/`ElasticBeamColumn` with linear materials) since the
 /// tangent stiffness formed once per step doesn't change with displacement
 /// — one linear solve per step, no Newton iteration, mirroring `Algorithm::

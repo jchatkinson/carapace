@@ -199,8 +199,7 @@ impl Corotational2d {
 
 /// `GeomTransf`'s spatial counterpart: builds a member's local basis and
 /// local↔global rotation from its two end-node coordinates and an
-/// orientation vector (`vec_xz`, per `docs/spatial-architecture.md`'s
-/// "Coordinate frames and orientation" — `x = normalize(pJ - pI)`, `y =
+/// orientation vector (`vec_xz`): `x = normalize(pJ - pI)`, `y =
 /// normalize(vec_xz × x)`, `z = x × y`). Unlike planar `GeomTransf`, this
 /// isn't just a behavior flag: the local-axis construction is real,
 /// nontrivial, and shared by every spatial frame element (`ElasticBeamColumn3`
@@ -210,7 +209,7 @@ impl Corotational2d {
 ///
 /// `Linear3` and `PDelta3` are both "cheap" per the same reasoning as
 /// planar `GeomTransf`'s doc comment — full spatial corotational geometry
-/// is its own later milestone (M18), not a third variant here.
+/// is not yet supported, so it is not a third variant here.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GeomTransf3 {
     /// Small-displacement: local/global relationship fixed at the member's

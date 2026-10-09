@@ -5,7 +5,7 @@ use super::super::{GeomTransf, GeomTransf3, Node, Node3, Node3Id, NodeId};
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
 /// A 2-node, prismatic, linear-elastic 2D beam-column (Euler-Bernoulli, no
-/// shear deformation): closed-form stiffness, no iteration (§3.1) — unlike
+/// shear deformation): closed-form stiffness, no iteration — unlike
 /// `Truss`/`ZeroLength`, there's no `Material` dispatch here, since the
 /// element's response is fully determined by `e`/`a`/`iz` with no nonlinear
 /// stress-strain law to evaluate.
@@ -83,7 +83,7 @@ impl ElasticBeamColumn {
     /// recovery (`form_tangent_and_resistance`'s second return value)
     /// stays purely elastic. Consistent path-following P-Delta (where the
     /// resisting force itself must reflect the same correction) needs
-    /// Newton iteration to track correctly and is deferred alongside M4.
+    /// Newton iteration to track correctly and is not implemented.
     fn geometric_stiffness(&self, p: f64, length: f64) -> SMatrix<f64, 6, 6> {
         let l = length;
         let mut kg = SMatrix::<f64, 6, 6>::zeros();
@@ -219,7 +219,7 @@ impl ElasticBeamColumn {
     /// Equivalent nodal load (global coordinates) from a uniform local-axis
     /// load (`wx` axial, `wy` transverse in local +y; force/length) applied
     /// to this element by whichever `LoadPattern` is currently being
-    /// assembled (§3.4; `Domain::assemble_reference_load` passes the load in
+    /// assembled (`Domain::assemble_reference_load` passes the load in
     /// — a pattern-scoped load can't live on `Element`, same reasoning as
     /// `Node`'s load leaving `Node`), via consistent (virtual-work) Hermite
     /// cubic / linear-axial shape-function integration.
@@ -266,7 +266,7 @@ impl ElasticBeamColumn {
 
     /// Lumped mass: half the element's total mass (`density * a * length`)
     /// at each node's translational DOFs, zero rotational contribution —
-    /// the simplest standard lumped-mass model (§3.4: "lumped, to start");
+    /// the simplest standard lumped-mass model;
     /// a consistent (non-diagonal) mass matrix or a nonzero rotational
     /// lumped inertia is a further refinement, not built until needed.
     pub(super) fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, 6> {
@@ -279,8 +279,7 @@ impl ElasticBeamColumn {
 /// `ElasticBeamColumn`'s spatial counterpart: a 2-node, prismatic,
 /// linear-elastic 3D Euler-Bernoulli beam-column (`E, G, A, J, Iy, Iz`),
 /// closed-form, `GeomTransf3::Linear3` only — see this struct's
-/// module-level context (spatial-architecture plan, "Elements and
-/// transforms") for why spatial P-Delta isn't implemented yet: it needs
+/// module-level context for why 3D P-Delta isn't implemented yet: it needs
 /// force/tangent recovery already consistent in the linear case first.
 ///
 /// Local DOF order per node `[u, v, w, rx, ry, rz]` (axial, then bending

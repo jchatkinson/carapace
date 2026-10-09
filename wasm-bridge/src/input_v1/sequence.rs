@@ -1,4 +1,4 @@
-//! Wire-format `AnalysisSequence` — mirrors pysees-handoff.md's
+//! Wire-format `AnalysisSequence` — mirrors the PySees
 //! `AnalysisStage` discriminated union: `Static` (pushover-style), `Modal`
 //! (eigenvalue), and `Transient` (Newmark time-history, optionally driven
 //! by `GroundMotionSpec`).
@@ -22,8 +22,7 @@ pub enum IntegratorSpec {
     },
     /// `node`/`dof` index into `NodeTable`; the compiler is responsible for
     /// having registered a reference load with nonzero sensitivity on that
-    /// DOF (pysees-handoff.md's "valid reference-load sensitivity for
-    /// displacement control") — decode does not re-derive that check.
+    /// DOF — decode does not re-derive that check.
     DisplacementControl {
         node: u32,
         dof: u8,
@@ -284,7 +283,7 @@ pub enum ConvergenceSpec {
 
 impl ConvergenceSpec {
     /// The decoder's default when a stage omits `convergence` — the
-    /// handoff's TS type marks the field optional but does not name a
+    /// TS type marks the field optional but does not name a
     /// default, so this one is this decoder's own choice.
     pub const DEFAULT: ConvergenceSpec = ConvergenceSpec::NormUnbalance {
         tol: 1e-6,
@@ -395,9 +394,8 @@ impl StageSpec {
 }
 
 /// One recorder: a single scalar channel's history against its stage's load
-/// factor. `NodeDisp` was M10's first (and, until now, only) variant
-/// (pysees-handoff.md's "selected node displacement/load-factor history for
-/// the static pushover"); `ElementForce` (results-storage-indexeddb.md's
+/// factor. `NodeDisp` was the first variant (node displacement/load-factor
+/// history for a static pushover); `ElementForce` (results-storage-indexeddb.md's
 /// "several more types of recorders" plan) is the second, sharing the exact
 /// same batching/storage machinery — see `session::ResolvedRecorder` and
 /// `StepOutcome::recorder_batches`, neither of which needed to change shape

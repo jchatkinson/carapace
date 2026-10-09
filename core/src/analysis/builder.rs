@@ -5,7 +5,7 @@ use crate::model::{Domain, ElementOps, ModelError, NodeId};
 use super::bordered::BorderedSolver;
 use super::{Algorithm, Analysis, ConstraintHandler, ConvergenceTest, Integrator, SparseSolver};
 
-/// Typestate analysis composition (§2.5): each stage exposes only the next
+/// Typestate analysis composition: each stage exposes only the next
 /// piece that must be wired, and only `AnalysisBuilder<Ready>` exposes
 /// `.build()`. Illegal sequencing (e.g. calling `.build()` before an
 /// algorithm is set) is a compile error, not a runtime `setLinks` ordering
@@ -106,7 +106,7 @@ impl<NId> AnalysisBuilder<WithAlgorithm<NId>> {
 
 impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
     /// Numbers DOFs and builds the sparsity/solver setup once, here — not
-    /// re-checked every step (§4.4; no live re-solve loop per §1). Generic
+    /// re-checked every step. Generic
     /// over the rest of the profile (`NDIM`/`NDOF`/`E::Id`/`E`), inferred
     /// from `domain`'s type — this is what lets one `.build()` serve both
     /// `Domain`/`Analysis` and `Domain3`/`Analysis3`.
@@ -118,7 +118,7 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
     /// Also if the model fails `Domain::validate` (use [`try_build`] to
     /// receive that as an error instead). Both are model-construction
     /// errors, not runtime conditions, so `build` reports them by panicking
-    /// (§2.8 is about real runtime failure, not misuse of the builder).
+    /// (runtime failures are reported as errors; misuse of the builder is not).
     ///
     /// [`try_build`]: AnalysisBuilder::try_build
     pub fn build<const NDIM: usize, const NDOF: usize, E>(

@@ -48,35 +48,15 @@ fn check(name: &str, material: Material, amplitude: f64) -> bool {
 
 #[test]
 fn committed_trial_is_idempotent() {
-    let results = all_materials();
-    let failing: Vec<_> = results
-        .iter()
-        .filter(|(name, ok)| !ok && !KNOWN_FAILING.contains(name))
-        .collect();
-    assert!(failing.is_empty(), "new idempotence failures: {failing:?}");
+    let failing: Vec<_> = all_materials().into_iter().filter(|(_, ok)| !ok).collect();
+    assert!(failing.is_empty(), "idempotence failures: {failing:?}");
 }
 
-/// Materials whose OpenSees counterpart returns its previous/committed
-/// tangent for a trial at the committed strain, but whose port recomputes.
-/// `elastic_pp` is a deliberate divergence: OpenSees treats a trial on the
-/// yield surface as plastic (tangent 0), and Newton then oscillates when
-/// unloading from yield (verified in OpenSees on `materials/state.rs`'s model).
-/// Remove a name once fixed; the test above then guards it.
-const KNOWN_FAILING: &[&str] = &["elastic_pp"];
-
-#[test]
-fn known_failing_materials_still_fail() {
-    let results = all_materials();
-    let fixed: Vec<_> = results
-        .iter()
-        .filter(|(name, ok)| *ok && KNOWN_FAILING.contains(name))
-        .collect();
-    assert!(
-        fixed.is_empty(),
-        "now passing, remove from KNOWN_FAILING: {fixed:?}"
-    );
-}
-
+/// `ElasticPP` is deliberately absent: it treats a trial exactly on the yield
+/// surface as elastic (tangent `E`), where OpenSees treats it as plastic
+/// (tangent 0) and Newton then oscillates between the two kinks when unloading
+/// from yield. Re-trialling a yielded state therefore changes the tangent by
+/// design (see `evaluate_elastic_pp`).
 fn all_materials() -> Vec<(&'static str, bool)> {
     let steel01 = Material::steel01(355.0, 200000.0, 0.02, 0.0, 1.0, 0.0, 1.0);
     let steel01_iso = Material::steel01(60.0, 29000.0, 0.01, 0.9, 5.0, 0.9, 5.0);
@@ -126,7 +106,6 @@ fn all_materials() -> Vec<(&'static str, bool)> {
     let steel = || Material::steel01(60.0, 29000.0, 0.01, 0.0, 1.0, 0.0, 1.0);
     let cases: Vec<(&'static str, Material, f64)> = vec![
         ("elastic", Material::Elastic { e: 100.0 }, 0.01),
-        ("elastic_pp", Material::elastic_pp(100.0, 0.005), 0.02),
         (
             "gap",
             Material::Gap {

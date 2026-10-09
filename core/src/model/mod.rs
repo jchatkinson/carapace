@@ -37,8 +37,8 @@ pub use node::{
 pub use transform::{GeomTransf, GeomTransf3};
 
 /// Degrees of freedom per node: 2D translation (x, y) plus in-plane
-/// rotation (z). Bumped from 2 to 3 at M3 to carry `ElasticBeamColumn`'s
-/// bending DOF. A node's DOF becomes an equation only if something uses it
+/// rotation (z). The third DOF carries `ElasticBeamColumn`'s
+/// bending. A node's DOF becomes an equation only if something uses it
 /// (an element stiffens it, a constraint ties to it, it carries a mass, or
 /// it is fixed), so a node connected only to trusses has no rotation
 /// unknown and needs none fixed by hand (see `Domain::is_active`).
@@ -51,10 +51,9 @@ pub const NDF: usize = 3;
 pub const ELEMENT_DOF: usize = 2 * NDF;
 
 /// The global tangent stiffness matrix's representation: sparse, not a
-/// dense `nalgebra::DMatrix` — resolves implementation-plan §5 decision #1
-/// for real. `faer` over `nalgebra-sparse`: a built-in sparse LU with
+/// dense `nalgebra::DMatrix`. `faer` over `nalgebra-sparse`: a built-in sparse LU with
 /// COLAMD/AMD fill-reducing ordering (so no separate `DOF_Numberer`
-/// abstraction is needed, per the original §5 question), pure Rust (no C
+/// abstraction is needed), pure Rust (no C
 /// dependency to fight through `wasm32-unknown-unknown`), and confirmed to
 /// build and solve correctly under wasm32 + Node with a minimal feature set
 /// (`std` + `sparse-linalg`, dropping `rand`/`rayon`/`npy`, which otherwise

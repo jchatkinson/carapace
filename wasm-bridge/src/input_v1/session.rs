@@ -1,5 +1,4 @@
-//! `Session`/`StageRunner`/`advance` — pysees-handoff.md's "Decode and
-//! session model": `Session` is chosen once at decode time from the
+//! `Session`/`StageRunner`/`advance` — `Session` is chosen once at decode time from the
 //! header's `ndm` discriminant and never branches on it again; stepping
 //! is driven by the caller via a step budget rather than run to completion
 //! inside one call, the mechanism cooperative cancellation is built on.
@@ -78,7 +77,7 @@ where
 
 /// `AnalysisError`'s fields, restated so `advance`'s result doesn't need to
 /// name `carapace_core`'s error type directly — kept in the same tagged-
-/// variant style (implementation-plan.md §2.8).
+/// variant style.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
 #[serde(
     tag = "kind",
@@ -392,8 +391,8 @@ where
     },
 }
 
-/// `advance`'s result — pysees-handoff.md's `{ done, stageComplete,
-/// stepsTaken, progressSnapshot, recorderBatch? }`, minus the parts that
+/// `advance`'s result — `{ done, stageComplete, stepsTaken,
+/// progressSnapshot, recorderBatch? }`, minus the parts that
 /// are the worker/JS boundary's job (`progressSnapshot`'s throttling,
 /// `recorderBatch`'s `response_blocks` byte layout): `load_factor` here is
 /// the raw signal those would be built from — for a `Static` stage the
@@ -503,8 +502,8 @@ impl Session {
 
     /// The `AnalysisSequence` stage id `advance` is currently in (or, once
     /// `done`, the id of whichever stage stopped it) — for surfacing which
-    /// stage an `error` belongs to, matching pysees-handoff.md's "the run
-    /// is marked failed with the error's structured detail".
+    /// stage an `error` belongs to, so a failed run can be marked with the error's
+    /// structured detail.
     pub fn current_stage_id(&self) -> Option<&str> {
         match self {
             Session::D2(session) => session.current_stage_id(),
@@ -880,8 +879,8 @@ where
     }
 
     /// `Analysis::into_domain`/fresh-`AnalysisBuilder` multi-phase pattern
-    /// (pysees-handoff.md / core/tests/m8_force_beam_column.rs's two-phase
-    /// tests): freeze this stage's held patterns (a `Static`-only concept —
+    /// (as in the two-phase tests in
+    /// `core/tests/elements/force_beam.rs`): freeze this stage's held patterns (a `Static`-only concept —
     /// `Modal`/`Transient` stages hold none) at its final load factor, then
     /// hand the same `Domain` (committed material state and all) to the
     /// next stage's fresh `Analysis`/`TransientAnalysis`/`modal_analysis`

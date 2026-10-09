@@ -7,7 +7,7 @@ use super::{AnalysisError, SparseSolver};
 
 /// One computed mode: natural circular frequency (rad/time) and the
 /// corresponding free-DOF mode shape, M-normalized (`shape^T * M * shape = 1`)
-/// — the normalization modal damping (M6+) needs to apply a per-mode
+/// — the normalization modal damping needs to apply a per-mode
 /// damping ratio consistently.
 #[derive(Debug, Clone)]
 pub struct Mode {
@@ -15,12 +15,11 @@ pub struct Mode {
     pub shape: DVector<f64>,
 }
 
-/// Resolves implementation-plan §5 open decision #2 for real: a
-/// shift-invert Lanczos eigensolver (shift = 0, so the operator is simply
+/// A shift-invert Lanczos eigensolver (shift = 0, so the operator is simply
 /// `K^-1 * M`), not a dense full-spectrum `nalgebra::SymmetricEigen` and
 /// not an ARPACK FFI binding either. Two things made the earlier dense
 /// choice wrong beyond just performance, once `SparseSolver` itself went
-/// sparse (see §5 decision #1):
+/// sparse:
 ///
 /// - **Memory.** A dense N×N matrix costs O(n²) regardless of how sparse
 ///   the model actually is — on a model `SparseSolver` handles comfortably,
@@ -28,7 +27,7 @@ pub struct Mode {
 ///   it's even "slow". `Domain` no longer builds one for this at all.
 /// - **Shape of the problem.** A full-spectrum solve computes *all* n
 ///   eigenpairs even when only the lowest `num_modes` are wanted — the
-///   usual case, and the one modal-superposition damping (M6+) actually
+///   usual case, and the one modal-superposition damping actually
 ///   needs. Lanczos naturally converges the extreme eigenvalues of the
 ///   shift-inverted operator first, so asking for just `num_modes` does
 ///   the proportionate amount of work.

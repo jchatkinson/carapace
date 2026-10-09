@@ -96,8 +96,7 @@ where
     /// `TransientAnalysis::new` for a dynamic phase. Typically preceded by
     /// `domain_mut().hold_pattern_constant(pattern, load_factor)` on
     /// whichever pattern(s) should stop ramping (e.g. gravity) before the
-    /// next phase starts — see implementation-plan's load-pattern/phase-
-    /// composition milestone.
+    /// next phase starts.
     pub fn into_domain(self) -> Domain<NDIM, NDOF, NId, E> {
         self.domain
     }
@@ -147,7 +146,6 @@ where
 
     /// Advance one step: the integrator predicts this step's load factor,
     /// then the algorithm resolves equilibrium at that (fixed) load factor.
-    /// See implementation-plan §4.4 for the sketch this follows.
     ///
     /// On failure, the domain (nodal displacement — mutated eagerly every
     /// Newton iteration, which is correct Newton behavior, but shouldn't

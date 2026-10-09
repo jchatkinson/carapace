@@ -1,7 +1,7 @@
 //! Hand-written per-table decode: translates a [`CarapaceInputV1`] into a
 //! [`Session`] by calling the same `Domain`/`Element`/`Material`
 //! constructors native code calls — no generic deserialization into `core`
-//! types, no reflection (pysees-handoff.md's "Decode and session model").
+//! types, no reflection.
 //! Panic-free: every lookup returns a [`DecodeError`] instead of indexing
 //! past the end of a table, since this is defense in depth against
 //! engine/schema version skew, not a re-check of what `pysees`'s compiler

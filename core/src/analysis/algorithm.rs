@@ -1,7 +1,7 @@
 use super::{LineSearch, TangentStrategy};
 
 /// Iteration strategy for resolving each step's equilibrium. Closed enum
-/// (§2.1). `docs/algorithms.md` designs `Newton`/`KrylovNewton` as three
+///. `docs/algorithms.md` designs `Newton`/`KrylovNewton` as three
 /// composable axes (tangent strategy, line search, Krylov acceleration)
 /// rather than a combinatorial pile of variants — see that doc for the
 /// full design and Xara reference map.

@@ -5,10 +5,10 @@ use crate::model::{Domain, ElementOps, NodeId, SparseMatrix};
 
 use super::{AnalysisError, ArcLength, SparseFactorization, SparseSolver};
 
-/// Static/pseudo-static integration strategy. Closed enum (§2.1).
+/// Static/pseudo-static integration strategy. Closed enum.
 /// `LoadControl`/`DisplacementControl` only change how this *step's* load
 /// factor is chosen (the "predictor") — the iteration that follows
-/// (§ `Algorithm`) proceeds identically regardless of which one picked it.
+/// (see `Algorithm`) proceeds identically regardless of which one picked it.
 /// `ArcLength` is different in kind: it predicts displacement *and* load
 /// factor and corrects both together through a bordered system, so
 /// `Analysis::step` hands it to its own continuation driver instead of

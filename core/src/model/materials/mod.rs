@@ -1,7 +1,4 @@
-/// Uniaxial material catalog. Closed enum, not a trait object (§2.1 of the
-/// implementation plan) — the set is fixed at compile time. `Steel01`,
-/// `Concrete01` and the `Parallel`/`Series`/`MinMax` composites land at M7
-/// stage 2.
+/// Uniaxial material catalog. Closed enum, not a trait object — the set is fixed at compile time.
 ///
 /// # Trial vs. commit
 ///
@@ -108,8 +105,8 @@ pub enum Material {
     /// "No tension": zero stiffness in tension (`strain >= 0`), linear
     /// elastic in compression. Equivalent to `Gap { e, gap: 0.0 }`, kept as
     /// its own variant since OpenSees exposes it separately and it's the
-    /// simplest possible nonlinear material (useful as the base case for M2
-    /// wiring). Stateless, same reasoning as `Gap`.
+    /// simplest possible nonlinear material (useful as the base case for
+    /// element wiring tests). Stateless, same reasoning as `Gap`.
     Ent {
         e: f64,
     },
@@ -124,7 +121,7 @@ pub enum Material {
     /// hardening shifts applied to the bounding lines; `strain`/`stress`
     /// are the last committed point (needed because the bounding formula
     /// `c = Cstress + E0*dStrain` references it directly, not just the
-    /// "obvious" history fields — see the M7 stage-2 handoff notes).
+    /// "obvious" history fields).
     Steel01 {
         fy: f64,
         e0: f64,
@@ -278,8 +275,8 @@ pub enum Material {
     /// sum of the children's individual strains. Not directly invertible
     /// (unlike `Parallel`), so `evaluate` runs its own small internal
     /// flexibility-based Newton loop, entirely self-contained within one
-    /// call — see the type's doc and the M7 stage-2 handoff notes for why
-    /// this doesn't violate the trial/commit purity rule. `child_strains`
+    /// call — see the type's doc for why this
+    /// doesn't violate the trial/commit purity rule. `child_strains`
     /// is the last converged per-child strain split, kept explicitly
     /// (mirroring OpenSees' own `SeriesMaterial::strain[]` array) since not
     /// every leaf material tracks its own committed strain. Construct via

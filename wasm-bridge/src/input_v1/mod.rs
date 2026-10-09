@@ -1,6 +1,5 @@
 //! `CarapaceInputV1` — the pysees ↔ Carapace wire format and its decoder,
-//! per docs/pysees-handoff.md. This module is the Rust-side half of M10
-//! (implementation-plan.md): header/table DTOs, the hand-written per-table
+//! (see `docs/input-format.md`). Header/table DTOs, the hand-written per-table
 //! decoder into a `carapace-core` `Domain`/`Analysis`, and the stepped
 //! `Session`/`advance` API. Every type here derives `serde`'s
 //! `Serialize`/`Deserialize` so `../boundary.rs` can hand them across

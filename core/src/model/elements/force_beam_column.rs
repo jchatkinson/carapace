@@ -7,7 +7,7 @@ use super::super::{
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
-/// A 2-node, force-based (flexibility-method) 2D beam-column (§3.1, M8):
+/// A 2-node, force-based (flexibility-method) 2D beam-column:
 /// unlike every other element in the catalog, its section forces are
 /// determined directly from the element's basic (reduced, rigid-body-mode-
 /// free) end forces via statics-exact force-interpolation functions —
@@ -33,7 +33,7 @@ use super::truss::{SpatialElementMatrix, SpatialElementVector};
 /// (`FiberSection`'s `M = -sum(stress*area*y)`, `ElasticBeamColumn`'s
 /// closed-form `4EI/L`/`2EI/L` pattern) and checked against
 /// `ElasticBeamColumn`'s exact elastic stiffness in
-/// `core/tests/m8_force_beam_column.rs` — that test is the actual source of
+/// `core/tests/elements/force_beam.rs` — that test is the actual source of
 /// truth for these signs, not a textbook convention taken on faith.
 ///
 /// **State determination algorithm** — ported directly from
@@ -113,8 +113,8 @@ pub struct ForceBeamColumn {
     local_force: SVector<f64, 6>,
 }
 
-/// `2` — number of section force/deformation components (`N`, `M`; §3.1's
-/// 2D scope, no shear/torsion).
+/// `2` — number of section force/deformation components (`N`, `M`; 2D, no
+/// shear/torsion).
 const NSD: usize = 2;
 /// `3` — number of basic (reduced) element dof.
 const NBD: usize = 3;
@@ -218,7 +218,7 @@ impl ForceBeamColumn {
     /// `[0,1]` along the length — see the type doc comment for the sign
     /// convention (`M(0) = -q2`, `M(1) = q3`, matched to `DispBeamColumn`'s
     /// curvature convention and verified by
-    /// `core/tests/m8_force_beam_column.rs`).
+    /// `core/tests/elements/force_beam.rs`).
     fn b_matrix(xi: f64) -> SMatrix<f64, NSD, NBD> {
         #[rustfmt::skip]
         let b = SMatrix::<f64, NSD, NBD>::from_row_slice(&[
@@ -321,7 +321,7 @@ impl ForceBeamColumn {
     /// section is actually in equilibrium with `q`, so the loop
     /// "converges" immediately every time and silently freezes `q`/`e` at
     /// a materially wrong, too-stiff answer once any section is nonlinear
-    /// (caught by `core/tests/m8_force_beam_column.rs`'s past-yield test).
+    /// (caught by `core/tests/elements/force_beam.rs`'s past-yield test).
     /// The source's two-stage correction plus its energy-based convergence
     /// check (`dv . dSe`, not the raw residual norm) avoid that trap;
     /// match its structure, not a simplification of it.
@@ -602,8 +602,8 @@ type StateDeterminationResult3 = (
 /// `(q2,q3)` conjugate to `(Mz`'s end values`)`, `(q4,q5)` conjugate to
 /// `My`'s. This whole construction — not just guessed by analogy — is
 /// verified against `ElasticBeamColumn3`'s exact biaxial-bending elastic
-/// stiffness in `core/tests/m17_force_beam_column3.rs`, the same role
-/// `core/tests/m8_force_beam_column.rs` plays for the planar element.
+/// stiffness in `core/tests/elements/force_beam.rs`, the same role
+/// `core/tests/elements/force_beam.rs` plays for the planar element.
 #[derive(Debug, Clone)]
 pub struct ForceBeamColumn3 {
     pub node_i: Node3Id,
@@ -748,7 +748,7 @@ impl ForceBeamColumn3 {
     /// basic system — see `ForceBeamColumn::section_load`. `My_p` is `Mz_p`'s
     /// form driven by `wz`, with no sign change: the `ry = -dw/dx` flip is
     /// already absorbed into `b_matrix`'s conjugate `q4`/`q5` (verified
-    /// against `ElasticBeamColumn3` in `core/tests/force_beam_element_load.rs`).
+    /// against `ElasticBeamColumn3` in `core/tests/elements/force_beam_loads.rs`).
     fn section_load(xi: f64, length: f64, load: &ElementLoad3) -> SVector<f64, NSD3> {
         let ElementLoad3::Uniform { wx, wy, wz } = *load;
         let bending = length * length * xi * (xi - 1.0) / 2.0;

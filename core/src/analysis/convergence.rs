@@ -3,7 +3,7 @@ use nalgebra::DVector;
 use super::AnalysisError;
 
 /// Convergence criterion for `Algorithm::Newton`/`KrylovNewton`. Closed enum
-/// (§2.1). Unused by `Algorithm::Linear` (which never iterates).
+///. Unused by `Algorithm::Linear` (which never iterates).
 ///
 /// Every variant is evaluated against the **accepted** state of an
 /// iteration (`IterationContext`): the residual reassembled *after* the

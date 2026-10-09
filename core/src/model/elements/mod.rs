@@ -34,7 +34,7 @@ pub use zero_length::{
 };
 
 new_key_type! {
-    /// Generational index into `Domain`'s element store (§2.2).
+    /// Generational index into `Domain`'s element store.
     pub struct ElementId;
 
     /// Generational index into `Domain3`'s element store. Distinct from
@@ -44,7 +44,7 @@ new_key_type! {
 }
 
 /// Element catalog. Closed enum, `match`-based dispatch, no `Box<dyn Trait>`
-/// (§2.1).
+///.
 #[derive(Debug, Clone)]
 pub enum Element {
     Truss(Truss),
@@ -111,7 +111,7 @@ impl Element {
     /// This element's equivalent nodal load vector (global coordinates,
     /// same DOF order as above) from `load` — the `ElementLoad` (if any)
     /// that whichever `LoadPattern` is currently being assembled has on
-    /// this element (§3.4) — e.g. a beam-column's distributed transverse
+    /// this element — e.g. a beam-column's distributed transverse
     /// load. Zero when `load` is `None`, and for elements with no
     /// element-load support at all (`Truss`, `ZeroLength`).
     fn form_load_vector(
@@ -155,9 +155,8 @@ impl Element {
         }
     }
 
-    /// This element's lumped-mass contribution (diagonal only — see §3.4:
-    /// "lumped, to start") in the same local DOF order, geometry-dependent
-    /// (`length`) so it needs both nodes. Zero for `ZeroLength` (a spring/
+    /// This element's lumped-mass contribution (diagonal only, lumped) in the same local DOF
+    /// order, geometry-dependent (`length`) so it needs both nodes. Zero for `ZeroLength` (a spring/
     /// connector, not a mass-bearing member) and for any element with the
     /// default `density = 0.0`.
     fn form_mass(&self, node_i: &Node, node_j: &Node) -> SVector<f64, ELEMENT_DOF> {
@@ -175,7 +174,7 @@ impl Element {
     /// Commit this element's material(s) at the given (final, converged)
     /// node state — see `Material`'s doc comment for why this is the only
     /// place a `Material` ever mutates. A no-op for `ElasticBeamColumn`
-    /// (no `Material` — its response is closed-form, §3.1) and for any
+    /// (no `Material` — its response is closed-form) and for any
     /// `ZeroLength` direction with no material assigned.
     fn commit(&mut self, node_i: &Node, node_j: &Node, load: Option<&ElementLoad>) {
         match self {
@@ -407,7 +406,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     }
 }
 /// Spatial element catalog — `Domain3`'s counterpart to `Element`. Closed
-/// enum, `match`-based dispatch, same reasoning as `Element` (§2.1).
+/// enum, `match`-based dispatch, same reasoning as `Element`.
 #[derive(Debug, Clone)]
 pub enum Element3 {
     Truss3(Truss3),

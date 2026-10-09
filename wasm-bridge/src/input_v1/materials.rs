@@ -1,5 +1,5 @@
 //! Wire-format material arena and its resolution into `core::Material`
-//! values. See pysees-handoff.md's "Materials/sections arena": composite
+//! values. Composite
 //! materials reference other arena entries by index rather than duplicating
 //! them inline, mirroring `core`'s own arena-of-indices philosophy.
 

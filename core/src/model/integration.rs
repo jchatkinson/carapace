@@ -1,6 +1,6 @@
 /// Numerical integration scheme along a frame element's length, relating
 /// per-section response (`FiberSection`) to element-level response — needed
-/// by `DispBeamColumn` (§3.1). Closed enum (§2.1).
+/// by `DispBeamColumn`. Closed enum.
 ///
 /// Point/weight tables are copied directly from OpenSees's own
 /// (`xara/SRC/quadrature/Frame/{Legendre,Lobatto}BeamIntegration.cpp`),
@@ -17,10 +17,10 @@ pub enum BeamIntegration {
     /// degree `2n-1`. `DispBeamColumn`'s usual default.
     Legendre { points: usize },
     /// Gauss-Lobatto: includes both end points, `n`-point rule exact to
-    /// degree `2n-3` — favored for `ForceBeamColumn` (M8) since end-section
+    /// degree `2n-3` — favored for `ForceBeamColumn` since end-section
     /// behavior matters most for plastic hinges there, but not needed by
     /// `DispBeamColumn` itself. Included now since both were asked for
-    /// together (§3.1) and the table-driven implementation cost is the
+    /// together and the table-driven implementation cost is the
     /// same either way.
     Lobatto { points: usize },
 }

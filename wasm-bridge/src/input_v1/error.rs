@@ -1,5 +1,5 @@
 //! `DecodeError` — decode's own diagnostic type, in `AnalysisError`'s style
-//! (implementation-plan.md §2.8): tagged variants carrying context, not
+//! (tagged variants carrying context, not
 //! sentinel codes. This is defense in depth against what `pysees`'s
 //! compiler can't see (engine/schema version skew, a stale snapshot run
 //! against a newer/older wasm build) — the compiler is expected to catch

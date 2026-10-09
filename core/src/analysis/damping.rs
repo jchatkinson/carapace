@@ -1,6 +1,5 @@
 /// Rayleigh (mass- and stiffness-proportional) damping: `C = alpha_m*M + beta_k*K`.
-/// A concrete struct, not an enum — Rayleigh damping is the one form §3.4
-/// asks for; other forms (e.g. explicit modal damping ratios) would be a
+/// A concrete struct, not an enum — Rayleigh damping is the only form provided; other forms (e.g. explicit modal damping ratios) would be a
 /// distinct, separate mechanism, not another variant of this one.
 #[derive(Debug, Clone, Copy)]
 pub struct RayleighDamping {

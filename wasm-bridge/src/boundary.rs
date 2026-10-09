@@ -1,7 +1,7 @@
-//! The `wasm_bindgen` boundary for M10's `input_v1` (`CarapaceInputV1`
+//! The `wasm_bindgen` boundary for `input_v1` (`CarapaceInputV1`
 //! decode/`Session`) API. First pass: a real JS object/array, deserialized
 //! via `serde-wasm-bindgen`, not yet the transferable-typed-array wire
-//! format docs/pysees-handoff.md specifies for `postMessage` — see
+//! format intended for `postMessage` — see
 //! `input_v1`'s module doc comment for why that's deferred. This is
 //! enough to drive `decode`/`Session::advance` from real JS (or `pysees`)
 //! code end to end; the zero-copy transfer optimization can replace

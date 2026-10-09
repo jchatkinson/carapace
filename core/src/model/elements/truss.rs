@@ -9,7 +9,7 @@ use super::super::{
 pub type SpatialElementMatrix = SMatrix<f64, SPATIAL_ELEMENT_DOF, SPATIAL_ELEMENT_DOF>;
 pub type SpatialElementVector = SVector<f64, SPATIAL_ELEMENT_DOF>;
 
-/// A 2-node axial truss: fixed-size element-local linear algebra (§2.4), no
+/// A 2-node axial truss: fixed-size element-local linear algebra, no
 /// heap allocation in the hot path. Only ever populates the translational
 /// DOF entries of the (3-DOF-per-node) local/global matrices; the rotation
 /// entries stay zero. Its `dof_mask` is therefore translations only, so a

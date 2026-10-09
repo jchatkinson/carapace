@@ -33,7 +33,7 @@ pub(crate) struct IterationOutcome {
 /// `form_system`/`correct_du` and updated by `correct_du`'s returned delta
 /// — `Analysis` uses it for the load factor (`Integrator::
 /// DisplacementControl`'s corrector adjusts it every iteration, per its
-/// own doc comment); `TransientAnalysis` (§6.1) has no analogous
+/// own doc comment); `TransientAnalysis` has no analogous
 /// solved-for scalar (`time` is fixed for the whole step by `dt`), so it
 /// passes `0.0` and a `correct_du` that always returns `(du, 0.0)`
 /// unchanged. This is what keeps `Integrator::DisplacementControl` working

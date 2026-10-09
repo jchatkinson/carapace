@@ -56,7 +56,7 @@ pub(super) fn evaluate(m: &Material, strain: f64) -> (f64, f64, Material) {
 
     // Quick return: tension, zero stiffness, no compression-envelope
     // history update — but strain/stress still commit to the new
-    // point (point 2 of the M7 stage-2 porting recipe).
+    // point.
     if strain > 0.0 {
         return (
             0.0,

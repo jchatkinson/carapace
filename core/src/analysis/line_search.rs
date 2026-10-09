@@ -1,5 +1,5 @@
 /// Post-processes a raw Newton correction to actually reduce the residual,
-/// rather than accepting it outright. Closed enum (§2.1). Ported from
+/// rather than accepting it outright. Closed enum. Ported from
 /// Xara's `SRC/analysis/algorithm/equiSolnAlgo/search/` (`docs/
 /// algorithms.md` §4): both variants bracket a sign change in the 1-D
 /// "energy" `s(eta) = du . residual(eta)` by geometric expansion of `eta`,

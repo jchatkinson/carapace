@@ -1,9 +1,8 @@
 use super::Material;
 
 /// One fiber: a small patch of cross-section area at distance `y` from the
-/// section centroid, carrying a `Material`. 2D scope only (§3.1's `NDM`) —
-/// `y` alone, no `z`, since bending is about the section's local z-axis
-/// only.
+/// section centroid, carrying a `Material`. 2D only: `y` alone, no `z`,
+/// since bending is about the section's local z-axis only.
 #[derive(Debug, Clone)]
 pub struct Fiber {
     pub y: f64,
@@ -244,7 +243,7 @@ mod tests {
         assert!((m - e * iz * 0.0002).abs() < 1e-6);
     }
 
-    /// M7 stage-2 acceptance test (implementation-plan §6): a real
+    /// Nonlinear composite check: a real
     /// reinforced-concrete-style section — one `Steel01` rebar layer plus
     /// two `Concrete01` layers — pushed past first yield/cracking and then
     /// partially unloaded. No closed form exists for a nonlinear composite

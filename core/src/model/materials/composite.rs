@@ -87,8 +87,7 @@ pub(super) fn evaluate_min_max(
 /// update) rather than only once after the loop, since — unlike
 /// OpenSees, which carries `Tstress`/`Ttangent` across many external
 /// `setTrialStrain` calls to slowly converge — this must converge
-/// within one `evaluate` call. See the type's doc comment and the M7
-/// stage-2 handoff notes.
+/// within one `evaluate` call. See the type's doc comment.
 pub(super) fn evaluate_series(m: &Material, total_strain: f64) -> (f64, f64, Material) {
     let Material::Series {
         children,

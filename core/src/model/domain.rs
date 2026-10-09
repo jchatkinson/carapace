@@ -43,7 +43,7 @@ impl DofTerms<'_> {
 }
 
 /// Owns all nodes, elements, and load patterns. No serialization/broker
-/// machinery (§2.3) — this is the whole model, in memory, for one worker.
+/// machinery — this is the whole model, in memory, for one worker.
 /// `Clone` backs `Analysis`/`TransientAnalysis`'s snapshot-and-restore-on-
 /// failure (a failed step shouldn't leave nodal displacement/velocity/
 /// acceleration partway through a discarded Newton iteration) — see
@@ -269,8 +269,7 @@ where
     /// separate term here: it's an equivalent inertial pseudo-force at free
     /// DOFs only (`GroundMotion`'s own doc comment), never a real applied
     /// load at any DOF — and this crate's dynamics are relative-
-    /// displacement (`docs/spatial-architecture.md`), so a fixed DOF's
-    /// velocity/acceleration are always exactly zero and contribute nothing
+    /// displacement, so a fixed DOF's velocity/acceleration are always exactly zero and contribute nothing
     /// to its reaction regardless of profile or excitation.
     pub fn reaction(&self, node: NId, dof: usize, pseudo_time: f64) -> f64 {
         let view = self.node_view();
@@ -704,8 +703,8 @@ where
     /// (`ConstraintHandler::Transformation`). Fixed
     /// DOFs, and constrained DOFs whose retained DOF is itself fixed, get
     /// no equation number. This is the entire numbering pass — done once,
-    /// not re-checked every step (§4.4: no live re-solve means no
-    /// `hasDomainChanged()`-style machinery).
+    /// not re-checked every step (no `hasDomainChanged()`-style
+    /// machinery).
     ///
     /// Constrained DOFs must be excluded from the *first* pass (not just
     /// overwritten afterwards) — otherwise the equation number allocated
@@ -850,9 +849,8 @@ where
     /// Number DOFs (idempotent given a fixed set of nodes) and assemble the
     /// lumped-mass matrix's diagonal over free DOFs — user-assigned
     /// `Node::mass` plus each element's own lumped mass (`Element::
-    /// form_mass`, M6; zero unless a `Truss`/`ElasticBeamColumn` was given
-    /// a nonzero `density`). Needed by modal analysis (M5) and time-history
-    /// analysis (M6). Just the diagonal, not a full (dense or sparse) N×N
+    /// form_mass`; zero unless a `Truss`/`ElasticBeamColumn` was given
+    /// a nonzero `density`). Needed by modal and time-history analysis. Just the diagonal, not a full (dense or sparse) N×N
     /// matrix — `M` is diagonal by construction (lumped mass), so storing
     /// anything more is pure waste, the same class of mistake a dense
     /// stiffness matrix would be (see `SparseMatrix`'s doc comment).
@@ -1107,7 +1105,7 @@ where
     }
 
     /// Gather free-DOF displacement/velocity/acceleration into dense
-    /// vectors — `TransientAnalysis` (M6) state, unlike static `Analysis`
+    /// vectors — `TransientAnalysis` state, unlike static `Analysis`
     /// which only ever mutates displacement incrementally.
     pub(crate) fn gather_displacement(&self) -> DVector<f64> {
         self.gather(|node, dof| node.displacement[dof])
@@ -1445,7 +1443,7 @@ impl Domain {
 /// `normal = Z` (`a = X, b = Y`) into the formula above reproduces exactly
 /// those two equations. Verified through the full `Domain3`/`Analysis3`
 /// stack for rigid-rotation invariance and lever-arm displacement magnitude
-/// (`core/tests/m20_rigid_diaphragm3.rs`), not just asserted by that
+/// (`core/tests/constraints/rigid_diaphragm_3d.rs`), not just asserted by that
 /// cross-check.
 ///
 /// Lever arms are computed once here, from each node's fixed reference
@@ -1458,7 +1456,7 @@ impl Domain {
 /// that only the spatial profile's `Node3`/`SpatialDof` provide.
 impl Domain3 {
     /// `rigid_diaphragm_about` with `normal = Axis3::Y` — the "up" axis in
-    /// this crate's y-up global convention (see spatial-architecture.md),
+    /// this crate's y-up global convention,
     /// so the diaphragm plane is the horizontal `x`-`z` plane: the common
     /// case (an ordinary floor diaphragm).
     pub fn rigid_diaphragm(&mut self, retained: Node3Id, constrained: &[Node3Id]) {

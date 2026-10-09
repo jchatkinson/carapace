@@ -1,5 +1,5 @@
 /// Which tangent stiffness an `Algorithm::Newton`/`KrylovNewton` iteration
-/// solves against. Closed enum (§2.1) — mirrors Xara's `TangentFlagType`
+/// solves against. Closed enum — mirrors Xara's `TangentFlagType`
 /// (`CURRENT_TANGENT` / `INITIAL_TANGENT` / `PREDICTOR_TANGENT`), which
 /// every Newton-family algorithm class there takes as a constructor
 /// argument rather than hard-coding (`docs/algorithms.md` §3).

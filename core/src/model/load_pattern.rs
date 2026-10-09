@@ -6,7 +6,7 @@ use slotmap::new_key_type;
 use super::{ElementId, NodeId, NDF};
 
 new_key_type! {
-    /// Generational index into `Domain`'s load-pattern store (§2.2).
+    /// Generational index into `Domain`'s load-pattern store.
     pub struct LoadPatternId;
 }
 
@@ -15,7 +15,7 @@ new_key_type! {
 /// exactly the three shapes Carapace's scope actually needs (`Trig`/
 /// `Rectangular`/`Pulse` etc. are for shaping a *dynamic* excitation
 /// pattern, not a quasi-static load/displacement protocol — out of scope
-/// until something needs them, §3). Closed enum (§2.1).
+/// until something needs them). Closed enum.
 #[derive(Debug, Clone)]
 pub enum LoadSeries {
     /// `factor(t) = 1.0` for every `t` — the pattern is always fully
@@ -34,8 +34,8 @@ pub enum LoadSeries {
     /// value beyond the last control point (Xara's `useLast` default),
     /// and the first point's value before the first. `times` must be
     /// sorted ascending and the same length as `factors` — not enforced by
-    /// the type (§2.8 is about runtime failure; a malformed path is a
-    /// model-construction error, same class as `AnalysisBuilder::build`'s
+    /// the type (a malformed path is a model-construction error, not a
+    /// runtime failure, same class as `AnalysisBuilder::build`'s
     /// `ConstraintHandler` assertion).
     Path { times: Vec<f64>, factors: Vec<f64> },
 }
@@ -330,9 +330,8 @@ pub(crate) struct LoadPattern<
     /// `Some(frozen_factor)` once `Domain::hold_pattern_constant` has been
     /// called — computed once, at freeze time, from the exact pseudo-time
     /// the caller was at (not lazily cached on every assemble call, which
-    /// would require `assemble_reference_load` to take `&mut self` — see
-    /// implementation-plan discussion). `None` means "still driven by
-    /// `series`".
+    /// would require `assemble_reference_load` to take `&mut self`). `None` means
+    /// "still driven by `series`".
     frozen_factor: Option<f64>,
     nodal_loads: HashMap<NId, [f64; NDOF]>,
     element_loads: HashMap<EId, EL>,
@@ -368,7 +367,7 @@ where
             .unwrap_or_else(|| self.series.factor(pseudo_time) * self.scale_factor)
     }
 
-    /// Zero once frozen (§`LoadSeries::slope`'s doc comment) — a frozen
+    /// Zero once frozen (see `LoadSeries::slope`) — a frozen
     /// pattern doesn't respond to further pseudo-time change.
     pub(crate) fn sensitivity(&self, pseudo_time: f64) -> f64 {
         if self.frozen_factor.is_some() {
