@@ -177,15 +177,15 @@ set on subsequent calls. Already-produced recorder batches remain available.
 
 ## Verification and remaining gaps
 
-Native tests in `core/tests/m_algorithm_richness.rs` and
-`core/tests/m21_transient_corrector.rs` verify the solver implementations.
-`wasm-bridge/tests/m10_carapace_input_v1.rs` verifies configurable algorithms
+Native tests in `core/tests/analysis/algorithms.rs` and
+`core/tests/dynamics/transient_corrector.rs` verify the solver implementations.
+`wasm-bridge/tests/wire/stages.rs` verifies configurable algorithms
 against nonlinear static and transient equilibrium. The generated-package
 test `wasm-bridge/tests/boundary-smoke.ts` covers both profiles, legacy inputs,
 object forms, validation, transient convergence failure, and arc length.
-Arc-length continuation is verified by `core/tests/arclength_softening.rs`,
-`core/tests/arclength_continuation.rs` and
-`wasm-bridge/tests/arclength_session.rs`.
+Arc-length continuation is verified by `core/tests/analysis/arclength_softening.rs`,
+`core/tests/analysis/arclength_continuation.rs` and
+`wasm-bridge/tests/wire/arclength.rs`.
 
 The JS interface still lacks initial nodal displacement/velocity input,
 iteration/factorization diagnostics for the non-arc-length integrators,

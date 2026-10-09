@@ -1,5 +1,5 @@
 // Run with Node 22.18+ after wasm-pack build; also type-check against generated .d.ts.
-import { decodeInput, axial_displacement } from "../../pkg/carapace_wasm.js";
+import { decodeInput } from "../../pkg/carapace_wasm.js";
 import type {
   AlgorithmSpec, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, SequenceSpec, StepOutcome,
 } from "../../pkg/carapace_wasm.js";
@@ -67,7 +67,6 @@ const malformed = expectThrow(() => {
   decodeInput({ header: {} });
 });
 assert(String(malformed).includes("malformed CarapaceInputV1"), "malformed input error");
-assert(Math.abs(axial_displacement(50, 100, 2, 30000) - 1 / 12) < 1e-12, "legacy export");
 
 function yieldingInput(ndm: number, transient: boolean, algorithm?: AlgorithmSpec): CarapaceInputV1 {
   const input = emptyInput(ndm);

@@ -281,12 +281,11 @@ undocumented.
    on anything here.
 5. **Failure and cancellation contract — done.** Every `RecorderBatch`
    carries a deterministic `first_sample`/`stage_index`, verified by
-   `wasm-bridge/tests/m10_carapace_input_v1.rs`'s multi-stage,
+   `wasm-bridge/tests/wire/stages.rs`'s multi-stage,
    multi-`advance()`-call assertions.
 
 Relevant files: `wasm-bridge/src/input_v1/session.rs`,
-`wasm-bridge/src/boundary.rs`, `wasm-bridge/tests/m10_carapace_input_v1.rs`,
-`wasm-bridge/tests/m10_spatial_input_v1.rs`, and
+`wasm-bridge/src/boundary.rs`, `wasm-bridge/tests/wire/` (stages, recorders), and
 `wasm-bridge/tests/boundary-smoke.ts` (generated JS interface and solver settings).
 
 ## Delivery stages and acceptance gates
@@ -296,7 +295,7 @@ Relevant files: `wasm-bridge/src/input_v1/session.rs`,
    rules match across both repositories (verified by reading both, not just
    by the protocol type files agreeing).
 2. **Carapace bounded-batch slice — done and tested.** Native session tests
-   (`wasm-bridge/tests/m10_carapace_input_v1.rs`) confirm exact sample/time/
+   (`wasm-bridge/tests/wire/stages.rs`) confirm exact sample/time/
    value ordering across multiple `advance()` calls and a stage transition.
 3. **pysees storage worker — implemented, not verified.** IndexedDB schema
    and lifecycle operations exist (`db.ts`), but there is no test exercising

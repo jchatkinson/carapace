@@ -60,8 +60,6 @@ session.free()
 loop and keep a worker responsive. Once `error` is set it is sticky: later
 stages are not attempted.
 
-The other exports (`axial_displacement`, `zero_length_ent_displacement`, ...)
-are milestone verification functions, not part of the model API.
 
 ## `CarapaceInputV1`
 

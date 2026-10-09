@@ -153,7 +153,6 @@ carapace/
 ├── core/           # carapace-core: all FE logic. No wasm-bindgen dependency —
 │                    compiles and tests identically on native and wasm32 targets.
 ├── wasm-bridge/     # carapace-wasm: input decoding, session API, and JS adapter
-│   └── src/verification.rs # milestone examples for wasm/Node verification
 └── docs/
     ├── architecture.md             # domain model, element interface, how to extend
     ├── algorithms.md               # current solver API and JS configuration
@@ -194,8 +193,6 @@ inside a wasm runtime directly.
 in `pkg/`, including `carapace_wasm.d.ts`. Do not edit generated files.
 The application interface is `decodeInput(input)` → `WasmSession`, with
 `advance(stepBudget)` → `StepOutcome` and `currentStageId()` methods.
-The milestone functions remain exported for compatibility; their implementation
-lives in `wasm-bridge/src/verification.rs`.
 
 Wire-format types in `wasm-bridge/src/input_v1/` derive `tsify::Tsify` alongside
 Serde, so fields, camelCase names, and tagged enums generate TypeScript

@@ -52,11 +52,10 @@ Departures from the plan, each for a reason found while implementing:
   orientation `eps_orient = 1e-6`, landing tolerance `1e-8` of the
   bracketing step's change, Schur cancellation `1e-8`.
 
-Tests: `core/tests/arclength_softening.rs` (§8: softening peak, load-control
+Tests: `core/tests/analysis/arclength_softening.rs` (§8: softening peak, load-control
 baseline and rollback, series snap-back, reverse direction),
-`core/tests/arclength_continuation.rs` (§9), `wasm-bridge/tests/
-arclength_session.rs` and the arc-length section of `wasm-bridge/tests/
-boundary-smoke.ts` (wire, session ordering, both profiles), and unit tests
+`core/tests/analysis/arclength_continuation.rs` (§9), `wasm-bridge/tests/wire/arclength.rs`
+and the arc-length section of `wasm-bridge/tests/boundary-smoke.ts` (wire, session ordering, both profiles), and unit tests
 in `bordered.rs`/`convergence.rs`.
 
 Not yet covered by tests:
@@ -505,7 +504,7 @@ where applicable; update session error mapping for both profiles.
 
 ## 8. Degrading-strength integration test
 
-Create `core/tests/arclength_softening.rs`. Use existing `ZeroLength` and
+Create `core/tests/analysis/arclength_softening.rs`. Use existing `ZeroLength` and
 `Material::hysteretic`; no production material addition is required. Two
 coincident nodes, one fully fixed, the other free only in x. Apply a linear
 unit reference force to the free x DOF. Define the spring:

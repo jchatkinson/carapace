@@ -1,5 +1,5 @@
 //! Shared helpers for driving a `DisplacementControl` cyclic protocol on a
-//! single controlled DOF — used by `tests/m_cyclic_protocol.rs`'s pattern
+//! single controlled DOF — used by `tests/analysis/cyclic_protocol.rs`
 //! and `examples/cyclic_material.rs` (the openseespy comparison harness in
 //! `comparison/`).
 

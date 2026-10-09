@@ -6,7 +6,3 @@ pub mod material_probe;
 
 mod boundary;
 pub use boundary::{create_material_probe, decode_input, WasmMaterialProbe, WasmSession};
-
-// Preserve existing milestone exports for verification callers.
-pub mod verification;
-pub use verification::*;

@@ -46,9 +46,14 @@ uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, 
 
 ```
 cargo test                                   # all native tests (core + wasm-bridge)
-cargo test -p carapace-core --test m3_beam   # one integration test
+cargo test -p carapace-core --test elements   # one integration test binary (elements, analysis, dynamics, constraints, continuum, materials; wasm-bridge: wire)
 cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
 ```
+
+Integration tests are one binary per area (`tests/<area>/main.rs` plus a module per feature):
+`core/tests/{elements,analysis,dynamics,constraints,continuum,materials}` and `wasm-bridge/tests/wire`
+(shared builders in `wire/common.rs`). Add a test to the module for its feature and give 2D and 3D cases
+to the same module. Each file's `//!` header says what it verifies and against which reference.
 
 The wasm bundle PySees uses is built from here by `../pysees/scripts/build-carapace.sh` (cargo build, then
 `wasm-bindgen --target web`, then copied into `src/app/carapace/wasm`). Rebuild and copy it after any
