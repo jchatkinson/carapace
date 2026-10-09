@@ -14,7 +14,7 @@ exists*, but this document should still be updated to match — don't let it rot
 Detailed rationale for individual design decisions and ported algorithms lives
 in doc comments on the relevant source/test files, not here — this document
 stays at the architecture/scope/roadmap level and points into the code for
-specifics. See [`docs/xara-feasibility.md`](../xara-feasibility.md) for the
+specifics. See [`xara-feasibility.md`](xara-feasibility.md) for the
 investigation into compiling Xara/OpenSees's C++ directly to wasm that this
 project's architecture reacts against.
 
@@ -61,7 +61,7 @@ enum Material { Elastic(Elastic), Steel01(Steel01), Parallel(Vec<Box<Material>>)
 ```
 
 `match`-based dispatch, no `Box<dyn Trait>`, no runtime registration — see
-`docs/xara-feasibility.md` for the broker-eager-construction problem this
+`xara-feasibility.md` for the broker-eager-construction problem this
 sidesteps by construction (there's no broker to eagerly construct).
 
 **Exception — analysis strategy types are different and get enums too, but for
@@ -89,7 +89,7 @@ No `sendSelf`/`recvSelf`, no `Channel`, no `ObjectBroker`, no embedded
 interpreter of any kind. These exist in OpenSees/Xara for MPI domain
 decomposition and database persistence — irrelevant to a single-threaded wasm
 worker, and a major source of dependency-closure bloat in that architecture
-(see `docs/xara-feasibility.md`).
+(see `xara-feasibility.md`).
 
 ### 2.4 Fixed-size, stack-allocated element-local linear algebra
 
@@ -152,7 +152,7 @@ not a mode that pads every planar model with unused DOFs; see
 | ZeroLength | Simple | No geometry/integration; direct material evaluation per DOF. |
 | ElasticBeamColumn | Simple | Closed-form stiffness, no iteration. |
 | DispBeamColumn | Moderate | Needs `BeamIntegration` (Gauss-Legendre/Lobatto) + fiber sections. One Newton loop total (domain-level). |
-| ForceBeamColumn | **High — own milestone (M8)** | Nested element-level equilibrium iteration, architecturally distinct from every other element — see `docs/xara-feasibility.md` #5. |
+| ForceBeamColumn | **High — own milestone (M8)** | Nested element-level equilibrium iteration, architecturally distinct from every other element — see `xara-feasibility.md` #5. |
 
 Fiber sections: mechanically simple (loop over fibers, accumulate
 stress-resultant + tangent from each fiber's uniaxial material response,
@@ -315,13 +315,13 @@ are the real, current implementation.)
    `shift = 0` is implemented (lowest frequencies); a nonzero shift
    (targeting a frequency band, or handling near-singular `K` for buckling)
    is a natural extension, not built until something needs it. The ARPACK
-   f2c feasibility spike (`reference/xara-spike/`) remains available
+   f2c feasibility spike (since removed; see git history) was
    reference material for an eventual real ARPACK comparison.
 
 3. **`cmx.h`-equivalent small-matrix inversion.** Not actually a Carapace
    decision — `nalgebra`/`faer` both handle small fixed-size matrix inversion
    natively; Xara's missing-implementation bug in this area (see
-   `docs/xara-feasibility.md`) has no equivalent risk here.
+   `xara-feasibility.md`) has no equivalent risk here.
 
 ---
 
@@ -697,14 +697,14 @@ milestone: native `cargo test` first, then `wasm32-unknown-unknown` build +
 Every milestone with numerical output gets checked against a known-correct
 value — either closed-form (where one exists) or against **Xara's own native
 build as an oracle** for cases without a simple closed form (see
-`docs/xara-feasibility.md`). When in doubt about expected behavior for a
+`xara-feasibility.md`). When in doubt about expected behavior for a
 formulation, run and diff against the Xara spike rather than relying on
 documentation alone.
 
 **Verification order for every milestone:** native `cargo test` first, then
 `wasm32-unknown-unknown` build + `wasm-bindgen` + Node execution. Don't skip
 the native step to save time — it isolates logic bugs from
-platform/toolchain bugs (see `docs/xara-feasibility.md`'s `s_copy` note for
+platform/toolchain bugs (see `xara-feasibility.md`'s `s_copy` note for
 why this discipline exists).
 
 ---
@@ -712,10 +712,9 @@ why this discipline exists).
 ## 8. Reference material location
 
 The Xara C++ spike and the standalone ARPACK f2c feasibility spike that
-grounded this plan's early decisions are preserved (source-level artifacts
-and dependency-closure lists, not build outputs) at `reference/xara-spike/`
-— see that directory's README for what's there, and
-`docs/xara-feasibility.md` for the design conclusions drawn from it.
+grounded this plan's early decisions were removed from the tree (see git
+history, `reference/xara-spike/`); `xara-feasibility.md` records the design
+conclusions drawn from them.
 
 ---
 

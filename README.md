@@ -8,8 +8,7 @@ one to run efficiently inside a browser Web Worker as a `.wasm` module.
 
 Carapace is heavily inspired by [OpenSees](https://opensees.berkeley.edu/) /
 [Xara](https://xara.so) but is not a port of either — it's a from-scratch
-reimplementation. See [`docs/xara-feasibility.md`](docs/xara-feasibility.md)
-for why a direct C++-to-wasm port wasn't the path taken.
+reimplementation.
 
 ## Features
 
@@ -158,7 +157,6 @@ carapace/
     ├── algorithms.md               # current solver API and JS configuration
     ├── arclength.md                # arc-length continuation design record
     ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
-    ├── xara-feasibility.md          # why this is a from-scratch reimplementation, not a port
     └── obsolete/                    # superseded planning docs, kept for history
 ```
 
@@ -226,10 +224,6 @@ For the frontend/worker boundary and results persistence, read
 For implemented solver settings, JS examples, and remaining event-to-event
 stepping design, read
 **[`docs/algorithms.md`](docs/algorithms.md)**.
-
-For the reasoning behind building a from-scratch engine instead of porting
-Xara/OpenSees to WebAssembly, read
-**[`docs/xara-feasibility.md`](docs/xara-feasibility.md)**.
 
 For historical design rationale — the original milestone plan, the
 3D-profile architecture decisions, the pysees handoff contract, friction and algorithm design rationale, and a

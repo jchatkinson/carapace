@@ -13,9 +13,7 @@ for the C++ — and produced correct results under Node. This worked: it's a
 real, running proof that the numerics and toolchain are sound, and it's the
 numerical oracle Carapace's own tests verify against (see
 `docs/obsolete/implementation-plan.md` §8, "Verification methodology"). The spike
-itself is preserved at `reference/xara-spike/` (source-level artifacts and
-dependency-closure lists, not build outputs) — see that directory's README
-for what's there.
+itself was later removed from the tree (see git history, `reference/xara-spike/`).
 
 ## What it surfaced
 
