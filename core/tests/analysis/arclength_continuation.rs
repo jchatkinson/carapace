@@ -105,6 +105,10 @@ fn arc(result: &StepResult) -> carapace_core::analysis::ArcStepInfo {
 // Elastic closed forms
 // ---------------------------------------------------------------------------
 
+/// On a linear spring the arc-length path is the straight line lambda = k*u, so each step advances
+/// by the closed-form increment dlambda = s / sqrt((1/(k u*))^2 + (1/lambda*)^2), in both the
+/// increasing and decreasing directions. The predictor is already exact, so no corrector solves are
+/// needed, the determinant sign stays positive and no bifurcation is flagged.
 #[test]
 fn elastic_closed_form_planar_needs_no_corrector_and_honours_direction() {
     let (k, u_star, lambda_star, s): (f64, f64, f64, f64) = (250.0, 0.02, 4.0, 0.1);
@@ -134,6 +138,8 @@ fn elastic_closed_form_planar_needs_no_corrector_and_honours_direction() {
     }
 }
 
+/// 3D (`Domain3`) counterpart of the planar elastic closed-form test: a linear `ZeroLength3` spring
+/// continued by arc-length follows the exact straight path lambda = k*u.
 #[test]
 fn elastic_closed_form_spatial() {
     let (k, u_star, lambda_star, s): (f64, f64, f64, f64) = (80.0, 0.05, 2.0, 0.2);
@@ -314,6 +320,9 @@ impl ElementOps<2, 3, NodeId> for TestElement {
 
 type TestDomain = Domain<2, 3, NodeId, TestElement>;
 
+/// Starting in equilibrium exactly at the peak of a softening spring (tangent exactly zero,
+/// closed-form peak force k*a/e), continuation needs a seed direction and then continues past the
+/// peak along the softening branch.
 #[test]
 fn exactly_singular_tangent_needs_a_seed_and_then_continues_past_the_peak() {
     let (k, a) = (100.0, 0.5);
@@ -386,6 +395,9 @@ fn exactly_singular_tangent_needs_a_seed_and_then_continues_past_the_peak() {
     assert!(u_prev > 1.5 * a);
 }
 
+/// A smooth softening spring in series with a stiffer linear one gives snap-back: displacement
+/// turns back while the tangent stays nonsingular. With both the secant and tangent predictors the
+/// path is traced through the turning points, with the load decreasing and then recovering.
 #[test]
 fn smooth_snap_back_through_nonsingular_displacement_turning_points() {
     let (k, a) = (100.0, 0.5);
@@ -613,6 +625,9 @@ fn softening_config() -> ArcLength {
     config
 }
 
+/// A displacement stop target with `exact: true` on the softening spring lands exactly on the
+/// target (u = 0.02, load factor 6.0, zero overshoot), and further steps after the stop are refused
+/// without changing the state.
 #[test]
 fn displacement_target_lands_exactly_and_further_steps_are_refused() {
     let (domain, free) = softening();
@@ -648,6 +663,9 @@ fn displacement_target_lands_exactly_and_further_steps_are_refused() {
     assert_eq!(analysis.domain().node(free).displacement[0], before);
 }
 
+/// Load-factor stop criteria on an elastic spring: an exact target (lambda = 1) is landed on, then
+/// reversing direction restarts the history at lambda = 1 and the zero-crossing criterion ends the
+/// phase.
 #[test]
 fn load_factor_target_and_zero_crossing() {
     let (domain, _fixed, free) = elastic_spring(100.0);
@@ -691,6 +709,9 @@ fn load_factor_target_and_zero_crossing() {
     assert!(lambda <= 0.0);
 }
 
+/// Stop criteria: a maximum chord length ends the phase after the expected number of steps, and
+/// reopening the phase with new criteria (a step cap of 3) keeps the direction and chord history
+/// and stops after exactly three more steps.
 #[test]
 fn chord_and_step_caps_and_reopening_with_new_criteria() {
     let (domain, _fixed, free) = elastic_spring(100.0);
@@ -735,6 +756,8 @@ fn chord_and_step_caps_and_reopening_with_new_criteria() {
 // Auto-scale
 // ---------------------------------------------------------------------------
 
+/// The automatic displacement scale equals the hand-computed u* = lambda* p / K (0.01 here), and a
+/// run with `ArcScales::Auto` reproduces the path of the same run with that scale given explicitly.
 #[test]
 fn auto_scale_derives_the_hand_computed_scale_and_reproduces_the_path() {
     let run = |scales: ArcScales| {
@@ -764,6 +787,9 @@ fn auto_scale_derives_the_hand_computed_scale_and_reproduces_the_path() {
     }
 }
 
+/// With `ArcScales::Auto` the displacement scale is derived from the first tangent. Starting
+/// exactly at the peak of a softening spring the tangent is singular, so no scale can be derived
+/// and the first step fails with `SingularSystem` rather than continuing with a bad scale.
 #[test]
 fn auto_scale_with_singular_first_tangent_fails_initialization() {
     let (k, a) = (100.0, 0.5);
@@ -796,6 +822,9 @@ fn auto_scale_with_singular_first_tangent_fails_initialization() {
 // Cutbacks, rollback and material-history isolation
 // ---------------------------------------------------------------------------
 
+/// On a smooth exponential-softening spring with only two corrector solves allowed per step, an
+/// oversized radius needs cutbacks. Every step still converges, the radius stays within its bounds,
+/// and each accepted point lies on the exact force-displacement curve.
 #[test]
 fn oversized_radius_cuts_back_and_the_accepted_path_stays_on_the_oracle() {
     // Smooth nonlinearity with a deliberately tiny budget of two corrector
@@ -835,6 +864,9 @@ fn oversized_radius_cuts_back_and_the_accepted_path_stays_on_the_oracle() {
     );
 }
 
+/// A step that fails after exhausting its cutbacks (an unreachable tolerance on the step that
+/// crosses the kink) restores the domain and leaves the continuation history untouched, so retrying
+/// with a valid tolerance reproduces the clean reference run.
 #[test]
 fn exhausted_cutbacks_restore_everything_and_leave_history_untouched() {
     // Clean reference run.
@@ -900,6 +932,9 @@ fn exhausted_cutbacks_restore_everything_and_leave_history_untouched() {
 // Frozen loads, phase transitions, invalid states
 // ---------------------------------------------------------------------------
 
+/// Gravity is applied under load control and frozen with `hold_pattern_constant`, then the lateral
+/// pattern is continued by arc-length. The frozen gravity displacement must stay constant while
+/// only the lateral load factor evolves.
 #[test]
 fn frozen_gravity_stays_constant_while_lateral_load_is_continued() {
     let (kx, ky, gravity) = (200.0, 500.0, -50.0);
@@ -945,6 +980,8 @@ fn frozen_gravity_stays_constant_while_lateral_load_is_continued() {
     }
 }
 
+/// Entry validation: a model that is not in equilibrium, an active `Path` load series, and a model
+/// with no continued load are each rejected with a structured error instead of producing results.
 #[test]
 fn invalid_entry_states_and_load_definitions_are_rejected() {
     let arc = || Integrator::ArcLength(ArcLength::fixed(0.1, explicit(0.01, 1.0)));
@@ -986,6 +1023,9 @@ fn invalid_entry_states_and_load_definitions_are_rejected() {
     );
 }
 
+/// Every invalid arc-length option (non-finite scales, bad radii or tolerances) and unsupported
+/// algorithm/convergence-test combination is reported as `InvalidOption` naming the offending
+/// field.
 #[test]
 fn invalid_options_and_unsupported_combinations_are_rejected() {
     let invalid = |field| AnalysisError::InvalidOption { field };
@@ -1109,6 +1149,9 @@ fn invalid_options_and_unsupported_combinations_are_rejected() {
 // Constraints and scale invariance
 // ---------------------------------------------------------------------------
 
+/// Two parallel degrading springs on nodes tied with `equal_dof` are equivalent to one spring of
+/// twice the strength on a single node: the two arc-length paths agree, so continuation works in
+/// the constraint-reduced coordinates.
 #[test]
 fn equal_dof_reduced_coordinates_match_the_equivalent_single_node_model() {
     // Two parallel degrading springs to two nodes tied in x is one spring of
@@ -1149,6 +1192,9 @@ fn equal_dof_reduced_coordinates_match_the_equivalent_single_node_model() {
     }
 }
 
+/// The path is invariant to units and reference-load scaling: the same degrading spring in
+/// millimetres with a reference load of 4 and matching arc scales recovers the metre/unit-load path
+/// after rescaling.
 #[test]
 fn unit_and_reference_load_changes_with_matching_scales_recover_the_same_path() {
     // Baseline: metres, unit reference load.
@@ -1200,6 +1246,9 @@ fn unit_and_reference_load_changes_with_matching_scales_recover_the_same_path() 
     }
 }
 
+/// Mutating the domain between steps (here adding a constant load) discards the continuation
+/// history and re-validates the entry state; the broken equilibrium is reported as
+/// `InitialStateNotInEquilibrium`.
 #[test]
 fn domain_mut_discards_history_and_revalidates() {
     let (domain, _fixed, free) = elastic_spring(100.0);

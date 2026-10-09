@@ -54,6 +54,8 @@ Integration tests are one binary per area (`tests/<area>/main.rs` plus a module 
 `core/tests/{elements,analysis,dynamics,constraints,continuum,materials}` and `wasm-bridge/tests/wire`
 (shared builders in `wire/common.rs`). Add a test to the module for its feature and give 2D and 3D cases
 to the same module. Each file's `//!` header says what it verifies and against which reference.
+The docs site publishes a test report (`docs-site/gen_tests.py`) built from `cargo test` output plus each test's `///` doc comment
+and its file's `//!` header, so describe what a test checks, its reference and its tolerance there.
 
 The wasm bundle PySees uses is built from here by `../pysees/scripts/build-carapace.sh` (cargo build, then
 `wasm-bindgen --target web`, then copied into `src/app/carapace/wasm`). Rebuild and copy it after any

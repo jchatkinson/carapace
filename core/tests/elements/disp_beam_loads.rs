@@ -253,6 +253,10 @@ fn yielding_cantilever(n: usize, points: usize) -> (f64, f64) {
     (tip.displacement[1], tip.displacement[2])
 }
 
+/// A yielding `DispBeamColumn` cantilever under a uniform load, run with 1 and 8 elements and 3 and
+/// 5 Lobatto points, matches OpenSeesPy's tip deflection and rotation to a relative tolerance of
+/// 1e-6. The reference values were produced with OpenSeesPy using the same fiber section,
+/// integration rule and 10 load steps.
 #[test]
 fn yielding_disp_cantilever_under_udl_matches_opensees() {
     // (elements, Lobatto points, OpenSees tip uy, OpenSees tip rz)

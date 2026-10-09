@@ -88,6 +88,8 @@ fn beam_tables_3d() -> (ElasticBeamColumn3dTable, FiberBeamColumn3dTable) {
     )
 }
 
+/// A table that belongs to the other profile is rejected: 3D beam-column tables in a 2D input, and
+/// 2D beam-column tables in a 3D input, give `TableNotInProfile`.
 #[test]
 fn a_table_that_belongs_to_the_other_profile_is_rejected() {
     // 3D tables in a 2D model.
@@ -144,6 +146,8 @@ fn a_table_that_belongs_to_the_other_profile_is_rejected() {
     );
 }
 
+/// Element loads and recorders that refer to an element kind of the other profile (a 3D beam in a
+/// 2D input, or the reverse) are rejected with `ElementKindNotInProfile`.
 #[test]
 fn an_element_kind_of_the_other_profile_is_rejected_in_loads_and_recorders() {
     let mut input = empty_input(2);
@@ -181,6 +185,7 @@ fn an_element_kind_of_the_other_profile_is_rejected_in_loads_and_recorders() {
     );
 }
 
+/// `ndm` values 0, 1, 4 and 255 are each rejected with `UnsupportedNdm`.
 #[test]
 fn unknown_ndm_is_rejected() {
     for got in [0, 1, 4, 255] {
@@ -191,6 +196,9 @@ fn unknown_ndm_is_rejected() {
     }
 }
 
+/// Omitted tables decode as empty: a header-only input is a valid empty model in both profiles, and
+/// a truss model written with only the shared tables (every other table left out of the JSON)
+/// decodes and solves.
 #[test]
 fn omitted_tables_decode_as_empty() {
     // Only the header: every table (and the sequence) is omitted.
@@ -297,6 +305,8 @@ fn populated_3d() -> CarapaceInputV1 {
     input
 }
 
+/// A populated 2D and 3D `CarapaceInputV1` survives serialization to JSON and back unchanged,
+/// covering friction, orientation, constraints and the rest of the tables.
 #[test]
 fn the_unified_input_round_trips_through_serde() {
     let mut two_d = empty_input(2);
@@ -444,6 +454,9 @@ fn assert_identical(outcome: &StepOutcome, native: [f64; 6]) {
     }
 }
 
+/// The `rigidLinks` table decodes to the same model as a native 2D `rigid_link`: identical results
+/// from the same loads, and the slave node really moves with the master (including the rotation
+/// lever-arm term).
 #[test]
 fn a_rigid_links_table_matches_the_native_2d_rigid_link() {
     let mut input = rigid_link_input_2d();
@@ -461,6 +474,9 @@ fn a_rigid_links_table_matches_the_native_2d_rigid_link() {
     assert!(m2 != 0.0 && (s0 - (last_sample(&outcome, 0).unwrap() - m2 * D2.1)).abs() < 1e-12);
 }
 
+/// The general `linearConstraints` table, written as the three equations of a 2D rigid link,
+/// matches the same constraints added natively with `add_constraint`, and agrees with the rigid
+/// link to rounding.
 #[test]
 fn a_linear_constraints_table_matches_the_native_add_constraint() {
     // The 2D rigid link written out as three general constraints.
@@ -488,6 +504,9 @@ fn a_linear_constraints_table_matches_the_native_add_constraint() {
     }
 }
 
+/// The `rigidLinks` table decodes to the same 3D model as a native `rigid_link`: six springs on the
+/// slave node and a general load on the master give identical results, including
+/// rotation-translation coupling through the offset.
 #[test]
 fn a_rigid_links_table_matches_the_native_3d_rigid_link() {
     let k = [300.0, 200.0, 100.0, 500.0, 600.0, 700.0];
@@ -594,6 +613,9 @@ fn truss_input(ndm: u8) -> CarapaceInputV1 {
     input
 }
 
+/// Element force and element load recorder components are bounded by the profile: the last valid
+/// component decodes, and one past it is `InvalidRecorderComponent` (2D forces have 6 components
+/// and 3D have 12).
 #[test]
 fn an_out_of_range_recorder_component_is_a_decode_error() {
     for (ndm, force_width, load_width) in [(2u8, 6u8, 16u8), (3, 12, 3)] {
@@ -637,6 +659,8 @@ fn an_out_of_range_recorder_component_is_a_decode_error() {
     }
 }
 
+/// Recorder DOFs are bounded by the profile: DOF 3 does not exist in 2D (`InvalidDof`), while DOF 5
+/// is valid in 3D.
 #[test]
 fn recorder_dofs_are_bounded_by_the_profile() {
     let mut input = truss_input(2);
@@ -658,6 +682,9 @@ fn recorder_dofs_are_bounded_by_the_profile() {
 // Row shapes that depend on the profile.
 // ---------------------------------------------------------------------------
 
+/// Rows whose shape depends on the profile are validated: friction takes one shear DOF in 2D and
+/// two in 3D, and orientation and other per-row data are checked, each failure reported as
+/// `InvalidRow` with the table and reason.
 #[test]
 fn profile_dependent_row_shapes_are_checked() {
     let invalid = |table, reason| DecodeError::InvalidRow {
@@ -811,6 +838,7 @@ fn profile_dependent_row_shapes_are_checked() {
     ));
 }
 
+/// An `ndm` other than 2 or 3 is rejected with `UnsupportedNdm` before any session is built.
 #[test]
 fn rejects_an_unrecognized_space_before_constructing_a_session() {
     let err = decode(empty_input(4)).unwrap_err();

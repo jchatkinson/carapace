@@ -45,6 +45,8 @@ fn triangle_truss(fix_rotations: bool) -> (Domain, [NodeId; 3]) {
     (domain, [a, b, c])
 }
 
+/// A truss-only 2D model solves without fixing rotations: only the 3 translational DOFs become
+/// equations, and the displacements are identical to the same model with rotations fixed by hand.
 #[test]
 fn truss_only_model_needs_no_fixed_rotations_and_matches_the_fixed_model() {
     let (domain, nodes) = triangle_truss(false);
@@ -72,6 +74,7 @@ fn truss_only_model_needs_no_fixed_rotations_and_matches_the_fixed_model() {
     }
 }
 
+/// A 3D skew truss with no rotations fixed solves, with only the translational DOFs as unknowns.
 #[test]
 fn spatial_truss_needs_no_fixed_rotations() {
     // The skew cantilever truss from the domain tests, with no rotation fixed.
@@ -148,6 +151,8 @@ fn joint_of_beam_and_truss_keeps_rotation_only_where_a_beam_needs_it() {
     assert!((d.node(tip).displacement[0] - expected).abs() < 1e-9);
 }
 
+/// A nodal load on a DOF that no element stiffens (a moment on a truss-only node) is a model error,
+/// `LoadOnInactiveDof`, reported by `validate` and returned as a value by `try_build`.
 #[test]
 fn a_nodal_load_on_a_dof_nothing_stiffens_is_a_model_error() {
     let (mut domain, [_, _, apex]) = triangle_truss(false);
@@ -172,6 +177,8 @@ fn a_nodal_load_on_a_dof_nothing_stiffens_is_a_model_error() {
     ));
 }
 
+/// `build` panics on a model that fails validation (a moment applied to a truss-only node), since
+/// that is a model-construction error rather than a runtime failure.
 #[test]
 #[should_panic(expected = "invalid model")]
 fn build_panics_on_an_invalid_model() {
@@ -180,6 +187,8 @@ fn build_panics_on_an_invalid_model() {
     linear(domain);
 }
 
+/// Explicit fixity wins: fixing a DOF that no element uses (a truss node's rotation) is legal,
+/// keeps the DOF active, and gives it no equation number.
 #[test]
 fn fixed_dofs_are_active_even_when_nothing_stiffens_them() {
     // Explicit fixity wins: boundary conditions (and their reactions) on a
@@ -234,6 +243,8 @@ fn nodal_mass_activates_its_dof() {
     assert_eq!(domain.num_free_dofs(), 2);
 }
 
+/// A modal analysis of a 2D truss SDOF with its rotations left free works and gives the closed-form
+/// frequency sqrt(k/m), with k = EA/L and m = rho*A*L/2.
 #[test]
 fn modal_analysis_of_a_truss_needs_no_fixed_rotations() {
     let (e, area, length, density) = (30_000.0, 2.0, 100.0, 0.5);

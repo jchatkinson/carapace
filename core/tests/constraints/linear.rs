@@ -341,6 +341,7 @@ fn pair() -> (Domain, NodeId, NodeId) {
     (domain, a, b)
 }
 
+/// Constraining the same slave DOF twice is rejected with `DuplicateSlave`.
 #[test]
 fn a_slave_defined_twice_is_rejected() {
     let (mut domain, a, b) = pair();
@@ -352,6 +353,7 @@ fn a_slave_defined_twice_is_rejected() {
     );
 }
 
+/// A constraint whose slave DOF is also fixed is rejected by `validate` with `SlaveIsFixed`.
 #[test]
 fn a_fixed_slave_is_rejected() {
     let (mut domain, a, _) = pair();
@@ -364,6 +366,8 @@ fn a_fixed_slave_is_rejected() {
     );
 }
 
+/// Constraint cycles (A depends on B and B on A) and a slave that references itself are rejected
+/// with `ConstraintCycle`.
 #[test]
 fn cycles_and_self_references_are_rejected() {
     let (mut domain, a, b) = pair();
@@ -382,6 +386,8 @@ fn cycles_and_self_references_are_rejected() {
     ));
 }
 
+/// A master DOF fixed at a nonzero initial displacement is rejected with
+/// `ConstraintOnPrescribedDof`, since constrained slaves cannot follow a prescribed value.
 #[test]
 fn a_master_fixed_at_a_nonzero_value_is_rejected() {
     let mut domain: Domain = Domain::new();
@@ -400,6 +406,9 @@ fn a_master_fixed_at_a_nonzero_value_is_rejected() {
     );
 }
 
+/// Nodal mass on a slave DOF that is a combination of several unknowns (a rigid-diaphragm slave
+/// with a lever arm) cannot be lumped. `validate` and `TransientAnalysis::new` report
+/// `MassOnConstrainedDof` as an error instead of panicking.
 #[test]
 fn mass_on_a_slave_that_combines_several_unknowns_is_an_error_not_a_panic() {
     let mut domain = Domain3::new();
@@ -436,6 +445,8 @@ fn mass_on_a_scaled_single_term_slave_contributes_coefficient_squared() {
 // Initial state.
 // ---------------------------------------------------------------------------
 
+/// A slave whose initial displacement disagrees with its constraint equation is rejected with
+/// `InconsistentInitialState`.
 #[test]
 fn an_inconsistent_nonzero_initial_slave_state_is_rejected() {
     let mut domain: Domain = Domain::new();

@@ -197,6 +197,9 @@ fn native_panel() -> (Vec<f64>, Vec<[f64; 3]>, Vec<[f64; 3]>) {
     (displacements, strains, stresses)
 }
 
+/// A small panel (two Quad4 and a Tri3) decoded from the wire format and run through a session
+/// gives the same nodal displacements and Gauss-point strains and stresses as the same model built
+/// directly with `carapace-core`.
 #[test]
 fn a_panel_runs_end_to_end_identically_to_the_same_model_built_natively() {
     let mut input = panel();
@@ -256,6 +259,9 @@ fn a_panel_runs_end_to_end_identically_to_the_same_model_built_natively() {
     }
 }
 
+/// Wire-format version of the body-force summation: several body loads on one Quad4 across patterns
+/// with different series and scale factors sum to the same displacement as one pattern with the
+/// total load.
 #[test]
 fn several_body_force_patterns_through_the_wire_sum_with_their_factors() {
     let run = |bodies: &[(u32, f64, f64)], scale_factor: Vec<f64>| {
@@ -293,6 +299,9 @@ fn decode_error(input: CarapaceInputV1) -> DecodeError {
     decode(input).err().expect("expected a decode error")
 }
 
+/// The continuum tables, loads and Gauss-point recorders survive a serialize/deserialize round trip
+/// unchanged, with the expected camelCase JSON shape (`planeStress`, `edgePressure`, `gaussPoint`),
+/// and still decode.
 #[test]
 fn the_tables_round_trip_through_serde() {
     let mut input = panel();
@@ -315,6 +324,8 @@ fn the_tables_round_trip_through_serde() {
     assert!(decode(back).is_ok());
 }
 
+/// Malformed continuum tables are structured decode errors: unknown material or node indices, rows
+/// with the wrong number of nodes, and other shape problems, each reported with the table and row.
 #[test]
 fn bad_references_and_shapes_are_decode_errors() {
     let mut input = panel();
@@ -373,6 +384,8 @@ fn bad_references_and_shapes_are_decode_errors() {
     ));
 }
 
+/// Continuum tables (`quads`, `triangles`, `planeMaterials`) and continuum recorders are rejected
+/// in a 3D input with `TableNotInProfile`, since those elements are 2D only.
 #[test]
 fn continuum_tables_and_kinds_are_not_in_a_3d_model() {
     let mut input = empty_input(3);
@@ -409,6 +422,8 @@ fn continuum_tables_and_kinds_are_not_in_a_3d_model() {
     );
 }
 
+/// Element loads of the wrong kind for their element (a beam load on a continuum element, continuum
+/// loads on a beam) and out-of-range edge indices are decode errors, and nothing is accumulated.
 #[test]
 fn wrong_kind_loads_and_out_of_range_edges_are_rejected_without_accumulating() {
     let load_on = |kind, load| {
@@ -479,6 +494,9 @@ fn wrong_kind_loads_and_out_of_range_edges_are_rejected_without_accumulating() {
     ));
 }
 
+/// Gauss-point recorders are checked against the element: Quad4 has 4 points and Tri3 has 1, and an
+/// out-of-range point or component is `InvalidGaussPoint` or an invalid-component error rather than
+/// a silent empty recording.
 #[test]
 fn gauss_point_recorders_are_bounds_checked_against_the_element() {
     let with = |element_kind, element_index, point, component| {

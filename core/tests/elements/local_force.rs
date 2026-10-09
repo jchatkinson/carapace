@@ -20,6 +20,8 @@ use carapace_core::model::{
 /// from the separate rotation logic a skew member would also exercise (see
 /// `elastic_beam_column_local_force_decomposes_purely_axially_...` below).
 
+/// `Truss` local forces for an axially loaded bar equal the applied load with opposite signs at the
+/// two nodes, `[-N, 0, 0, N, 0, 0]`.
 #[test]
 fn truss_local_force_matches_axial_nodal_equilibrium() {
     let (e, area, length, axial) = (30_000.0, 2.0, 100.0, 500.0);
@@ -57,6 +59,8 @@ fn truss_local_force_matches_axial_nodal_equilibrium() {
     }
 }
 
+/// `ZeroLength` local forces for a spring loaded at one node equal the applied load with opposite
+/// signs at the two nodes, `[-F, 0, 0, F, 0, 0]`.
 #[test]
 fn zero_length_local_force_matches_spring_nodal_equilibrium() {
     let (k, load) = (100.0, 50.0);
@@ -102,6 +106,8 @@ fn cantilever_local_force_equilibrium(fy: f64, length: f64) -> [f64; 6] {
     [0.0, -fy, -length * fy, 0.0, fy, 0.0]
 }
 
+/// `ElasticBeamColumn` local end forces for a horizontal cantilever with a tip load match nodal
+/// equilibrium: shear equals the load and the fixed-end moment equals the load times the length.
 #[test]
 fn elastic_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_member() {
     let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) =
@@ -142,6 +148,9 @@ fn elastic_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal
     }
 }
 
+/// `DispBeamColumn` (two-fiber elastic section) end forces for a horizontal cantilever with a tip
+/// load match the statically determinate result: shear equals the load and the fixed-end moment
+/// equals the load times the length.
 #[test]
 fn disp_beam_column_local_force_matches_cantilever_equilibrium_for_horizontal_member() {
     let (e, area, iz, length, fy): (f64, f64, f64, f64, f64) =

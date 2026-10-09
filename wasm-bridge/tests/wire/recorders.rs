@@ -106,6 +106,9 @@ fn decodes_an_element_force_recorder_alongside_a_node_disp_recorder() {
     );
 }
 
+/// A 3D `ElasticBeamColumn3` cantilever with a tip load, decoded from the wire format, reports
+/// local end forces through an element force recorder that match nodal equilibrium (shear equals
+/// the load and the fixed-end moment equals the load times the length).
 #[test]
 fn decodes_an_elastic_beam_column3_element_force_recorder() {
     let (length, e, g, area, iy, iz, j, fy): (f64, f64, f64, f64, f64, f64, f64, f64) =

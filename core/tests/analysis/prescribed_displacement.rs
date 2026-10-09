@@ -36,6 +36,9 @@ fn force(analysis: &Analysis, node: NodeId) -> f64 {
     analysis.domain().reaction(node, 0, 0.0)
 }
 
+/// The uniaxial probe (a zero-length spring with one prescribed DOF and no free DOFs) follows a
+/// prescribed strain history on an elastic material: displacement equals the target and force
+/// equals E times strain, going through zero and negative strains.
 #[test]
 fn elastic_probe_follows_prescribed_strain() {
     let (mut analysis, _a, b) = probe(Material::Elastic { e: 200_000.0 });
@@ -57,6 +60,10 @@ fn zero_tangent_branch_reports_zero_force() {
     assert!((force(&analysis, b) + 2.0).abs() < 1e-12);
 }
 
+/// Prescribed-displacement steps keep committed material history. An elastic-perfectly-plastic
+/// probe is driven past +yield, then past -yield, then back to -0.0005; the force must be +100,
+/// -100 and then +50 (the elastic unloading branch from the permanent set), where a
+/// path-independent material would give -50.
 #[test]
 fn committed_history_persists_across_targets() {
     // fy = 100. Load past +yield, reverse past -yield (plastic strain -0.001), then
@@ -72,6 +79,8 @@ fn committed_history_persists_across_targets() {
     }
 }
 
+/// Support settlement: two equal-stiffness trusses in series with the end node displaced by 0.5.
+/// The free middle node moves half of that, 0.25.
 #[test]
 fn free_dofs_respond_to_a_support_displacement() {
     // Support settlement of a truss: node j free in x, node i displaced by 0.5.
@@ -97,6 +106,8 @@ fn free_dofs_respond_to_a_support_displacement() {
     assert!((analysis.domain().node(j).displacement[0] - 0.25).abs() < 1e-9);
 }
 
+/// Invalid prescribed targets (NaN, infinity, or a DOF that is free) are rejected with
+/// `InvalidConstraint` and leave the previous displacement untouched.
 #[test]
 fn invalid_targets_change_nothing() {
     let (mut analysis, _a, b) = probe(Material::Elastic { e: 1.0 });

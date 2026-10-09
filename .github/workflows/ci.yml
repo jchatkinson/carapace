@@ -4,35 +4,37 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: wasm32-unknown-unknown }
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: mkdir -p target && cargo test --workspace --no-fail-fast 2>&1 | tee target/test.log
       - run: cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
-  docs:
-    needs: test
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions: { contents: read, pages: write, id-token: write }
-    environment: { name: github-pages, url: "${{ steps.deploy.outputs.page_url }}" }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: wasm32-unknown-unknown }
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with: { tool: "wasm-bindgen@0.2.128" }
       - run: cargo doc --workspace --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }
-      - run: cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
-      - run: wasm-bindgen target/wasm32-unknown-unknown/release/carapace_wasm.wasm --out-dir pkg --target web
-      - run: npx --yes typedoc@0.28 --tsconfig docs-site/tsconfig.json --entryPoints pkg/carapace_wasm.d.ts --out target/doc/wasm
-      - run: cp docs-site/index.html docs-site/crab.webp docs-site/favicon.png target/doc/
-      - uses: actions/upload-pages-artifact@v3
+      - run: python3 docs-site/gen_tests.py target/test.log target/doc/tests/index.html
+      # The remaining steps assemble the published site, so they only run on main.
+      - if: github.ref == 'refs/heads/main'
+        uses: taiki-e/install-action@v2
+        with: { tool: "wasm-bindgen@0.2.128" }
+      - if: github.ref == 'refs/heads/main'
+        run: wasm-bindgen target/wasm32-unknown-unknown/release/carapace_wasm.wasm --out-dir pkg --target web
+      - if: github.ref == 'refs/heads/main'
+        run: npx --yes typedoc@0.28 --tsconfig docs-site/tsconfig.json --entryPoints pkg/carapace_wasm.d.ts --out target/doc/wasm
+      - if: github.ref == 'refs/heads/main'
+        run: cp docs-site/index.html docs-site/crab.webp docs-site/favicon.png target/doc/
+      - if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
         with: { path: target/doc }
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions: { pages: write, id-token: write }
+    environment: { name: github-pages, url: "${{ steps.deploy.outputs.page_url }}" }
+    steps:
       - id: deploy
         uses: actions/deploy-pages@v4

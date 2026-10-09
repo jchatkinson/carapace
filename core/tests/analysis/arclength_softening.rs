@@ -83,6 +83,10 @@ fn info(result: &carapace_core::analysis::StepResult) -> ArcStepInfo {
         .expect("arc steps report continuation diagnostics")
 }
 
+/// Arc-length continuation traces a degrading-strength spring through its peak and down the
+/// softening branch. Every accepted point lies on the independent backbone curve (lambda =
+/// backbone(u)), the support reaction balances the applied load, and the load decreases after the
+/// peak.
 #[test]
 fn degrading_spring_is_traced_past_peak_strength() {
     let (domain, fixed, free) = single_spring();
@@ -168,6 +172,8 @@ fn degrading_spring_is_traced_past_peak_strength() {
     }
 }
 
+/// Baseline for the arc-length tests: load control converges before the peak but fails to converge
+/// past it, and the failed step rolls the node displacement back exactly.
 #[test]
 fn load_control_fails_past_the_peak_and_rolls_back_exactly() {
     let (domain, _fixed, free) = single_spring();
@@ -184,6 +190,9 @@ fn load_control_fails_past_the_peak_and_rolls_back_exactly() {
     assert_eq!(analysis.domain().node(free).displacement[0], before);
 }
 
+/// The degrading spring in series with a stiff elastic spring produces a true snap-back (both load
+/// and displacement decrease after the peak). Arc-length continuation traces it, including the step
+/// that crosses the backbone kink.
 #[test]
 fn series_spring_snap_back_is_traced_with_decreasing_load_and_displacement() {
     const K_S: f64 = 380.0;
@@ -257,6 +266,8 @@ fn series_spring_snap_back_is_traced_with_decreasing_load_and_displacement() {
     }
 }
 
+/// Starting arc-length in the decreasing direction follows the mirror-image negative backbone:
+/// displacement decreases monotonically and every point satisfies lambda = -backbone(-u).
 #[test]
 fn reverse_initial_direction_follows_the_negative_backbone() {
     let (domain, _fixed, free) = single_spring();

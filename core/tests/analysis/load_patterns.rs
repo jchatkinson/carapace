@@ -104,6 +104,10 @@ fn run_two_phase(
     )
 }
 
+/// A cantilever beam is loaded axially by a gravity pattern, which is then frozen, and a separate
+/// lateral pattern is applied in a second phase. The axial displacement from gravity must be
+/// nonzero after phase one and unchanged by the lateral phase, since the frozen pattern no longer
+/// ramps.
 #[test]
 fn frozen_gravity_pattern_survives_a_second_phase_untouched() {
     let mut node_j = None;

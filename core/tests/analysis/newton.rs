@@ -45,6 +45,9 @@ fn build_elastic_plastic_parallel_system(
     (domain, node_i, node_j)
 }
 
+/// Newton-Raphson resolves a step that crosses a regime change inside the step, where a one-shot
+/// linear solve cannot. An elastic truss in parallel with an elastic-perfectly-plastic spring,
+/// loaded past yield, must give the closed-form displacement u = (F - fy) / k_truss.
 #[test]
 fn newton_raphson_resolves_elastic_perfectly_plastic_regime_crossing() {
     let force = 5.0;
@@ -76,6 +79,8 @@ fn newton_raphson_resolves_elastic_perfectly_plastic_regime_crossing() {
     );
 }
 
+/// The displacement-increment and energy-increment convergence tests reach the same equilibrium as
+/// the unbalance-norm test on the yielding parallel system: the closed-form u = (F - fy) / k_truss.
 #[test]
 fn norm_disp_incr_and_energy_incr_also_converge_to_the_same_result() {
     let (k_t, fy, force) = (50.0, 1.0, 5.0);

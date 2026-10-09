@@ -29,6 +29,8 @@ fn close(got: &[f64], want: &[f64]) {
     }
 }
 
+/// An elastic probe follows a prescribed strain history through zero, positive and negative
+/// strains: stress equals E times strain.
 #[test]
 fn elastic() {
     let mut p = probe(MaterialSpec::Elastic { e: 200_000.0 });
@@ -38,6 +40,8 @@ fn elastic() {
     );
 }
 
+/// A Concrete01 probe has no tension capacity (zero stress at positive strain), goes into
+/// compression with softening past the peak, and unloads to zero stress at zero strain.
 #[test]
 fn concrete01_tension_then_compression() {
     let mut p = probe(MaterialSpec::Concrete01 {
@@ -56,6 +60,9 @@ fn concrete01_tension_then_compression() {
     );
 }
 
+/// An elastic-perfectly-plastic probe keeps its committed plastic strain across targets: strains of
+/// +0.002, -0.002 and -0.0005 give stresses of +100, -100 and +50 (elastic unloading from the
+/// permanent set).
 #[test]
 fn elastic_pp_keeps_committed_plastic_history() {
     let mut p = probe(MaterialSpec::ElasticPp {
@@ -68,6 +75,8 @@ fn elastic_pp_keeps_committed_plastic_history() {
     );
 }
 
+/// Applying the same target strain repeatedly does not advance material state: the
+/// elastic-perfectly-plastic probe returns the same stress each time.
 #[test]
 fn repeated_targets_do_not_advance_state() {
     let mut p = probe(MaterialSpec::ElasticPp {
@@ -80,6 +89,8 @@ fn repeated_targets_do_not_advance_state() {
     );
 }
 
+/// `reset` discards the history, and the configured initial strain is applied: with an initial
+/// strain of 0.5, a target of 1.0 and later 0.5 give stresses 10 and 5 for E = 10.
 #[test]
 fn reset_discards_history_and_initial_strain_is_applied() {
     let mut p = MaterialProbe::new(&MaterialProbeConfig {
@@ -92,6 +103,8 @@ fn reset_discards_history_and_initial_strain_is_applied() {
     close(&run(&mut p, &[0.5]), &[5.0]);
 }
 
+/// Probe errors are structured: an unsupported material (`Gap`) is `UnsupportedMaterial`, a NaN
+/// target is `invalidTarget`, and a rejected target leaves the committed state unchanged.
 #[test]
 fn errors_are_structured() {
     let unsupported = MaterialProbe::new(&MaterialProbeConfig {

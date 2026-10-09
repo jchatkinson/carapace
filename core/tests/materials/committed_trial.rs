@@ -46,6 +46,10 @@ fn check(name: &str, material: Material, amplitude: f64) -> bool {
     bad.is_empty()
 }
 
+/// For each uniaxial material (except ElasticPP, see below), trial strain after a commit at the
+/// same strain must return the same stress and tangent as the committed trial did, along a long
+/// reversing strain path in both signs. OpenSees materials behave this way, and displacement
+/// control, element state determination and arc-length seeds all evaluate at the committed point.
 #[test]
 fn committed_trial_is_idempotent() {
     let failing: Vec<_> = all_materials().into_iter().filter(|(_, ok)| !ok).collect();

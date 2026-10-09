@@ -164,6 +164,9 @@ fn run_with_budget(input: CarapaceInputV1, budget: u32) -> (Vec<Vec<(f64, f64)>>
     (samples, steps_per_call)
 }
 
+/// A snap-back run through the wire format. Load factors rise and then fall (they are not
+/// monotonic), samples are stored in sample-index order regardless, and the displacement stop
+/// criterion ends the stage before its step cap.
 #[test]
 fn snap_back_session_orders_samples_by_index_and_stops_early_on_target() {
     let (samples, steps) = run_with_budget(snap_back_input(x_stop(), None), 1000);
@@ -198,6 +201,8 @@ fn snap_back_session_orders_samples_by_index_and_stops_early_on_target() {
     assert!((x.last().unwrap().1 - 0.028).abs() < 1e-9);
 }
 
+/// The step budget of `advance` is only a scheduling knob: running one step at a time produces
+/// exactly the same accepted samples as running the whole stage in one call.
 #[test]
 fn advance_budget_does_not_change_accepted_samples() {
     let (one_at_a_time, steps) = run_with_budget(snap_back_input(x_stop(), None), 1);
@@ -206,6 +211,9 @@ fn advance_budget_does_not_change_accepted_samples() {
     assert_eq!(one_at_a_time, all_at_once);
 }
 
+/// A stage that ends on a displacement target reports the stop reason and that it landed exactly.
+/// The default convergence test works, and an explicit combined convergence test decodes and runs
+/// as well.
 #[test]
 fn stop_detail_and_default_combined_convergence_are_reported() {
     let mut session = decode(snap_back_input(x_stop(), None)).unwrap();
@@ -229,6 +237,8 @@ fn stop_detail_and_default_combined_convergence_are_reported() {
     assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");
 }
 
+/// The 3D profile decodes arc-length settings too: a linear `ZeroLength3` spring continued by
+/// arc-length stops exactly on the requested load-factor target.
 #[test]
 fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
     let k = 80.0;
@@ -300,6 +310,8 @@ fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
     );
 }
 
+/// Invalid arc-length settings in the wire format (radius bounds, scales, tolerances and so on) are
+/// rejected at decode time with `InvalidAnalysisOption` naming the offending field.
 #[test]
 fn invalid_arc_length_options_are_rejected_at_decode() {
     let expect_option = |input: CarapaceInputV1, field: &str| match decode(input) {
@@ -394,6 +406,9 @@ fn invalid_arc_length_options_are_rejected_at_decode() {
     );
 }
 
+/// Problems only detectable at run time reach the session as structured detail. With no reference
+/// load, decoding succeeds and the first `advance` finishes with `ZeroLoadSensitivity` in
+/// `outcome.error`.
 #[test]
 fn runtime_arc_length_errors_reach_the_session_as_structured_detail() {
     // No reference load at all: decode can't know, the first step reports it.

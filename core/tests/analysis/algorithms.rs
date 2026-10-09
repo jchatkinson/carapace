@@ -36,6 +36,10 @@ const TOL: f64 = 1e-9;
 // yield (fy=1.0) gives `u1 = (5-1)/50 = 0.08`.
 const EXPECTED_U: f64 = 0.08;
 
+/// `TangentStrategy::Current` re-forms and factors the tangent every iteration. On a step that
+/// crosses yield (elastic-perfectly-plastic spring parallel to a truss) the answer matches the
+/// closed-form displacement, the factorization count equals the iteration count, and more than one
+/// iteration is needed.
 #[test]
 fn tangent_strategy_current_factors_once_per_iteration() {
     let (domain, node_j) = epp_truss_domain();

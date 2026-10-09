@@ -170,6 +170,9 @@ fn lame_errors(
     (error_at(0, a), error_at(nr, b))
 }
 
+/// Thick-walled cylinder against the Lame closed-form radial and hoop stresses, for plane stress
+/// and plane strain. A coarse mesh is already within a few percent, and refining the mesh reduces
+/// the error by the expected factors.
 #[test]
 fn thick_cylinder_matches_lame_on_a_coarse_mesh_and_converges() {
     let stress = PlaneMaterial::plane_stress(E, NU).unwrap();
@@ -316,6 +319,9 @@ fn pure_bending_tip(nx: usize, formulation: Quad4Formulation) -> (f64, f64) {
     (analysis.domain().node(at(nx, 0)).displacement[1], exact)
 }
 
+/// Pure bending on a rectangular mesh: the enhanced Quad4 gives the exact beam-theory tip
+/// deflection for any mesh (1, 4 or 10 elements along the span), while the plain element is too
+/// stiff, and a single plain element locks (less than 70% of the exact answer).
 #[test]
 fn enhanced_pure_bending_is_exact_on_rectangles_and_beats_the_plain_element() {
     for nx in [1, 4, 10] {
@@ -340,6 +346,8 @@ fn enhanced_pure_bending_is_exact_on_rectangles_and_beats_the_plain_element() {
     }
 }
 
+/// Cantilever tip load against the Timoshenko tip deflection on a 10x2 mesh: the enhanced element
+/// is within 3% of the exact answer and at least 0.2 closer than the plain element.
 #[test]
 fn enhanced_cantilever_converges_faster_than_the_plain_element() {
     let exact = timoshenko_tip();
@@ -401,6 +409,9 @@ fn cook_membrane_at_nu_4999_records_the_plain_elements_locking() {
     assert!(enhanced > 0.8 && enhanced < 1.0, "enhanced {enhanced}");
 }
 
+/// Thick cylinder under internal pressure in plane strain with Poisson's ratio 0.4999 (nearly
+/// incompressible): the enhanced element stays within 1% of the Lame solution, while the plain
+/// element locks (more than 50% error).
 #[test]
 fn enhanced_thick_cylinder_is_accurate_even_at_nu_4999() {
     let (inner, outer) = lame_errors(

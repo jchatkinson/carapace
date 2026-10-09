@@ -27,6 +27,9 @@ fn material() -> PlaneMaterial {
     PlaneMaterial::plane_stress(1000.0, 0.25).unwrap()
 }
 
+/// `ElementLoad` values add and scale field by field (beam uniform, body force, edge traction, edge
+/// pressure), and expose a fixed 16-component layout via `component(i)`, which is what element-load
+/// recorders index into.
 #[test]
 fn loads_accumulate_field_by_field_and_expose_a_fixed_component_layout() {
     let both = ElementLoad::uniform(1.0, 2.0) + ElementLoad::body(3.0, 4.0);
@@ -50,6 +53,9 @@ fn loads_accumulate_field_by_field_and_expose_a_fixed_component_layout() {
     assert_eq!(load.component(16), 0.0);
 }
 
+/// Body-force loads from several patterns on the same Quad4 add up with each pattern's load factor
+/// and scale: the displacement from split patterns equals that from one pattern carrying the summed
+/// load.
 #[test]
 fn several_body_force_patterns_sum_with_their_factors() {
     let build = |patterns: &[(LoadSeries, f64, [f64; 2])]| {
@@ -93,6 +99,9 @@ fn several_body_force_patterns_sum_with_their_factors() {
     assert!(single[0] != 0.0 && single[1] != 0.0);
 }
 
+/// Loads that do not fit their element (beam loads on continuum elements, continuum loads on a
+/// beam, edges out of range) are reported as model errors by `validate`, before any load is
+/// accumulated.
 #[test]
 fn incompatible_loads_are_a_model_error_before_anything_is_accumulated() {
     let incompatible = |element_of: &dyn Fn(&mut Domain) -> ElementId, load: ElementLoad| {
@@ -316,6 +325,8 @@ fn edge_load_patch(quads: bool, formulation: Quad4Formulation) {
     }
 }
 
+/// A patch test driven entirely by boundary edge loads (no prescribed boundary displacements)
+/// reproduces the exact constant stress field, for Quad4 (full and enhanced) and Tri3.
 #[test]
 fn boundary_tractions_alone_reproduce_the_exact_constant_stress_field() {
     edge_load_patch(false, Quad4Formulation::Full);

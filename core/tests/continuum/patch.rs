@@ -151,6 +151,9 @@ fn tri3_mesh(material: &PlaneMaterial) -> (Domain, Vec<NodeId>, Vec<ElementId>) 
     (domain, ids, elements)
 }
 
+/// Constant-strain patch test: Tri3 elements on an irregular mesh with boundary displacements taken
+/// from a linear field must reproduce the field exactly at the interior nodes and a constant stress
+/// in every element, for plane stress, plane strain and orthotropic materials (tolerance 1e-12).
 #[test]
 fn tri3_constant_strain_patch_test_is_exact_on_an_irregular_mesh() {
     for material in [
@@ -165,6 +168,8 @@ fn tri3_constant_strain_patch_test_is_exact_on_an_irregular_mesh() {
     }
 }
 
+/// Plane elements do not stiffen the rotation DOF, so a continuum model needs no rotational fixity,
+/// and a load on that rotation is a `LoadOnInactiveDof` error.
 #[test]
 fn a_continuum_model_with_no_rotation_fixed_solves() {
     // `rz` is not stiffened by a Tri3, so it is not an equation: no rotational fixity is needed
@@ -197,6 +202,9 @@ fn quad4_mesh(
     (domain, ids, elements)
 }
 
+/// The same patch test for Quad4 on a distorted mesh, for both the full and enhanced formulations
+/// and for plane stress, plane strain and orthotropic materials: exact displacement field and
+/// constant stress (tolerance 1e-12).
 #[test]
 fn quad4_patch_test_is_exact_on_a_distorted_mesh_for_both_formulations() {
     for material in [
