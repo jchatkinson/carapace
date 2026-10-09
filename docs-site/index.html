@@ -1,13 +1,176 @@
 <!doctype html>
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Carapace docs</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:36rem;margin:3rem auto;padding:0 1rem}</style>
-<h1>Carapace</h1>
-<p>A WebAssembly-native finite element analysis engine in Rust.</p>
-<ul>
-  <li><a href="carapace_core/">Rust API: carapace-core</a></li>
-  <li><a href="carapace_wasm/">Rust API: carapace-wasm (bridge)</a></li>
-  <li><a href="wasm/">JavaScript / TypeScript API</a></li>
-  <li><a href="https://github.com/jchatkinson/carapace">Source on GitHub</a></li>
-</ul>
+<title>Carapace</title>
+<meta name="description" content="A WebAssembly-native finite element analysis engine written in Rust.">
+<link rel="icon" href="favicon.png">
+<style>
+  :root {
+    --bg: #e8eefc;
+    --fg: #1b2333;
+    --muted: #4b5670;
+    --accent: #c8321f;
+    --card: #f6f8fe;
+    --border: #cfd8ee;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131826;
+      --fg: #e6ebf7;
+      --muted: #9aa6c2;
+      --accent: #ff7a63;
+      --card: #1b2234;
+      --border: #2c3650;
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  main {
+    max-width: 52rem;
+    margin: 0 auto;
+    padding: 2rem 1rem 4rem;
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+    align-items: center;
+  }
+
+  @media (min-width: 720px) {
+    .hero {
+      grid-template-columns: 1.1fr 1fr;
+    }
+  }
+
+  .hero img {
+    width: 100%;
+    height: auto;
+    border-radius: 1rem;
+    display: block;
+  }
+
+  h1 {
+    font-size: 2.6rem;
+    line-height: 1.1;
+    margin: 0 0 .5rem;
+    letter-spacing: -.02em;
+  }
+
+  .tag {
+    color: var(--muted);
+    margin: 0 0 1rem;
+    font-size: 1.1rem;
+  }
+
+  p {
+    margin: 0 0 1rem;
+  }
+
+  a {
+    color: var(--accent);
+  }
+
+  h2 {
+    font-size: 1.1rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+    margin: 2.5rem 0 1rem;
+  }
+
+  .cards {
+    display: grid;
+    gap: .75rem;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  }
+
+  .card {
+    display: block;
+    padding: 1rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: .75rem;
+    color: var(--fg);
+    text-decoration: none;
+  }
+
+  .card:hover {
+    border-color: var(--accent);
+  }
+
+  .card b {
+    display: block;
+    color: var(--accent);
+  }
+
+  .card span {
+    color: var(--muted);
+    font-size: .9rem;
+  }
+
+  ul.feat {
+    margin: 0;
+    padding-left: 1.2rem;
+  }
+
+  ul.feat li {
+    margin: .25rem 0;
+  }
+
+  footer {
+    margin-top: 3rem;
+    color: var(--muted);
+    font-size: .9rem;
+  }
+</style>
+<main>
+  <section class="hero">
+    <div>
+      <h1>Carapace</h1>
+      <p class="tag">A WebAssembly-native finite element engine, written in Rust.</p>
+      <p>A thin, curated engine covering the structural element formulations, material models and analysis types used in
+        practice by <a href="https://github.com/jchatkinson/pysees">PySees</a>, its companion frontend. It runs in a
+        browser Web Worker as a <code>.wasm</code> module, with no server and no OpenSees runtime.</p>
+      <p>Inspired by <a href="https://opensees.berkeley.edu/">OpenSees</a>, but a from-scratch reimplementation.</p>
+    </div>
+    <img src="crab.webp" alt="The Rust crab, half solid red and half a colour-contoured finite element mesh" width="859"
+      height="641">
+  </section>
+
+  <h2>What it does</h2>
+  <ul class="feat">
+    <li>2D and 3D frames, trusses, zero-length springs, and plane-stress/strain continuum elements</li>
+    <li>Fiber sections with displacement- and force-based beam-columns, plus Steel, Concrete, Hysteretic and Pinching
+      materials</li>
+    <li>Static (load and displacement control, arc-length), modal and transient analysis</li>
+    <li>Streams results as it runs, with cooperative cancellation, and is checked step by step against OpenSees</li>
+  </ul>
+
+  <h2>API reference</h2>
+  <div class="cards">
+    <a class="card" href="wasm/"><b>JavaScript / TypeScript</b><span>The wasm API and the input schema, for calling
+        Carapace from the browser.</span></a>
+    <a class="card" href="carapace_core/"><b>carapace-core</b><span>The Rust engine: elements, materials, solvers and
+        analysis.</span></a>
+    <a class="card" href="carapace_wasm/"><b>carapace-wasm</b><span>The wasm-bindgen bridge: input decoding and result
+        streaming.</span></a>
+  </div>
+
+  <footer><a href="https://github.com/jchatkinson/carapace">Source on GitHub</a></footer>
+</main>
+
+</html>

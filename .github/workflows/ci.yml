@@ -31,7 +31,7 @@ jobs:
       - run: cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
       - run: wasm-bindgen target/wasm32-unknown-unknown/release/carapace_wasm.wasm --out-dir pkg --target web
       - run: npx --yes typedoc@0.28 --tsconfig docs-site/tsconfig.json --entryPoints pkg/carapace_wasm.d.ts --out target/doc/wasm
-      - run: cp docs-site/index.html target/doc/index.html
+      - run: cp docs-site/index.html docs-site/crab.webp docs-site/favicon.png target/doc/
       - uses: actions/upload-pages-artifact@v3
         with: { path: target/doc }
       - id: deploy
