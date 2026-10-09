@@ -1,0 +1,1 @@
+{ "compilerOptions": { "target": "ES2022", "lib": ["ES2022", "ESNext.Disposable", "DOM"], "skipLibCheck": true }, "files": ["../pkg/carapace_wasm.d.ts"] }
