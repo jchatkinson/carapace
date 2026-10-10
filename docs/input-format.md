@@ -78,6 +78,9 @@ Only `header` is required.
 | `planeMaterials` | `PlaneMaterialSpec[]` | 2D (arena for `triangles`/`quads`) |
 | `triangles` | `TriangleTable` | 2D |
 | `quads` | `QuadTable` | 2D |
+| `shellSections` | `ShellSectionSpec[]` | 3D (arena for `shell4s`) |
+| `shell3s` | `Shell3Table` | 3D |
+| `shell4s` | `Shell4Table` | 3D |
 | `zeroLengths` | `ZeroLengthTable` | both |
 | `zeroLengthSections` | `ZeroLengthSectionTable` | both |
 | `equalDofs` | `EqualDofTable` | both |
@@ -152,6 +155,8 @@ where present, a `density` array for mass.
 | `ZeroLengthTable` (2D and 3D) | `materials: [row, dof, material][]` (sparse), `friction?: FrictionRow[]`, `orient?: OrientRow[]` |
 | `TriangleTable` (2D) | `nodeIds` (stride 3, counter-clockwise), `thickness`, `material` (index into `planeMaterials`), `density` |
 | `QuadTable` (2D) | `nodeIds` (stride 4, counter-clockwise), `thickness`, `material`, `density`, `formulation: ("full" \| "enhanced")[]` |
+| `Shell3Table` (3D) | `nodeIds` (stride 3; the node order sets the local normal by the right-hand rule), `section` (index into `shellSections`) |
+| `Shell4Table` (3D) | `nodeIds` (stride 4; the node order sets the local normal by the right-hand rule), `section` (index into `shellSections`) |
 | `ZeroLengthSectionTable` (2D and 3D) | `fiberSection`, `materials: [row, dof, material][]` for DOFs the section does not drive (`uy` in 2D; `uy`, `uz`, `rx` in 3D), `orient?: OrientRow[]` |
 
 Notes:
@@ -189,6 +194,17 @@ Notes:
   `{ kind: "orthotropic", ex, ey, nuXy, gXy, angle }` (plane stress; `angle` in radians
   counter-clockwise from global x to material axis 1), `{ kind: "elasticMatrix", d: [d11, d12, d13,
   d22, d23, d33] }` (packed symmetric `D`). Invalid constants are `invalidPlaneMaterial`.
+- **Shells** (`shell4s` = `Shell4`, the MITC4 flat shell, OpenSees `ShellMITC4`; `shell3s` = `Shell3`, the DKT/Allman flat triangle, OpenSees `ShellDKGT`; 3D only) carry all
+  six DOFs per node and use 2x2 Gauss points. The local frame follows OpenSees: `e1` from the edge
+  midpoints, `e3 = e1 x e2` (the node order sets the sign), and a quad is treated as flat in that
+  frame (warp is tolerated as OpenSees does). `ShellSectionSpec` (the `shellSections` arena):
+  `{ kind: "elasticMembranePlate", e, nu, h, rho }` (invalid constants are `invalidShellSection`).
+  Mass is a row-sum lumped translational mass `rho h` (OpenSees uses a consistent mass), so modal
+  frequencies agree with OpenSees only approximately. A `shell3s` triangle has no drilling penalty and no transverse shear (its `gamma_xz`, `gamma_yz` and `Qx`, `Qy` are zero) and its local x axis is the edge from node 0 to node 1. A triangle has 4 Gauss points `(1/3,1/3,1/3)` with weight `-9/16` and `(1/5,3/5,1/5)` permutations with `25/48`; a Gauss-point recorder on a shell has 4 points
+  and 8 components per quantity, in OpenSees' section order and sign: strain `[eps_x, eps_y,
+  gamma_xy, kappa_x, kappa_y, 2 kappa_xy, gamma_xz, gamma_yz]`, `stress` the resultants `[Nx, Ny, Nxy,
+  Mx, My, Mxy, Qx, Qy]` in the local axes (OpenSees' bending resultants have the opposite sign to
+  `M = D kappa`). An `elementForce` recorder reports the 24 global nodal forces.
 - 3D fiber elements have no `corotational` flag and no `transform` field.
 
 ### Fiber sections
@@ -252,6 +268,13 @@ handler (the session chooses it when the model has any).
     normal). Edge `k` joins local node `k` to node `k + 1` (a triangle has edges 0..3, a quad
     0..4; past that is `invalidRow`). Body forces are integrated with the same weights as the
     lumped mass, edges with a 2-point Gauss rule. Rows add up per element and pattern.
+  - Shell loads (`shell3` and `shell4` only; a shell takes no `uniform`): `{ kind: "shellPressure", pressure }`
+    (per unit area, positive along the local normal `e3`) and `{ kind: "shellBody", bx, by, bz }`
+    (a body acceleration in global axes, force per area `rho h b`; a gravity vector points down).
+    Both are consistent nodal forces `integral(N_i) * value`, translations only. OpenSees'
+    `ShellMITC4` has no pressure load and applies `-selfWeight` with the opposite sign, and `ShellDKGT` applies twice
+    the self-weight (a bug in its integration weight), so exporters expand pressure, and a triangle's self-weight, into
+    nodal loads and negate the quad's body vector.
   - `elementForce` recorders report member end forces including the fixed-end
     effect of element loads (the free end of a loaded cantilever reports zero).
 

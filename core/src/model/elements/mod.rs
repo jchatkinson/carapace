@@ -9,7 +9,7 @@ use super::{
 mod ops;
 pub use ops::{
     two_node_dofs, DofMask, DofRef, ElementForce, ElementOps, GaussResponse, NodeList, NodeView,
-    TangentSink, VectorSink, MAX_ELEMENT_NODES,
+    ShellResponse, TangentSink, VectorSink, MAX_ELEMENT_NODES,
 };
 
 mod disp_beam_column;
@@ -17,6 +17,8 @@ mod elastic_beam_column;
 mod force_beam_column;
 mod plane_common;
 mod quad4;
+mod shell3;
+mod shell4;
 mod tri3;
 mod truss;
 mod uniform_load;
@@ -26,6 +28,8 @@ pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
 pub use quad4::{Quad4, Quad4Formulation};
+pub use shell3::Shell3;
+pub use shell4::Shell4;
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
 pub use zero_length::{
@@ -405,7 +409,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         Element::fiber_responses(self, nodes.get(i), nodes.get(j))
     }
 }
-/// Spatial element catalog — `Domain3`'s counterpart to `Element`. Closed
+/// 3D element catalog — `Domain3`'s counterpart to `Element`. Closed
 /// enum, `match`-based dispatch, same reasoning as `Element`.
 #[derive(Debug, Clone)]
 pub enum Element3 {
@@ -415,11 +419,26 @@ pub enum Element3 {
     ElasticBeamColumn3(ElasticBeamColumn3),
     DispBeamColumn3(DispBeamColumn3),
     ForceBeamColumn3(ForceBeamColumn3),
+    Shell3(Shell3),
+    Shell4(Shell4),
 }
 
+const SHELL: &str = "shell elements assemble through ElementOps, not the two-node path";
+
 impl Element3 {
-    pub fn nodes(&self) -> [Node3Id; 2] {
+    /// The nodes this element connects, in local order.
+    pub fn nodes(&self) -> NodeList<Node3Id> {
         match self {
+            Element3::Shell3(s) => s.nodes.into_iter().collect(),
+            Element3::Shell4(s) => s.nodes.into_iter().collect(),
+            _ => self.pair().into_iter().collect(),
+        }
+    }
+
+    /// The two end nodes of a two-node element.
+    fn pair(&self) -> [Node3Id; 2] {
+        match self {
+            Element3::Shell3(_) | Element3::Shell4(_) => unreachable!("{SHELL}"),
             Element3::Truss3(t) => [t.node_i, t.node_j],
             Element3::ZeroLength3(z) => [z.node_i, z.node_j],
             Element3::ZeroLengthSection3(z) => [z.node_i, z.node_j],
@@ -445,15 +464,14 @@ impl Element3 {
             Element3::ElasticBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element3::DispBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.form_tangent_and_resistance(node_i, node_j, load),
+            Element3::Shell3(_) | Element3::Shell4(_) => unreachable!("{SHELL}"),
         }
     }
 
     /// This element's equivalent nodal load vector from `load` — the
-    /// spatial counterpart of `Element::form_load_vector`. Zero when
+    /// 3D counterpart of `Element::form_load_vector`. Zero when
     /// `load` is `None`, and for elements with no element-load support
-    /// (`Truss3`, `ZeroLength3`, `DispBeamColumn3`, `ForceBeamColumn3` —
-    /// matching their planar counterparts, see `ElementOps::Load`'s doc
-    /// comment).
+    /// (`Truss3`, `ZeroLength3`).
     fn form_load_vector(
         &self,
         node_i: &Node3,
@@ -461,14 +479,17 @@ impl Element3 {
         load: Option<&ElementLoad3>,
     ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         match (self, load) {
-            (Element3::ElasticBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
-                b.form_load_vector(node_i, node_j, *wx, *wy, *wz)
+            (Element3::ElasticBeamColumn3(b), Some(l)) => {
+                let [wx, wy, wz] = l.uniform;
+                b.form_load_vector(node_i, node_j, wx, wy, wz)
             }
-            (Element3::DispBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
-                b.form_load_vector(node_i, node_j, *wx, *wy, *wz)
+            (Element3::DispBeamColumn3(b), Some(l)) => {
+                let [wx, wy, wz] = l.uniform;
+                b.form_load_vector(node_i, node_j, wx, wy, wz)
             }
-            (Element3::ForceBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
-                b.form_load_vector(node_i, node_j, *wx, *wy, *wz)
+            (Element3::ForceBeamColumn3(b), Some(l)) => {
+                let [wx, wy, wz] = l.uniform;
+                b.form_load_vector(node_i, node_j, wx, wy, wz)
             }
             _ => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
         }
@@ -482,14 +503,17 @@ impl Element3 {
         load: Option<&ElementLoad3>,
     ) -> SVector<f64, SPATIAL_ELEMENT_DOF> {
         match (self, load) {
-            (Element3::ElasticBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
-                b.form_local_load_vector(node_i, node_j, *wx, *wy, *wz)
+            (Element3::ElasticBeamColumn3(b), Some(l)) => {
+                let [wx, wy, wz] = l.uniform;
+                b.form_local_load_vector(node_i, node_j, wx, wy, wz)
             }
-            (Element3::DispBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
-                b.form_local_load_vector(node_i, node_j, *wx, *wy, *wz)
+            (Element3::DispBeamColumn3(b), Some(l)) => {
+                let [wx, wy, wz] = l.uniform;
+                b.form_local_load_vector(node_i, node_j, wx, wy, wz)
             }
-            (Element3::ForceBeamColumn3(b), Some(ElementLoad3::Uniform { wx, wy, wz })) => {
-                b.form_local_load_vector(node_i, node_j, *wx, *wy, *wz)
+            (Element3::ForceBeamColumn3(b), Some(l)) => {
+                let [wx, wy, wz] = l.uniform;
+                b.form_local_load_vector(node_i, node_j, wx, wy, wz)
             }
             _ => SVector::<f64, SPATIAL_ELEMENT_DOF>::zeros(),
         }
@@ -504,6 +528,7 @@ impl Element3 {
             Element3::ElasticBeamColumn3(b) => b.form_mass(node_i, node_j),
             Element3::DispBeamColumn3(b) => b.form_mass(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.form_mass(node_i, node_j),
+            Element3::Shell3(_) | Element3::Shell4(_) => unreachable!("{SHELL}"),
         }
     }
 
@@ -515,6 +540,7 @@ impl Element3 {
             Element3::ElasticBeamColumn3(_) => {}
             Element3::DispBeamColumn3(b) => b.commit(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.commit(node_i, node_j, load),
+            Element3::Shell3(_) | Element3::Shell4(_) => unreachable!("{SHELL}"),
         }
     }
 
@@ -527,6 +553,7 @@ impl Element3 {
             Element3::ElasticBeamColumn3(b) => b.local_force(node_i, node_j),
             Element3::DispBeamColumn3(b) => b.local_force(node_i, node_j),
             Element3::ForceBeamColumn3(b) => b.local_force(),
+            Element3::Shell3(_) | Element3::Shell4(_) => unreachable!("{SHELL}"),
         }
     }
 
@@ -538,7 +565,9 @@ impl Element3 {
             Element3::Truss3(_)
             | Element3::ZeroLength3(_)
             | Element3::ZeroLengthSection3(_)
-            | Element3::ElasticBeamColumn3(_) => None,
+            | Element3::ElasticBeamColumn3(_)
+            | Element3::Shell3(_)
+            | Element3::Shell4(_) => None,
         }
     }
 }
@@ -548,7 +577,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
     type Id = Element3Id;
 
     fn nodes(&self) -> NodeList<Node3Id> {
-        Element3::nodes(self).into_iter().collect()
+        Element3::nodes(self)
     }
 
     fn dof_mask(&self) -> DofMask {
@@ -559,6 +588,59 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::ElasticBeamColumn3(_)
             | Element3::DispBeamColumn3(_)
             | Element3::ForceBeamColumn3(_) => DofMask::all(SPATIAL_NDF),
+            Element3::Shell3(s) => s.dof_mask(),
+            Element3::Shell4(s) => s.dof_mask(),
+        }
+    }
+
+    fn validate(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> Result<(), &'static str> {
+        match self {
+            Element3::Shell3(s) => s.validate(nodes),
+            Element3::Shell4(s) => s.validate(nodes),
+            _ => Ok(()),
+        }
+    }
+
+    fn accepts_load(&self, load: &ElementLoad3) -> bool {
+        match self {
+            Element3::Shell3(_) | Element3::Shell4(_) => !load.has_uniform(),
+            _ => !load.has_body() && !load.has_pressure(),
+        }
+    }
+
+    fn prepare(&mut self, nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>) {
+        match self {
+            Element3::Shell3(s) => s.prepare(nodes),
+            Element3::Shell4(s) => s.prepare(nodes),
+            _ => {}
+        }
+    }
+
+    fn gauss_point_count(&self) -> usize {
+        match self {
+            Element3::Shell3(_) | Element3::Shell4(_) => 4,
+            _ => 0,
+        }
+    }
+
+    fn gauss_component_count(&self) -> usize {
+        match self {
+            Element3::Shell3(_) | Element3::Shell4(_) => 8,
+            _ => 3,
+        }
+    }
+
+    fn shell_responses(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> Option<Vec<ShellResponse>> {
+        match self {
+            Element3::Shell3(s) => Some(s.shell_responses(nodes)),
+            Element3::Shell4(s) => Some(s.shell_responses(nodes)),
+            _ => None,
         }
     }
 
@@ -568,7 +650,12 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         load: Option<&ElementLoad3>,
         sink: &mut S,
     ) {
-        let [i, j] = Element3::nodes(self);
+        match self {
+            Element3::Shell3(s) => return s.assemble_tangent(nodes, sink),
+            Element3::Shell4(s) => return s.assemble_tangent(nodes, sink),
+            _ => {}
+        }
+        let [i, j] = Element3::pair(self);
         let (k, r) = Element3::form_tangent_and_resistance(self, nodes.get(i), nodes.get(j), load);
         sink.add(
             &two_node_dofs::<_, SPATIAL_ELEMENT_DOF>(i, j, SPATIAL_NDF),
@@ -583,7 +670,16 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         load: Option<&ElementLoad3>,
         sink: &mut S,
     ) {
-        let [i, j] = Element3::nodes(self);
+        match self {
+            Element3::Shell3(s) => {
+                return load.map_or((), |load| s.assemble_load(nodes, load, sink))
+            }
+            Element3::Shell4(s) => {
+                return load.map_or((), |load| s.assemble_load(nodes, load, sink))
+            }
+            _ => {}
+        }
+        let [i, j] = Element3::pair(self);
         let v = Element3::form_load_vector(self, nodes.get(i), nodes.get(j), load);
         sink.add(
             &two_node_dofs::<_, SPATIAL_ELEMENT_DOF>(i, j, SPATIAL_NDF),
@@ -596,7 +692,12 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
         sink: &mut S,
     ) {
-        let [i, j] = Element3::nodes(self);
+        match self {
+            Element3::Shell3(s) => return s.assemble_mass(nodes, sink),
+            Element3::Shell4(s) => return s.assemble_mass(nodes, sink),
+            _ => {}
+        }
+        let [i, j] = Element3::pair(self);
         let v = Element3::form_mass(self, nodes.get(i), nodes.get(j));
         sink.add(
             &two_node_dofs::<_, SPATIAL_ELEMENT_DOF>(i, j, SPATIAL_NDF),
@@ -609,19 +710,33 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
         load: Option<&ElementLoad3>,
     ) {
-        let [i, j] = Element3::nodes(self);
+        match self {
+            Element3::Shell3(s) => return s.commit(nodes),
+            Element3::Shell4(s) => return s.commit(nodes),
+            _ => {}
+        }
+        let [i, j] = Element3::pair(self);
         Element3::commit(self, nodes.get(i), nodes.get(j), load)
     }
 
     fn local_force_width(&self) -> usize {
-        SPATIAL_ELEMENT_DOF
+        match self {
+            Element3::Shell3(_) => 18,
+            Element3::Shell4(_) => 24,
+            _ => SPATIAL_ELEMENT_DOF,
+        }
     }
 
     fn local_force(
         &self,
         nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
     ) -> ElementForce {
-        let [i, j] = Element3::nodes(self);
+        match self {
+            Element3::Shell3(s) => return s.local_force(nodes),
+            Element3::Shell4(s) => return s.local_force(nodes),
+            _ => {}
+        }
+        let [i, j] = Element3::pair(self);
         Element3::local_force(self, nodes.get(i), nodes.get(j)).into()
     }
 
@@ -630,7 +745,20 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
         load: Option<&ElementLoad3>,
     ) -> ElementForce {
-        let [i, j] = Element3::nodes(self);
+        match self {
+            Element3::Shell3(s) => {
+                return load
+                    .map_or(SVector::<f64, 18>::zeros(), |l| s.load_vector(nodes, l))
+                    .into()
+            }
+            Element3::Shell4(s) => {
+                return load
+                    .map_or(SVector::<f64, 24>::zeros(), |l| s.load_vector(nodes, l))
+                    .into()
+            }
+            _ => {}
+        }
+        let [i, j] = Element3::pair(self);
         Element3::form_local_load_vector(self, nodes.get(i), nodes.get(j), load).into()
     }
 
@@ -638,7 +766,10 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         &self,
         nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
     ) -> Option<Vec<Vec<(f64, f64)>>> {
-        let [i, j] = Element3::nodes(self);
+        if let Element3::Shell3(_) | Element3::Shell4(_) = self {
+            return None;
+        }
+        let [i, j] = Element3::pair(self);
         Element3::fiber_responses(self, nodes.get(i), nodes.get(j))
     }
 }
@@ -786,6 +917,36 @@ mod mask_conformance {
                 Quad4::new([a, b, c, d], 0.5, material())
                     .with_formulation(crate::model::Quad4Formulation::Enhanced),
             ),
+            &nodes,
+            true,
+        );
+    }
+
+    #[test]
+    fn shell_declares_all_six_slots_it_stiffens() {
+        let mut nodes = SlotMap::with_key();
+        let coords = [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.2, 0.3],
+            [2.3, 1.7, 0.9],
+            [-0.1, 1.4, 0.2],
+        ];
+        let ids = coords.map(|c| {
+            let mut node = Node3::new(c);
+            node.displacement = [0.01, -0.02, 0.03, 0.002, -0.003, 0.004];
+            nodes.insert(node)
+        });
+        let section =
+            crate::model::ShellSection::elastic_membrane_plate(3e4, 0.25, 0.4, 0.0).unwrap();
+        check(
+            "Shell4",
+            &Element3::Shell4(Shell4::new(ids, section.clone())),
+            &nodes,
+            true,
+        );
+        check(
+            "Shell3",
+            &Element3::Shell3(Shell3::new([ids[0], ids[1], ids[2]], section)),
             &nodes,
             true,
         );

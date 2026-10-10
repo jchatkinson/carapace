@@ -11,8 +11,8 @@ use super::load_pattern::{
 };
 use super::{
     Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LoadPatternId,
-    LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView, SparseMatrix, TangentSink, VectorSink,
-    NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
+    LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView, ShellResponse, SparseMatrix,
+    TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -245,10 +245,21 @@ where
         self.elements[id].gauss_point_count()
     }
 
+    /// Components per Gauss-point strain/stress vector of `id` (3 for plane elements, 8 for shells).
+    pub fn element_gauss_component_count(&self, id: E::Id) -> usize {
+        self.elements[id].gauss_component_count()
+    }
+
     /// Every Gauss point's committed strain and stress at `id` — `None` for
     /// every element kind that is not a continuum element.
     pub fn element_gauss_responses(&self, id: E::Id) -> Option<Vec<GaussResponse>> {
         self.elements[id].gauss_responses(&self.node_view())
+    }
+
+    /// Every Gauss point's committed generalized strain and resultants at the shell `id` — `None`
+    /// for every element kind that is not a shell.
+    pub fn element_shell_responses(&self, id: E::Id) -> Option<Vec<ShellResponse>> {
+        self.elements[id].shell_responses(&self.node_view())
     }
 
     /// Support/equilibrium reaction at `(node, dof)`: net internal element
@@ -947,7 +958,10 @@ where
         let rhs = DVector::from_element(n, 1.0) + resistance;
         let start = std::time::Instant::now();
         let _ = factor.solve(&rhs);
-        ([elements, matrix, first, repeat, lap(start)], triplets.len())
+        (
+            [elements, matrix, first, repeat, lap(start)],
+            triplets.len(),
+        )
     }
 
     /// Assemble the total applied load (every `LoadPattern`'s nodal +

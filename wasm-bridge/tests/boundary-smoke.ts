@@ -286,4 +286,27 @@ assert(gaussError.kind === "invalidGaussPoint" && gaussError.count === 4, "gauss
 const planeError = expectThrow(() => decodeInput({ ...continuum, planeMaterials: [{ kind: "isotropic", e: -1, nu: 0, state: "planeStress" }] })) as DecodeError;
 assert(planeError.kind === "invalidPlaneMaterial", "plane material validation");
 
-console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, configurable static/transient solvers, arc length, legacy inputs, errors.");
+// Shells: a clamped unit quad under pressure; the four vertical reactions sum to -p A.
+const shell = emptyInput(3);
+shell.nodes = { coords: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], fixed: [63, 63, 63, 63], massNodeIndex: [], mass: [] };
+shell.shellSections = [{ kind: "elasticMembranePlate", e: 1000, nu: 0.3, h: 0.1, rho: 0 }];
+shell.shell4s = { nodeIds: [0, 1, 2, 3], section: [0] };
+shell.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
+shell.elementLoads = { pattern: [0], elementKind: ["shell4"], elementIndex: [0], load: [{ kind: "shellPressure", pressure: 2 }], stage: [0] };
+shell.sequence = {
+  stages: [{ kind: "static", id: "press", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: "linear", holdPatternsAfter: [] }],
+  recorders: [0, 1, 2, 3].map((node) => ({ response: "reaction" as const, node, dof: 2 })),
+};
+{
+  const session = decodeInput(shell);
+  try {
+    const outcome = session.advance(1);
+    assert(outcome.error === undefined, "shell run");
+    const total = outcome.recorderBatches.reduce((sum, batch) => sum + batch.samples[0][1], 0);
+    assert(Math.abs(total + 2) < 1e-9, "shell pressure reactions");
+  } finally { session.free(); }
+}
+const shellError = expectThrow(() => decodeInput({ ...shell, shellSections: [{ kind: "elasticMembranePlate", e: 1000, nu: 0.3, h: 0, rho: 0 }] })) as DecodeError;
+assert(shellError.kind === "invalidShellSection", "shell section validation");
+
+console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, shells, configurable static/transient solvers, arc length, legacy inputs, errors.");

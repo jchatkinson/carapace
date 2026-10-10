@@ -311,7 +311,7 @@ fn pdelta3_matches_linear3_at_zero_axial_force_and_softens_under_compression_in_
 
 /// Spatial counterpart to `elements/elastic_beam.rs`'s `simply_supported_beam_udl_
 /// matches_closed_form_end_rotation` — `ElasticBeamColumn3`'s new local
-/// `wy`/`wz` uniform transverse load (`ElementLoad3::Uniform`,
+/// `wy`/`wz` uniform transverse load (`ElementLoad3::uniform`,
 /// the spatial generalization of planar `ElementLoad::Uniform`;
 /// see the 3D beam-load design),
 /// exercised through the full `Domain3`/`Analysis3` stack with a member
@@ -364,7 +364,7 @@ fn axis_aligned_biaxial_udl_matches_closed_form_end_rotations_in_both_planes() {
         GeomTransf3::linear([0.0, 0.0, 1.0]),
     )));
     let pattern = domain.default_pattern();
-    domain.add_element_load(pattern, beam, ElementLoad3::Uniform { wx: 0.0, wy, wz });
+    domain.add_element_load(pattern, beam, ElementLoad3::uniform(0.0, wy, wz));
 
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
@@ -455,15 +455,7 @@ fn zero_uniform_transverse_load_matches_no_load_at_all() {
         )));
         if with_zero_load {
             let pattern = domain.default_pattern();
-            domain.add_element_load(
-                pattern,
-                beam,
-                ElementLoad3::Uniform {
-                    wx: 0.0,
-                    wy: 0.0,
-                    wz: 0.0,
-                },
-            );
+            domain.add_element_load(pattern, beam, ElementLoad3::uniform(0.0, 0.0, 0.0));
         }
         domain.load_node(node_j, SpatialDof::Uy as usize, 1.0);
 
@@ -599,15 +591,7 @@ fn spatial_cantilever_axial_udl_matches_closed_form() {
         GeomTransf3::linear([0.0, 0.0, 1.0]),
     )));
     let pattern = domain.default_pattern();
-    domain.add_element_load(
-        pattern,
-        beam,
-        ElementLoad3::Uniform {
-            wx,
-            wy: 0.0,
-            wz: 0.0,
-        },
-    );
+    domain.add_element_load(pattern, beam, ElementLoad3::uniform(wx, 0.0, 0.0));
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1.0 })

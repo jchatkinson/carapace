@@ -40,6 +40,15 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
             "force_beam_columns_3d",
             input.force_beam_columns_3d.node_i.is_empty(),
         ),
+        ("shell_sections", input.shell_sections.is_empty()),
+        (
+            "shell3s",
+            input.shell3s.node_ids.is_empty() && input.shell3s.section.is_empty(),
+        ),
+        (
+            "shell4s",
+            input.shell4s.node_ids.is_empty() && input.shell4s.section.is_empty(),
+        ),
     ])?;
     check_fibers(&input.fibers, NDM)?;
     let materials = resolve_materials(&input.materials)?;
@@ -166,6 +175,9 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
             }
             ElementLoadSpec::EdgePressure { edge, pressure } => {
                 ElementLoad::edge_pressure(edge as usize, pressure)
+            }
+            ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
+                return None
             }
         })
     })

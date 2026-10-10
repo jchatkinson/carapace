@@ -70,12 +70,14 @@ mod elastic_like;
 mod hysteretic;
 mod pinching4;
 mod plane;
+mod shell_section;
 mod steel01;
 mod steel02;
 
 pub use hysteretic::HystereticFields;
 pub use pinching4::{Pinching4DmgCyc, Pinching4Fields, Pinching4State};
 pub use plane::{PlaneMaterial, PlaneMaterialError, PlaneMatrix, PlaneVector};
+pub use shell_section::{ShellMatrix, ShellSection, ShellSectionError, ShellVector};
 pub use steel01::Steel01Loading;
 pub use steel02::Steel02Kon;
 

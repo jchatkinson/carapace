@@ -56,6 +56,11 @@ pub enum DecodeError {
         index: u32,
         reason: &'static str,
     },
+    /// A shell section's constants are unusable.
+    InvalidShellSection {
+        index: u32,
+        reason: &'static str,
+    },
     /// A row's shape is wrong for the profile or its sparse encoding (a
     /// friction row with the wrong number of shear DOFs, a 2D `orient` row
     /// with `yp`, `fibers.z` not parallel to `y`, malformed offsets, ...).

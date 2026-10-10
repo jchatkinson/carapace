@@ -618,7 +618,7 @@ fn truss_input(ndm: u8) -> CarapaceInputV1 {
 /// and 3D have 12).
 #[test]
 fn an_out_of_range_recorder_component_is_a_decode_error() {
-    for (ndm, force_width, load_width) in [(2u8, 6u8, 16u8), (3, 12, 3)] {
+    for (ndm, force_width, load_width) in [(2u8, 6u8, 16u8), (3, 12, 7)] {
         let element_kind = ElementKind::Truss;
         // The last valid component decodes; one past it is `InvalidRecorderComponent`.
         for (kind_is_load, width) in [(false, force_width), (true, load_width)] {

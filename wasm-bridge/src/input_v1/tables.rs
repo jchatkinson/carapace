@@ -361,6 +361,38 @@ pub struct QuadTable {
     pub formulation: Vec<Quad4FormulationSpec>,
 }
 
+/// A shell section, referenced by `shell4s` rows through the `shellSections` arena. Generalized
+/// strain and resultants follow OpenSees' `ElasticMembranePlateSection` ordering.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ShellSectionSpec {
+    /// Isotropic elastic membrane + plate bending + transverse shear: modulus, Poisson ratio,
+    /// thickness and mass density (per unit volume).
+    ElasticMembranePlate { e: f64, nu: f64, h: f64, rho: f64 },
+}
+
+/// 3-node DKT/Allman shells (3D models only). `nodeIds` has stride 3 (the node order sets the local normal by the
+/// right-hand rule); `section` indexes `shellSections`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct Shell3Table {
+    pub node_ids: Vec<u32>,
+    pub section: Vec<u32>,
+}
+
+/// 4-node MITC4 shells (3D models only). `nodeIds` has stride 4 (the node order fixes the
+/// local normal by the right-hand rule); `section` indexes `shellSections`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct Shell4Table {
+    pub node_ids: Vec<u32>,
+    pub section: Vec<u32>,
+}
+
 /// Every element formulation, 2D and 3D. A kind that does not belong to the
 /// model's `ndm` is `DecodeError::ElementKindNotInProfile`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
@@ -377,10 +409,12 @@ pub enum ElementKind {
     ZeroLengthSection,
     Tri3,
     Quad4,
+    Shell3,
+    Shell4,
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 11] = [
+    pub const ALL: [ElementKind; 13] = [
         ElementKind::Truss,
         ElementKind::ElasticBeamColumn2d,
         ElementKind::ElasticBeamColumn3d,
@@ -392,6 +426,8 @@ impl ElementKind {
         ElementKind::ZeroLengthSection,
         ElementKind::Tri3,
         ElementKind::Quad4,
+        ElementKind::Shell3,
+        ElementKind::Shell4,
     ];
 
     /// The kind's table name as `DecodeError`s report it (snake_case).
@@ -408,6 +444,8 @@ impl ElementKind {
             ElementKind::ZeroLengthSection => "zero_length_sections",
             ElementKind::Tri3 => "triangles",
             ElementKind::Quad4 => "quads",
+            ElementKind::Shell3 => "shell3s",
+            ElementKind::Shell4 => "shell4s",
         }
     }
 
@@ -423,7 +461,9 @@ impl ElementKind {
             | ElementKind::Quad4 => Some(2),
             ElementKind::ElasticBeamColumn3d
             | ElementKind::DispBeamColumn3d
-            | ElementKind::ForceBeamColumn3d => Some(3),
+            | ElementKind::ForceBeamColumn3d
+            | ElementKind::Shell3
+            | ElementKind::Shell4 => Some(3),
         }
     }
 
@@ -434,6 +474,11 @@ impl ElementKind {
     /// The 2D continuum elements (they take body and edge loads).
     pub fn is_continuum(self) -> bool {
         matches!(self, ElementKind::Tri3 | ElementKind::Quad4)
+    }
+
+    /// The 3D shell elements (they take self-weight and pressure loads).
+    pub fn is_shell(self) -> bool {
+        matches!(self, ElementKind::Shell3 | ElementKind::Shell4)
     }
 
     /// Number of edges of a continuum element (zero for every other kind).
@@ -491,6 +536,12 @@ pub enum ElementLoadSpec {
     /// Pressure on edge `edge`, positive into the element along the inward
     /// normal (continuum elements, 2D).
     EdgePressure { edge: u8, pressure: f64 },
+    /// Pressure per unit area on a shell, positive along its local normal `e3` (right-hand rule
+    /// from the node order). Applied as consistent nodal forces.
+    ShellPressure { pressure: f64 },
+    /// Body acceleration on a shell in global axes (a gravity vector `g` points down); the force
+    /// per unit area is `rho h b`. Note OpenSees' `ShellMITC4` `-selfWeight` has the opposite sign.
+    ShellBody { bx: f64, by: f64, bz: f64 },
 }
 
 /// Identity multi-point constraints (`core::Domain::equal_dof`'s doc

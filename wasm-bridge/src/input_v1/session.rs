@@ -65,6 +65,14 @@ where
     NId: Key,
     E: ElementOps<NDIM, NDOF, NId>,
 {
+    if let Some(responses) = domain.element_shell_responses(element) {
+        let response = responses.get(point as usize)?;
+        let values = match quantity {
+            GaussQuantity::Strain => response.strain,
+            GaussQuantity::Stress => response.resultant,
+        };
+        return values.get(component as usize).copied();
+    }
     let response = *domain
         .element_gauss_responses(element)?
         .get(point as usize)?;

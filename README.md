@@ -31,6 +31,8 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
 - [x] Tri3 (constant strain) and Quad4 (full 2x2 or enhanced incompatible-mode)
   plane-stress/plane-strain continuum elements (2D), with isotropic and orthotropic
   `PlaneMaterial`s, body, edge-traction and edge-pressure loads, and Gauss-point recorders
+- [x] Shell4 (MITC4 flat shell) and Shell3 (DKT/Allman flat triangle), `ElasticMembranePlate` section; 3D: nodal, pressure and self-weight
+  loads, static and modal (lumped mass), resultant recorders; match OpenSees `ShellMITC4` / `ShellDKGT`
 - [x] ZeroLengthSection — fiber section with optional independent springs (2D + 3D)
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)

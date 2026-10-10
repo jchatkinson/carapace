@@ -166,6 +166,16 @@ pub struct GaussResponse {
     pub stress: [f64; 3],
 }
 
+/// One shell integration point's committed generalized strain and stress resultants in the
+/// element's local axes, in `ShellSection`'s ordering and sign convention:
+/// `[eps_x, eps_y, gamma_xy, kappa_x, kappa_y, 2 kappa_xy, gamma_xz, gamma_yz]` and
+/// `[Nx, Ny, Nxy, Mx, My, Mxy, Qx, Qy]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShellResponse {
+    pub strain: [f64; 8],
+    pub resultant: [f64; 8],
+}
+
 /// What `Domain`'s generic assembly/state plumbing needs from an element
 /// catalog. A trait rather than a shared enum because `Element` (2D) and
 /// `Element3` (3D) hold different variant sets, and a single enum would
@@ -276,12 +286,27 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         0
     }
 
+    /// Components per Gauss-point strain or stress vector (3 for plane elements, 8 for shells);
+    /// the bound a Gauss-point recorder's `component` is checked against.
+    fn gauss_component_count(&self) -> usize {
+        3
+    }
+
     /// Every Gauss point's committed strain and stress; `None` for every
     /// element that is not a continuum element.
     fn gauss_responses(
         &self,
         _nodes: &NodeView<'_, NDIM, NDOF, NId>,
     ) -> Option<Vec<GaussResponse>> {
+        None
+    }
+
+    /// Every Gauss point's committed generalized strain and resultants; `None` for every
+    /// element that is not a shell.
+    fn shell_responses(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+    ) -> Option<Vec<ShellResponse>> {
         None
     }
 

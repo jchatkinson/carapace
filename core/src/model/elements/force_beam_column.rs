@@ -552,11 +552,7 @@ impl ForceBeamColumn {
 
 /// Sign of the `wz`-driven `My` section force relative to `Mz`'s `wy`-driven
 /// form (the `ry = -dw/dx` convention flips it).
-const NO_LOAD3: ElementLoad3 = ElementLoad3::Uniform {
-    wx: 0.0,
-    wy: 0.0,
-    wz: 0.0,
-};
+const NO_LOAD3: ElementLoad3 = ElementLoad3::uniform(0.0, 0.0, 0.0);
 
 /// `3` — number of section force/deformation components for
 /// `ForceBeamColumn3` (`N`, `Mz`, `My` — biaxial bending, no torsion; see
@@ -655,11 +651,7 @@ impl ForceBeamColumn3 {
             q_commit: SVector::<f64, NBD3>::zeros(),
             e_commit: vec![(0.0, 0.0, 0.0); n_points],
             v_commit: SVector::<f64, NBD3>::zeros(),
-            load_commit: ElementLoad3::Uniform {
-                wx: 0.0,
-                wy: 0.0,
-                wz: 0.0,
-            },
+            load_commit: ElementLoad3::uniform(0.0, 0.0, 0.0),
             max_iters: 50,
             tolerance: 1e-12,
             local_force: SpatialElementVector::zeros(),
@@ -750,7 +742,7 @@ impl ForceBeamColumn3 {
     /// already absorbed into `b_matrix`'s conjugate `q4`/`q5` (verified
     /// against `ElasticBeamColumn3` in `core/tests/elements/force_beam_loads.rs`).
     fn section_load(xi: f64, length: f64, load: &ElementLoad3) -> SVector<f64, NSD3> {
-        let ElementLoad3::Uniform { wx, wy, wz } = *load;
+        let [wx, wy, wz] = load.uniform;
         let bending = length * length * xi * (xi - 1.0) / 2.0;
         SVector::<f64, NSD3>::new(wx * length * (1.0 - xi), wy * bending, wz * bending)
     }

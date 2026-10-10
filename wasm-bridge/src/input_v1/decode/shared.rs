@@ -545,6 +545,9 @@ where
             ElementLoadSpec::Body { .. }
             | ElementLoadSpec::EdgeTraction { .. }
             | ElementLoadSpec::EdgePressure { .. } => kind.is_continuum(),
+            ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
+                kind.is_shell()
+            }
         };
         if !carried {
             return Err(DecodeError::UnsupportedElementLoad {
@@ -698,7 +701,7 @@ where
                             count: count as u32,
                         });
                     }
-                    component_within(component, 3)?;
+                    component_within(component, domain.element_gauss_component_count(element))?;
                     ResolvedRecorder::GaussPoint {
                         element,
                         point,

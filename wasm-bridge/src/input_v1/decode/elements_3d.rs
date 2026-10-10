@@ -3,8 +3,8 @@
 
 use carapace_core::model::{
     Axis3, DispBeamColumn3, Domain3, ElasticBeamColumn3, Element3, Element3Id, ElementLoad3,
-    Fiber3, FiberSection3, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Truss3,
-    ZeroLength3, ZeroLengthSection3,
+    Fiber3, FiberSection3, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3,
+    Shell4, ShellSection, Truss3, ZeroLength3, ZeroLengthSection3,
 };
 
 use super::shared::{
@@ -16,8 +16,8 @@ use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::session::Session3;
 use crate::input_v1::tables::{
-    Axis3Spec, ElementKind, ElementLoadSpec, TransformSpec3, ZeroLengthSectionTable,
-    ZeroLengthTable,
+    Axis3Spec, ElementKind, ElementLoadSpec, Shell3Table, Shell4Table, ShellSectionSpec,
+    TransformSpec3, ZeroLengthSectionTable, ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -167,15 +167,101 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
         )?,
     );
 
+    let shell_sections = resolve_shell_sections(&input.shell_sections)?;
+    elements.set(
+        ElementKind::Shell3,
+        add_shell3s(&mut domain, &input.shell3s, &node_at, &shell_sections)?,
+    );
+    elements.set(
+        ElementKind::Shell4,
+        add_shell4s(&mut domain, &input.shell4s, &node_at, &shell_sections)?,
+    );
+
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
     finish(domain, &input, node_ids, elements, |spec| match *spec {
-        ElementLoadSpec::Uniform { wx, wy, wz } => Some(ElementLoad3::Uniform {
-            wx,
-            wy,
-            wz: wz.unwrap_or(0.0),
-        }),
+        ElementLoadSpec::Uniform { wx, wy, wz } => {
+            Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.0)))
+        }
+        ElementLoadSpec::ShellPressure { pressure } => Some(ElementLoad3::pressure(pressure)),
+        ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
         _ => None,
     })
+}
+
+fn resolve_shell_sections(specs: &[ShellSectionSpec]) -> Result<Vec<ShellSection>, DecodeError> {
+    specs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let ShellSectionSpec::ElasticMembranePlate { e, nu, h, rho } = *spec;
+            ShellSection::elastic_membrane_plate(e, nu, h, rho).map_err(|error| {
+                DecodeError::InvalidShellSection {
+                    index: index as u32,
+                    reason: error.message(),
+                }
+            })
+        })
+        .collect()
+}
+
+fn add_shell3s(
+    domain: &mut Domain3,
+    table: &Shell3Table,
+    node_at: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
+    sections: &[ShellSection],
+) -> Result<Vec<Element3Id>, DecodeError> {
+    const TABLE: &str = "shell3s";
+    let rows = table.section.len();
+    if table.node_ids.len() != 3 * rows {
+        return Err(DecodeError::InvalidRow {
+            table: TABLE,
+            row: 0,
+            reason: "nodeIds must have stride 3",
+        });
+    }
+    (0..rows)
+        .map(|i| {
+            let n = |k: usize| node_at(table.node_ids[3 * i + k], TABLE);
+            let section = sections.get(table.section[i] as usize).ok_or(
+                DecodeError::UnknownMaterialIndex {
+                    table: TABLE,
+                    row: table.section[i],
+                },
+            )?;
+            let element = Shell3::new([n(0)?, n(1)?, n(2)?], section.clone());
+            Ok(domain.add_element(Element3::Shell3(element)))
+        })
+        .collect()
+}
+
+fn add_shell4s(
+    domain: &mut Domain3,
+    table: &Shell4Table,
+    node_at: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
+    sections: &[ShellSection],
+) -> Result<Vec<Element3Id>, DecodeError> {
+    const TABLE: &str = "shell4s";
+    let rows = table.section.len();
+    if table.node_ids.len() != 4 * rows {
+        return Err(DecodeError::InvalidRow {
+            table: TABLE,
+            row: 0,
+            reason: "nodeIds must have stride 4",
+        });
+    }
+    (0..rows)
+        .map(|i| {
+            let n = |k: usize| node_at(table.node_ids[4 * i + k], TABLE);
+            let section = sections.get(table.section[i] as usize).ok_or(
+                DecodeError::UnknownMaterialIndex {
+                    table: TABLE,
+                    row: table.section[i],
+                },
+            )?;
+            let element = Shell4::new([n(0)?, n(1)?, n(2)?, n(3)?], section.clone());
+            Ok(domain.add_element(Element3::Shell4(element)))
+        })
+        .collect()
 }
 
 fn add_zero_lengths(

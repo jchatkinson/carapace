@@ -164,7 +164,7 @@ fn spatial_force_beam_matches_elastic_beam_under_triaxial_udl() {
             )))
         };
         let pattern = domain.default_pattern();
-        domain.add_element_load(pattern, beam, ElementLoad3::Uniform { wx, wy, wz });
+        domain.add_element_load(pattern, beam, ElementLoad3::uniform(wx, wy, wz));
         (solve(domain), beam, jn)
     };
 

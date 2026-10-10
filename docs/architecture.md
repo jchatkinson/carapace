@@ -55,7 +55,7 @@ on a multi-term slave is a `ModelError::MassOnConstrainedDof`.
 The effective load on an element is the sum of every pattern's load times its factor, so loads are an
 additive accumulator. 2D `ElementLoad` is a struct (`beam_uniform`, `body`, `edge_traction[4]`,
 `edge_pressure[4]`) with a fixed 16-component layout for the `elementLoad` recorder; `ElementLoad3` is
-still a single-variant enum. `accepts_load` decides compatibility per element and `Domain::validate`
+a struct of the same shape (`uniform`, `body`, `pressure`). `accepts_load` decides compatibility per element and `Domain::validate`
 reports `IncompatibleElementLoad`; the wire decoder checks the same at decode time.
 
 ## Continuum elements
@@ -65,6 +65,15 @@ reports `IncompatibleElementLoad`; the wire decoder checks the same at decode ti
 trial/commit seam on `[eps_x, eps_y, gamma_xy]` with an independent copy per Gauss point.
 `Quad4Formulation::Enhanced` adds Wilson-Taylor incompatible modes with static condensation and accepts
 linear materials only. `prepare` caches per-point `B` and `detJ * w`.
+
+## Shells
+
+`Shell4` (`elements/shell4.rs`) is the OpenSees `ShellMITC4` formulation and `Shell3` (`shell3.rs`) the `ShellDKGT` one (DKT bending + Allman membrane, no shear, 4-point rule), reproduced term by term so
+results agree to solver precision (see `core/tests/shells`). `ShellSection` (`materials/shell_section.rs`)
+is the trial/commit seam for the section, one copy per Gauss point, with OpenSees' generalized strain
+ordering and sign convention. Shells go through the sink path like `Quad4` (`Element3::nodes()` returns a
+`NodeList`); `ElementOps::shell_responses` reports the eight strains and resultants per Gauss point and
+`gauss_component_count` bounds the recorder component.
 
 ## When to share and when to split the 2D/3D code
 

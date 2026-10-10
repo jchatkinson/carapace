@@ -16,9 +16,9 @@ pub use elements::{
     two_node_dofs, DispBeamColumn, DispBeamColumn3, DofMask, DofRef, ElasticBeamColumn,
     ElasticBeamColumn3, Element, Element3, Element3Id, ElementForce, ElementId, ElementOps,
     ForceBeamColumn, ForceBeamColumn3, Friction, Friction3, GaussResponse, NodeList, NodeView,
-    Orientation, OrientationError, Quad4, Quad4Formulation, SpatialElementMatrix, SpatialElementVector, TangentSink,
-    Tri3, Truss, Truss3, VectorSink, ZeroLength, ZeroLength3, ZeroLengthSection,
-    ZeroLengthSection3, MAX_ELEMENT_NODES,
+    Orientation, OrientationError, Quad4, Quad4Formulation, Shell3, Shell4, ShellResponse,
+    SpatialElementMatrix, SpatialElementVector, TangentSink, Tri3, Truss, Truss3, VectorSink,
+    ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3, MAX_ELEMENT_NODES,
 };
 pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
@@ -28,7 +28,7 @@ pub use load_pattern::{
 };
 pub use materials::{
     Material, Pinching4DmgCyc, Pinching4State, PlaneMaterial, PlaneMaterialError, PlaneMatrix,
-    PlaneVector,
+    PlaneVector, ShellMatrix, ShellSection, ShellSectionError, ShellVector,
 };
 pub use node::{
     Axis3, Node, Node2, Node3, Node3Id, NodeId, SpatialDof, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,

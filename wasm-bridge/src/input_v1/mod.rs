@@ -33,7 +33,8 @@ use tables::{
     ElasticBeamColumn2dTable, ElasticBeamColumn3dTable, ElementLoadTable, EqualDofTable,
     FiberBeamColumn2dTable, FiberBeamColumn3dTable, FiberTable, LinearConstraintTable,
     LoadPatternTable, NodalLoadTable, NodeTable, PlaneMaterialSpec, QuadTable, RigidDiaphragmTable,
-    RigidLinkTable, TriangleTable, TrussTable, ZeroLengthSectionTable, ZeroLengthTable,
+    RigidLinkTable, Shell3Table, Shell4Table, ShellSectionSpec, TriangleTable, TrussTable,
+    ZeroLengthSectionTable, ZeroLengthTable,
 };
 
 /// Small structured-clone header fields — everything else in
@@ -117,6 +118,16 @@ pub struct CarapaceInputV1 {
     #[serde(default)]
     #[tsify(optional)]
     pub quads: QuadTable,
+    /// Arena of shell sections for `shell4s` (3D models only).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub shell_sections: Vec<ShellSectionSpec>,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub shell3s: Shell3Table,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub shell4s: Shell4Table,
     #[serde(default)]
     #[tsify(optional)]
     pub rigid_diaphragms: RigidDiaphragmTable,

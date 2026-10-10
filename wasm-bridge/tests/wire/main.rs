@@ -8,4 +8,5 @@ mod material_probe;
 mod modal;
 mod profiles;
 mod recorders;
+mod shells;
 mod stages;

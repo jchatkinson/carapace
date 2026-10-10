@@ -231,12 +231,17 @@ impl ElementLoadComponents for ElementLoad {
     }
 }
 
+/// Component layout: `[wx, wy, wz, bx, by, bz, pressure]` (beam uniform, shell body, shell pressure).
 impl ElementLoadComponents for ElementLoad3 {
-    const COUNT: usize = 3;
+    const COUNT: usize = 7;
 
     fn component(&self, index: usize) -> f64 {
-        let ElementLoad3::Uniform { wx, wy, wz } = *self;
-        [wx, wy, wz].get(index).copied().unwrap_or(0.0)
+        match index {
+            0..=2 => self.uniform[index],
+            3..=5 => self.body[index - 3],
+            6 => self.pressure,
+            _ => 0.0,
+        }
     }
 }
 
@@ -253,16 +258,60 @@ impl std::ops::Mul<f64> for ElementLoad {
     }
 }
 
-/// `ElementLoad`'s spatial counterpart — a uniform load on
-/// `ElasticBeamColumn3`, in the member's local axes (`vec_xz` defines local
-/// `y`/`z`): axial `wx` and biaxial transverse `wy`/`wz` (local `y` and `z`
-/// both carry bending in a spatial member). Xara/OpenSees's
-/// `Beam3dUniformLoad`. `ElementOps::Load` for the spatial profile.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ElementLoad3 {
-    /// Uniform load (force/length): `wx` along the member axis, `wy`/`wz`
-    /// transverse in local +y/+z.
-    Uniform { wx: f64, wy: f64, wz: f64 },
+/// `ElementLoad`'s 3D counterpart: an additive accumulator, one field group per load kind.
+/// `ElementOps::Load` for the 3D profile.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ElementLoad3 {
+    /// Beam-columns: uniform load (force/length) in the member's local axes: `wx` along the
+    /// member axis, `wy`/`wz` transverse in local +y/+z (`vec_xz` defines `y`/`z`).
+    /// Xara/OpenSees's `Beam3dUniformLoad`.
+    pub uniform: [f64; 3],
+    /// Shells: body acceleration in global axes (a gravity vector `g` points down); the force
+    /// per unit area is `+rho h b`. OpenSees' `ShellMITC4` applies `-rho h b` for the same
+    /// `-selfWeight` factors, so exporters negate.
+    pub body: [f64; 3],
+    /// Shells: pressure per unit area, positive along the local normal `e3` (right-hand rule
+    /// from the node order).
+    pub pressure: f64,
+}
+
+impl ElementLoad3 {
+    /// A uniform beam load.
+    pub const fn uniform(wx: f64, wy: f64, wz: f64) -> Self {
+        ElementLoad3 {
+            uniform: [wx, wy, wz],
+            body: [0.0; 3],
+            pressure: 0.0,
+        }
+    }
+
+    /// A shell self-weight (acceleration factors in global axes).
+    pub fn body(bx: f64, by: f64, bz: f64) -> Self {
+        ElementLoad3 {
+            body: [bx, by, bz],
+            ..Default::default()
+        }
+    }
+
+    /// A shell pressure along the local normal.
+    pub fn pressure(pressure: f64) -> Self {
+        ElementLoad3 {
+            pressure,
+            ..Default::default()
+        }
+    }
+
+    pub fn has_uniform(&self) -> bool {
+        self.uniform != [0.0; 3]
+    }
+
+    pub fn has_body(&self) -> bool {
+        self.body != [0.0; 3]
+    }
+
+    pub fn has_pressure(&self) -> bool {
+        self.pressure != 0.0
+    }
 }
 
 impl std::ops::Add for ElementLoad3 {
@@ -270,22 +319,10 @@ impl std::ops::Add for ElementLoad3 {
 
     /// See `ElementLoad`'s `Add`.
     fn add(self, other: ElementLoad3) -> ElementLoad3 {
-        let (
-            ElementLoad3::Uniform {
-                wx: ax,
-                wy: ay,
-                wz: az,
-            },
-            ElementLoad3::Uniform {
-                wx: bx,
-                wy: by,
-                wz: bz,
-            },
-        ) = (self, other);
-        ElementLoad3::Uniform {
-            wx: ax + bx,
-            wy: ay + by,
-            wz: az + bz,
+        ElementLoad3 {
+            uniform: std::array::from_fn(|i| self.uniform[i] + other.uniform[i]),
+            body: std::array::from_fn(|i| self.body[i] + other.body[i]),
+            pressure: self.pressure + other.pressure,
         }
     }
 }
@@ -294,11 +331,10 @@ impl std::ops::Mul<f64> for ElementLoad3 {
     type Output = ElementLoad3;
 
     fn mul(self, factor: f64) -> ElementLoad3 {
-        let ElementLoad3::Uniform { wx, wy, wz } = self;
-        ElementLoad3::Uniform {
-            wx: wx * factor,
-            wy: wy * factor,
-            wz: wz * factor,
+        ElementLoad3 {
+            uniform: self.uniform.map(|v| v * factor),
+            body: self.body.map(|v| v * factor),
+            pressure: self.pressure * factor,
         }
     }
 }
