@@ -33,6 +33,9 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
   `PlaneMaterial`s, body, edge-traction and edge-pressure loads, and Gauss-point recorders
 - [x] Shell4 (MITC4 flat shell) and Shell3 (DKT/Allman flat triangle), `ElasticMembranePlate` section; 3D: nodal, pressure and self-weight
   loads, static and modal (lumped mass), resultant recorders; match OpenSees `ShellMITC4` / `ShellDKGT`
+- [ ] Shell stiffness modifiers (ETABS-style `f11 f22 f12 m11 m22 m12 v13 v23`) on `ElasticMembranePlate`, scaling the
+  individual terms of the section `D`. Breaks OpenSees compatibility except in the uniform case (see
+  `../pysees/docs/shell-plan.md`).
 - [x] ZeroLengthSection — fiber section with optional independent springs (2D + 3D)
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)
