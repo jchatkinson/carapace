@@ -168,34 +168,6 @@ pub struct ArcStopSpec {
     pub max_chord_length: Option<f64>,
 }
 
-/// Accepts the original bare strings and configurable algorithm objects.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
-#[serde(untagged)]
-pub enum AlgorithmSpec {
-    Legacy(LegacyAlgorithmSpec),
-    Config(AlgorithmConfigSpec),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
-#[serde(rename_all = "camelCase")]
-pub enum LegacyAlgorithmSpec {
-    Linear,
-    NewtonRaphson,
-}
-
-impl Default for AlgorithmSpec {
-    fn default() -> Self {
-        Self::Linear
-    }
-}
-
-// Keep the existing Rust constructors as well as the existing JS strings.
-#[allow(non_upper_case_globals)]
-impl AlgorithmSpec {
-    pub const Linear: Self = Self::Legacy(LegacyAlgorithmSpec::Linear);
-    pub const NewtonRaphson: Self = Self::Legacy(LegacyAlgorithmSpec::NewtonRaphson);
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
 pub enum TangentStrategySpec {
@@ -232,7 +204,7 @@ pub enum LineSearchSpec {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-pub enum AlgorithmConfigSpec {
+pub enum AlgorithmSpec {
     Linear,
     Newton {
         #[serde(default)]
@@ -244,6 +216,12 @@ pub enum AlgorithmConfigSpec {
         tangent: TangentStrategySpec,
         max_dimension: u32,
     },
+}
+
+impl Default for AlgorithmSpec {
+    fn default() -> Self {
+        Self::Linear
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
@@ -310,6 +288,18 @@ impl ConvergenceSpec {
 pub struct DampingSpec {
     pub alpha_m: f64,
     pub beta_k: f64,
+    /// Resolve these modal anchors from the current domain at transient-stage entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub modal_anchors: Option<ModalDampingAnchors>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct ModalDampingAnchors {
+    pub mode1: u32,
+    pub mode2: u32,
+    pub ratio: f64,
 }
 
 /// One `core::GroundMotion`: a uniform acceleration time history applied

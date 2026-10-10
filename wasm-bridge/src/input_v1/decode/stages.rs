@@ -14,9 +14,8 @@ use carapace_core::model::{LoadPatternId, LoadSeries};
 use super::shared::check_dof_within;
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::sequence::{
-    AlgorithmConfigSpec, AlgorithmSpec, ArcDirectionSpec, ArcLengthSpec, ArcPredictorSpec,
-    ArcScalesSpec, ConvergenceSpec, IntegratorSpec, LegacyAlgorithmSpec, LineSearchSpec, StageSpec,
-    TangentStrategySpec,
+    AlgorithmSpec, ArcDirectionSpec, ArcLengthSpec, ArcPredictorSpec, ArcScalesSpec,
+    ConvergenceSpec, IntegratorSpec, LineSearchSpec, StageSpec, TangentStrategySpec,
 };
 use crate::input_v1::session::{CompiledStage, CompiledStageKind};
 use crate::input_v1::tables::TimeSeriesSpec;
@@ -29,6 +28,15 @@ pub(super) fn load_series_of(spec: &TimeSeriesSpec) -> LoadSeries {
     match spec {
         TimeSeriesSpec::Constant => LoadSeries::Constant,
         TimeSeriesSpec::Linear { slope } => LoadSeries::Linear { slope: *slope },
+        TimeSeriesSpec::BoundedPath {
+            times,
+            factors,
+            use_last,
+        } => LoadSeries::BoundedPath {
+            times: times.clone(),
+            factors: factors.clone(),
+            use_last: *use_last,
+        },
         TimeSeriesSpec::Path { times, factors } => LoadSeries::Path {
             times: times.clone(),
             factors: factors.clone(),
@@ -127,6 +135,7 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                     if !dt.is_finite() || *dt <= 0.0 {
                         return Err(invalid_option(stage.id(), "dt"));
                     }
+                    let modal_anchors = damping.modal_anchors;
                     let damping = RayleighDamping::new(damping.alpha_m, damping.beta_k);
                     let ground_motions =
                         ground_motions
@@ -150,6 +159,7 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                         *steps,
                         CompiledStageKind::Transient {
                             damping,
+                            modal_anchors,
                             algorithm: algorithm_of(*algorithm, stage.id())?,
                             convergence: convergence_of(*convergence, stage.id(), false)?,
                             dt: *dt,
@@ -188,16 +198,11 @@ fn tangent_of(spec: TangentStrategySpec) -> TangentStrategy {
 
 fn algorithm_of(spec: AlgorithmSpec, stage: &str) -> Result<Algorithm, DecodeError> {
     Ok(match spec {
-        AlgorithmSpec::Legacy(LegacyAlgorithmSpec::Linear)
-        | AlgorithmSpec::Config(AlgorithmConfigSpec::Linear) => Algorithm::Linear,
-        AlgorithmSpec::Legacy(LegacyAlgorithmSpec::NewtonRaphson) => Algorithm::Newton {
-            tangent: TangentStrategy::Current,
-            line_search: None,
-        },
-        AlgorithmSpec::Config(AlgorithmConfigSpec::Newton {
+        AlgorithmSpec::Linear => Algorithm::Linear,
+        AlgorithmSpec::Newton {
             tangent,
             line_search,
-        }) => {
+        } => {
             let line_search = line_search
                 .map(|search| {
                     let (tol, max_iter, max_eta) = match search {
@@ -240,10 +245,10 @@ fn algorithm_of(spec: AlgorithmSpec, stage: &str) -> Result<Algorithm, DecodeErr
                 line_search,
             }
         }
-        AlgorithmSpec::Config(AlgorithmConfigSpec::KrylovNewton {
+        AlgorithmSpec::KrylovNewton {
             tangent,
             max_dimension,
-        }) => {
+        } => {
             if max_dimension == 0 {
                 return Err(invalid_option(stage, "algorithm.maxDimension"));
             }

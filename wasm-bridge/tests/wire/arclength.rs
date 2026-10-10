@@ -8,9 +8,9 @@
 use crate::common::empty_input;
 use carapace_wasm::input_v1::materials::MaterialSpec;
 use carapace_wasm::input_v1::sequence::{
-    AlgorithmConfigSpec, AlgorithmSpec, ArcLengthSpec, ArcScalesSpec, ArcSeedComponentSpec,
-    ArcSeedSpec, ArcStopSpec, ConvergenceSpec, DisplacementTargetSpec, IntegratorSpec,
-    LoadFactorTargetSpec, RecorderSpec, SequenceSpec, StageSpec, TangentStrategySpec,
+    AlgorithmSpec, ArcLengthSpec, ArcScalesSpec, ArcSeedComponentSpec, ArcSeedSpec, ArcStopSpec,
+    ConvergenceSpec, DisplacementTargetSpec, IntegratorSpec, LoadFactorTargetSpec, RecorderSpec,
+    SequenceSpec, StageSpec, TangentStrategySpec,
 };
 use carapace_wasm::input_v1::tables::*;
 use carapace_wasm::input_v1::{
@@ -108,7 +108,10 @@ fn snap_back_input(
             id: "push".into(),
             steps: 250,
             integrator: IntegratorSpec::ArcLength(arc),
-            algorithm: AlgorithmSpec::NewtonRaphson,
+            algorithm: AlgorithmSpec::Newton {
+                tangent: Default::default(),
+                line_search: None,
+            },
             convergence,
             hold_patterns_after: vec![],
         }],
@@ -290,7 +293,10 @@ fn spatial_profile_decodes_arc_settings_and_lands_on_a_load_target() {
             id: "push".into(),
             steps: 100,
             integrator: IntegratorSpec::ArcLength(arc),
-            algorithm: AlgorithmSpec::NewtonRaphson,
+            algorithm: AlgorithmSpec::Newton {
+                tangent: Default::default(),
+                line_search: None,
+            },
             convergence: None,
             hold_patterns_after: vec![],
         }],
@@ -373,17 +379,20 @@ fn invalid_arc_length_options_are_rejected_at_decode() {
     expect_option(with_stage(AlgorithmSpec::Linear, None), "algorithm");
     expect_option(
         with_stage(
-            AlgorithmSpec::Config(AlgorithmConfigSpec::Newton {
+            AlgorithmSpec::Newton {
                 tangent: TangentStrategySpec::Initial,
                 line_search: None,
-            }),
+            },
             None,
         ),
         "algorithm",
     );
     expect_option(
         with_stage(
-            AlgorithmSpec::NewtonRaphson,
+            AlgorithmSpec::Newton {
+                tangent: Default::default(),
+                line_search: None,
+            },
             Some(ConvergenceSpec::NormDispIncr {
                 tol: 1e-9,
                 max_iter: 10,
@@ -393,7 +402,10 @@ fn invalid_arc_length_options_are_rejected_at_decode() {
     );
     expect_option(
         with_stage(
-            AlgorithmSpec::NewtonRaphson,
+            AlgorithmSpec::Newton {
+                tangent: Default::default(),
+                line_search: None,
+            },
             Some(ConvergenceSpec::Combined {
                 force_tol: 0.0,
                 moment_tol: None,

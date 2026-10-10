@@ -95,3 +95,47 @@ fn ground_motion_matches_an_equivalent_mass_proportional_load_pattern() {
         );
     }
 }
+
+/// A cantilever's massless rotation must satisfy equilibrium through the Newmark effective
+/// stiffness, without adding artificial inertia. Compared step by step with the condensed
+/// SDOF (k = 3EI/L^3), under the same ground motion, to absolute tolerance 1e-10.
+#[test]
+fn beam_with_massless_rotation_matches_condensed_sdof() {
+    use carapace_core::model::{ElasticBeamColumn, GeomTransf};
+    let (e, a, iz, length, m): (f64, f64, f64, f64, f64) = (1000.0, 1.0, 1.0, 3.0, 2.0);
+    let mut beam = Domain::new();
+    let base = beam.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let tip = beam.add_node(Node::new([0.0, length]).fix(1).with_mass(0, m));
+    beam.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+        base,
+        tip,
+        e,
+        a,
+        iz,
+        GeomTransf::Linear,
+    )));
+    let (sdof, node) = build_sdof(m, 3.0 * e * iz / length.powi(3));
+    let motion = GroundMotion::new(
+        0,
+        LoadSeries::BoundedPath {
+            times: vec![0.0, 0.1, 0.2],
+            factors: vec![0.0, 1.0, -0.5],
+            use_last: false,
+        },
+    );
+    let mut beam = TransientAnalysis::new(beam, RayleighDamping::NONE, 0.01)
+        .unwrap()
+        .with_ground_motion(motion.clone());
+    let mut sdof = TransientAnalysis::new(sdof, RayleighDamping::NONE, 0.01)
+        .unwrap()
+        .with_ground_motion(motion);
+    for _ in 0..100 {
+        beam.step().unwrap();
+        sdof.step().unwrap();
+        assert!(
+            (beam.domain().node(tip).displacement[0] - sdof.domain().node(node).displacement[0])
+                .abs()
+                < 1e-10
+        );
+    }
+}

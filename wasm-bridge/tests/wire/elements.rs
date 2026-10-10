@@ -845,7 +845,10 @@ fn decodes_hysteretic_and_pinching4_materials_in_the_elastic_range() {
             id: "only".to_string(),
             steps: 1,
             integrator: IntegratorSpec::LoadControl { increment: 1.0 },
-            algorithm: AlgorithmSpec::NewtonRaphson,
+            algorithm: AlgorithmSpec::Newton {
+                tangent: Default::default(),
+                line_search: None,
+            },
             convergence: Some(ConvergenceSpec::NormUnbalance {
                 tol: 1e-9,
                 max_iter: 20,

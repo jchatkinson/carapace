@@ -38,6 +38,13 @@ pub enum LoadSeries {
     /// runtime failure, same class as `AnalysisBuilder::build`'s
     /// `ConstraintHandler` assertion).
     Path { times: Vec<f64>, factors: Vec<f64> },
+    /// OpenSees accelerogram bounds: zero before the first sample and after the last,
+    /// unless use_last holds the last value.
+    BoundedPath {
+        times: Vec<f64>,
+        factors: Vec<f64>,
+        use_last: bool,
+    },
 }
 
 impl LoadSeries {
@@ -46,6 +53,17 @@ impl LoadSeries {
             LoadSeries::Constant => 1.0,
             LoadSeries::Linear { slope } => slope * pseudo_time,
             LoadSeries::Path { times, factors } => path_interpolate(times, factors, pseudo_time),
+            LoadSeries::BoundedPath {
+                times,
+                factors,
+                use_last,
+            } => {
+                if pseudo_time < times[0] || (!use_last && pseudo_time > times[times.len() - 1]) {
+                    0.0
+                } else {
+                    path_interpolate(times, factors, pseudo_time)
+                }
+            }
         }
     }
 
@@ -61,7 +79,10 @@ impl LoadSeries {
         match self {
             LoadSeries::Constant => 0.0,
             LoadSeries::Linear { slope } => *slope,
-            LoadSeries::Path { times, factors } => path_slope(times, factors, pseudo_time),
+            LoadSeries::Path { times, factors }
+            | LoadSeries::BoundedPath { times, factors, .. } => {
+                path_slope(times, factors, pseudo_time)
+            }
         }
     }
 }
@@ -417,7 +438,11 @@ where
     /// continuation rejects these, since a path's slope isn't valid across
     /// a load reversal or a breakpoint.
     pub(crate) fn is_unfrozen_path(&self) -> bool {
-        self.frozen_factor.is_none() && matches!(self.series, LoadSeries::Path { .. })
+        self.frozen_factor.is_none()
+            && matches!(
+                self.series,
+                LoadSeries::Path { .. } | LoadSeries::BoundedPath { .. }
+            )
     }
 
     pub(crate) fn hold_constant(&mut self, pseudo_time: f64) {
@@ -493,4 +518,29 @@ where
         }
     }
     total
+}
+
+#[cfg(test)]
+mod bounded_path_tests {
+    use super::LoadSeries;
+
+    /// OpenSees-style accelerogram bounds, interpolation and useLast; exact arithmetic.
+    #[test]
+    fn bounded_accelerogram_is_zero_outside_its_samples() {
+        for use_last in [false, true] {
+            let path = LoadSeries::BoundedPath {
+                times: vec![1.0, 2.0],
+                factors: vec![2.0, 4.0],
+                use_last,
+            };
+            assert_eq!(path.factor(0.0), 0.0);
+            assert_eq!(path.factor(1.0), 2.0);
+            assert_eq!(path.factor(1.5), 3.0);
+            assert_eq!(path.factor(2.0), 4.0);
+            assert_eq!(path.factor(3.0), if use_last { 4.0 } else { 0.0 });
+            assert_eq!(path.slope(0.0), 0.0);
+            assert_eq!(path.slope(1.5), 2.0);
+            assert_eq!(path.slope(3.0), 0.0);
+        }
+    }
 }

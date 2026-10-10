@@ -115,8 +115,7 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
   wasm→JS leg still converts to JS objects; the analysis-worker→storage-worker
   leg, entirely on the `pysees` side, is already a transferred `ArrayBuffer`)
 - [x] Configurable `TangentStrategy`/`LineSearch`/`KrylovNewton` through
-  `CarapaceInputV1`, for static and transient stages. Existing `"linear"` and
-  `"newtonRaphson"` strings remain valid; object forms carry richer settings.
+  `CarapaceInputV1`, for static and transient stages, using tagged algorithm objects.
   Transient stages default to linear analysis when `algorithm` is omitted.
   See [the JS solver configuration guide](docs/algorithms.md).
 - [x] Arc-length stages (`integrator: { kind: "arcLength", ... }`) and

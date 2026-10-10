@@ -26,7 +26,7 @@ use serde::Serialize;
 use slotmap::Key;
 
 use super::error::ModelErrorDetail;
-use super::sequence::{FiberResponseKind, GaussQuantity};
+use super::sequence::{FiberResponseKind, GaussQuantity, ModalDampingAnchors};
 
 /// Shared by `record_sample`'s `Static`/`Transient` arms: resolves a
 /// `ResolvedRecorder::Fiber` against whatever `element`'s current fiber
@@ -362,6 +362,7 @@ pub(super) enum CompiledStageKind<NId> {
         algorithm: Algorithm,
         convergence: ConvergenceTest,
         damping: RayleighDamping,
+        modal_anchors: Option<ModalDampingAnchors>,
         dt: f64,
         ground_motions: Vec<GroundMotion>,
     },
@@ -801,21 +802,48 @@ where
                 algorithm,
                 convergence,
                 damping,
+                modal_anchors,
                 dt,
                 ground_motions,
-            } => match TransientAnalysis::new(domain, *damping, *dt) {
-                Ok(mut analysis) => {
-                    analysis = analysis.with_algorithm(*algorithm, *convergence);
-                    for motion in ground_motions.iter().cloned() {
-                        analysis = analysis.with_ground_motion(motion);
+            } => {
+                let resolved = (|| -> Result<RayleighDamping, AnalysisError> {
+                    let Some(anchors) = modal_anchors else {
+                        return Ok(*damping);
+                    };
+                    let count = anchors.mode1.max(anchors.mode2) as usize;
+                    let modes = modal_analysis(&mut domain, count)?;
+                    let w1 = modes.get(anchors.mode1 as usize - 1).map(|m| m.frequency);
+                    let w2 = modes.get(anchors.mode2 as usize - 1).map(|m| m.frequency);
+                    let (Some(w1), Some(w2)) = (w1, w2) else {
+                        return Err(AnalysisError::InvalidModeCount {
+                            requested: count,
+                            free_dofs: modes.len(),
+                        });
+                    };
+                    if !w1.is_finite() || !w2.is_finite() || w1 <= 0.0 || w2 <= 0.0 {
+                        return Err(AnalysisError::InvalidOption {
+                            field: "damping.modalAnchors",
+                        });
                     }
-                    self.runner = Some(StageRunner::Transient {
-                        analysis,
-                        steps_remaining: stage.steps,
-                    });
+                    Ok(RayleighDamping::new(
+                        2.0 * anchors.ratio * w1 * w2 / (w1 + w2),
+                        2.0 * anchors.ratio / (w1 + w2),
+                    ))
+                })();
+                match resolved.and_then(|damping| TransientAnalysis::new(domain, damping, *dt)) {
+                    Ok(mut analysis) => {
+                        analysis = analysis.with_algorithm(*algorithm, *convergence);
+                        for motion in ground_motions.iter().cloned() {
+                            analysis = analysis.with_ground_motion(motion);
+                        }
+                        self.runner = Some(StageRunner::Transient {
+                            analysis,
+                            steps_remaining: stage.steps,
+                        });
+                    }
+                    Err(error) => self.error = Some(error.into()),
                 }
-                Err(error) => self.error = Some(error.into()),
-            },
+            }
         }
         self.load_factor = 0.0;
         if self.record_initial
@@ -1068,7 +1096,7 @@ where
                             ))
                         }
                         ResolvedRecorder::Reaction { node, dof } => {
-                            Some(analysis.domain().reaction(node, dof as usize, progress))
+                            Some(analysis.reaction(node, dof as usize))
                         }
                         ResolvedRecorder::Fiber {
                             element,

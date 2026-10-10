@@ -262,8 +262,19 @@ impl FiberTable {
 )]
 pub enum TimeSeriesSpec {
     Constant,
-    Linear { slope: f64 },
-    Path { times: Vec<f64>, factors: Vec<f64> },
+    Linear {
+        slope: f64,
+    },
+    Path {
+        times: Vec<f64>,
+        factors: Vec<f64>,
+    },
+    /// Zero before the first sample; zero after the last unless use_last is true.
+    BoundedPath {
+        times: Vec<f64>,
+        factors: Vec<f64>,
+        use_last: bool,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]

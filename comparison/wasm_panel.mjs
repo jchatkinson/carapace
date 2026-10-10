@@ -32,7 +32,7 @@ const input = {
   loadPatterns: { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] },
   nodalLoads: { pattern: c.loads.map(() => 0), node: c.loads.map((l) => l[0]), dof: c.loads.map((l) => l[1]), value: c.loads.map((l) => l[2]), stage: c.loads.map(() => 0) },
   sequence: {
-    stages: [{ kind: "static", id: "panel", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: "linear", holdPatternsAfter: [] }],
+    stages: [{ kind: "static", id: "panel", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: { kind: "linear" }, holdPatternsAfter: [] }],
     recorders,
   },
 };

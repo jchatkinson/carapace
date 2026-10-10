@@ -9,13 +9,37 @@ use carapace_wasm::input_v1::sequence::{
 };
 use carapace_wasm::input_v1::tables::*;
 
+/// Algorithms use tagged objects; Newton settings default to the current tangent.
+#[test]
+fn algorithm_wire_format_uses_tagged_objects() {
+    use carapace_wasm::input_v1::sequence::TangentStrategySpec;
+    use serde_json::{from_value, json, to_value};
+
+    assert_eq!(
+        to_value(AlgorithmSpec::default()).unwrap(),
+        json!({ "kind": "linear" })
+    );
+    assert_eq!(
+        from_value::<AlgorithmSpec>(json!({ "kind": "newton" })).unwrap(),
+        AlgorithmSpec::Newton {
+            tangent: TangentStrategySpec::Current,
+            line_search: None
+        }
+    );
+    for value in [
+        json!("linear"),
+        json!("newtonRaphson"),
+        json!({ "kind": "unknown" }),
+    ] {
+        assert!(from_value::<AlgorithmSpec>(value).is_err());
+    }
+}
+
 /// Nonlinear equilibrium must be the same across each configurable solver.
 #[test]
 fn configurable_algorithms_solve_static_and_transient_yielding() {
-    use carapace_wasm::input_v1::sequence::{
-        AlgorithmConfigSpec, DampingSpec, LineSearchSpec, TangentStrategySpec,
-    };
-    let mut algorithms = vec![AlgorithmSpec::NewtonRaphson];
+    use carapace_wasm::input_v1::sequence::{DampingSpec, LineSearchSpec, TangentStrategySpec};
+    let mut algorithms = Vec::new();
     for tangent in [
         TangentStrategySpec::Current,
         TangentStrategySpec::ReuseAtStepStart,
@@ -34,15 +58,15 @@ fn configurable_algorithms_solve_static_and_transient_yielding() {
                 max_eta: 16.0,
             }),
         ] {
-            algorithms.push(AlgorithmSpec::Config(AlgorithmConfigSpec::Newton {
+            algorithms.push(AlgorithmSpec::Newton {
                 tangent,
                 line_search,
-            }));
+            });
         }
-        algorithms.push(AlgorithmSpec::Config(AlgorithmConfigSpec::KrylovNewton {
+        algorithms.push(AlgorithmSpec::KrylovNewton {
             tangent,
             max_dimension: 3,
-        }));
+        });
     }
     for algorithm in algorithms {
         for transient in [false, true] {
@@ -95,6 +119,7 @@ fn configurable_algorithms_solve_static_and_transient_yielding() {
                         damping: DampingSpec {
                             alpha_m: 0.0,
                             beta_k: 0.0,
+                            modal_anchors: None,
                         },
                         ground_motions: vec![],
                         algorithm,
@@ -180,6 +205,7 @@ fn decodes_a_transient_stage_and_matches_damped_free_vibration_closed_form() {
             damping: carapace_wasm::input_v1::sequence::DampingSpec {
                 alpha_m,
                 beta_k: 0.0,
+                modal_anchors: None,
             },
             ground_motions: vec![],
             algorithm: AlgorithmSpec::Linear,
@@ -216,6 +242,77 @@ fn decodes_a_transient_stage_and_matches_damped_free_vibration_closed_form() {
         (got - expected).abs() < 1e-4,
         "expected {expected}, got {got}"
     );
+}
+
+#[test]
+fn modal_damping_anchors_resolve_at_transient_entry() {
+    use carapace_wasm::input_v1::sequence::{DampingSpec, ModalDampingAnchors};
+    let mut input = empty_input(2);
+    input.nodes = NodeTable {
+        coords: vec![0.0, 0.0, 1.0, 0.0],
+        fixed: vec![0b111, 0b110],
+        mass_node_index: vec![1],
+        mass: vec![1.0, 0.0, 0.0],
+    };
+    input.materials = vec![MaterialSpec::Elastic { e: 100.0 }];
+    input.zero_lengths = ZeroLengthTable {
+        node_i: vec![0],
+        node_j: vec![1],
+        materials: vec![(0, 0, 0)],
+        friction: vec![],
+        orient: vec![],
+    };
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Constant],
+        scale_factor: vec![1.0],
+    };
+    input.nodal_loads = NodalLoadTable {
+        pattern: vec![0],
+        node: vec![1],
+        dof: vec![0],
+        value: vec![10.0],
+        stage: vec![0],
+    };
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Transient {
+            id: "dynamic".into(),
+            steps: 100,
+            dt: 0.01,
+            // omega=10; at 5% damping with equal anchors alpha=0.5, beta=0.005.
+            damping: DampingSpec {
+                alpha_m: 0.5,
+                beta_k: 0.005,
+                modal_anchors: None,
+            },
+            ground_motions: vec![],
+            algorithm: AlgorithmSpec::Linear,
+            convergence: None,
+        }],
+        recorders: vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }],
+    };
+    let expected = decode(input.clone()).unwrap().advance(100);
+    if let StageSpec::Transient { damping, .. } = &mut input.sequence.stages[0] {
+        *damping = DampingSpec {
+            alpha_m: 0.0,
+            beta_k: 0.0,
+            modal_anchors: Some(ModalDampingAnchors {
+                mode1: 1,
+                mode2: 1,
+                ratio: 0.05,
+            }),
+        };
+    }
+    let got = decode(input.clone()).unwrap().advance(100);
+    assert!(got.done && got.error.is_none(), "{got:?}");
+    assert!((last_sample(&got, 0).unwrap().1 - last_sample(&expected, 0).unwrap().1).abs() < 1e-12);
+    if let StageSpec::Transient { damping, .. } = &mut input.sequence.stages[0] {
+        damping.modal_anchors.as_mut().unwrap().mode2 = 2;
+    }
+    assert!(decode(input.clone()).unwrap().advance(100).error.is_some());
+    if let StageSpec::Transient { damping, .. } = &mut input.sequence.stages[0] {
+        damping.modal_anchors.as_mut().unwrap().mode2 = 0;
+    }
+    assert!(decode(input).is_err());
 }
 
 /// The first required case: a 2D fiber-section
@@ -306,7 +403,10 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
                 id: "gravity".to_string(),
                 steps: 2,
                 integrator: IntegratorSpec::LoadControl { increment: 0.5 },
-                algorithm: AlgorithmSpec::NewtonRaphson,
+                algorithm: AlgorithmSpec::Newton {
+                    tangent: Default::default(),
+                    line_search: None,
+                },
                 convergence: Some(ConvergenceSpec::NormUnbalance {
                     tol: 1e-10,
                     max_iter: 30,
@@ -321,7 +421,10 @@ fn gravity_then_pushover_matches_native_force_beam_column_behavior() {
                     dof: 1,
                     increment: -0.5 * p_yield * length.powi(3) / (3.0 * e * iz),
                 },
-                algorithm: AlgorithmSpec::NewtonRaphson,
+                algorithm: AlgorithmSpec::Newton {
+                    tangent: Default::default(),
+                    line_search: None,
+                },
                 convergence: Some(ConvergenceSpec::NormUnbalance {
                     tol: 1e-10,
                     max_iter: 30,
@@ -568,4 +671,26 @@ fn reset_stage_lets_an_unheld_pattern_ramp_again() {
         "half the load at the first of two steps"
     );
     assert!((second[2].2 - end_of_first).abs() < 1e-12);
+}
+
+/// Malformed accelerograms are decode errors, never interpolation panics.
+#[test]
+fn rejects_invalid_bounded_paths_before_constructing_the_domain() {
+    for (times, factors) in [
+        (vec![], vec![]),
+        (vec![0.0, 0.0], vec![1.0, 2.0]),
+        (vec![0.0, 1.0], vec![1.0]),
+        (vec![0.0, 1.0], vec![1.0, f64::NAN]),
+    ] {
+        let mut input = empty_input(2);
+        input.load_patterns = LoadPatternTable {
+            series: vec![TimeSeriesSpec::BoundedPath {
+                times,
+                factors,
+                use_last: false,
+            }],
+            scale_factor: vec![1.0],
+        };
+        assert!(decode(input).is_err());
+    }
 }

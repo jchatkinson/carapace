@@ -223,7 +223,7 @@ fn omitted_tables_decode_as_empty() {
             "stages": [{
                 "kind": "static", "id": "only", "steps": 1,
                 "integrator": { "kind": "loadControl", "increment": 1.0 },
-                "algorithm": "linear", "holdPatternsAfter": []
+                "algorithm": {"kind": "linear"}, "holdPatternsAfter": []
             }],
             "recorders": [{ "response": "nodeDisp", "node": 1, "dof": 0 }]
         }

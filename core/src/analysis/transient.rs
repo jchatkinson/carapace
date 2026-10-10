@@ -117,7 +117,7 @@ where
         let mass = domain.assemble_mass_diagonal();
         let n = domain.num_free_dofs();
         for i in 0..n {
-            if mass[i] <= 0.0 {
+            if !mass[i].is_finite() || mass[i] < 0.0 {
                 return Err(AnalysisError::SingularSystem);
             }
         }
@@ -185,7 +185,12 @@ where
         for i in 0..n {
             let c_v0_i =
                 self.damping.alpha_m * self.mass[i] * v0[i] + self.damping.beta_k * k_v0[i];
-            a0[i] = (load0[i] - resistance0[i] - c_v0_i + ground_force0[i]) / self.mass[i];
+            // Massless equilibrium rows (e.g. beam rotations) are solved through
+            // K + a1 M + a4 C on the first step; they carry no inertial force.
+            // Keep their initial acceleration at zero instead of dividing by zero.
+            if self.mass[i] > 0.0 {
+                a0[i] = (load0[i] - resistance0[i] - c_v0_i + ground_force0[i]) / self.mass[i];
+            }
         }
         self.domain.scatter_state(&u0, &v0, &a0);
         // Align committed material state with the given initial condition
@@ -210,6 +215,20 @@ where
 
     pub fn domain(&self) -> &Domain<NDIM, NDOF, NId, E> {
         &self.domain
+    }
+
+    /// Support reaction including the uniform-excitation inertial load at that
+    /// restrained DOF. Like OpenSees' plain reaction recorder, excludes damping
+    /// and relative inertial forces (use relative acceleration separately).
+    pub fn reaction(&self, node: NId, dof: usize) -> f64 {
+        let acceleration: f64 = self
+            .ground_motions
+            .iter()
+            .filter(|(motion, _)| motion.direction == dof)
+            .map(|(motion, _)| motion.acceleration(self.time))
+            .sum();
+        self.domain.reaction(node, dof, self.time)
+            + self.domain.lumped_mass_at(node, dof) * acceleration
     }
 
     /// Ends this (dynamic) phase and hands back the `Domain` — symmetric

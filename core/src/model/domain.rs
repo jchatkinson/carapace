@@ -277,11 +277,9 @@ where
     /// never assigned an equation number to.
     ///
     /// Ground-motion excitation (`TransientAnalysis`) never needs a
-    /// separate term here: it's an equivalent inertial pseudo-force at free
-    /// DOFs only (`GroundMotion`'s own doc comment), never a real applied
-    /// load at any DOF — and this crate's dynamics are relative-
-    /// displacement, so a fixed DOF's velocity/acceleration are always exactly zero and contribute nothing
-    /// to its reaction regardless of profile or excitation.
+    /// separate term here. This returns the structural reaction;
+    /// `TransientAnalysis::reaction` adds the equivalent ground inertial load
+    /// at restrained DOFs. Relative velocity/acceleration remain zero there.
     pub fn reaction(&self, node: NId, dof: usize, pseudo_time: f64) -> f64 {
         let view = self.node_view();
         let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
@@ -319,6 +317,19 @@ where
         }
 
         resistance.total - applied
+    }
+
+    /// Total lumped mass at a physical node/DOF, including attached elements.
+    /// Unlike the reduced mass diagonal this also includes restrained DOFs.
+    pub fn lumped_mass_at(&self, node: NId, dof: usize) -> f64 {
+        let view = self.node_view();
+        let mut mass = PickDof::new(node, dof);
+        for element in self.elements.values() {
+            if element.nodes().contains(&node) {
+                element.assemble_mass(&view, &mut mass);
+            }
+        }
+        self.nodes[node].mass[dof] + mass.total
     }
 
     /// Imposes `value` as the displacement of a *fixed* (single-point

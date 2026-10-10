@@ -244,7 +244,10 @@ handler (the session chooses it when the model has any).
 
 - `LoadPatternTable`: `series: TimeSeriesSpec[]`, `scaleFactor: number[]`.
   `TimeSeriesSpec` is `{ kind: "constant" }`, `{ kind: "linear", slope }`, or
-  `{ kind: "path", times, factors }`.
+  `{ kind: "path", times, factors }`, or `{ kind: "boundedPath", times, factors, useLast }`.
+  `path` retains its endpoint-holding behavior. `boundedPath` is zero before its first sample
+  and after its last sample (unless `useLast` is true), for OpenSees-compatible accelerograms.
+  Both require nonempty, equally sized finite arrays and strictly increasing times.
 - `NodalLoadTable`: `pattern`, `node`, `dof`, `value`, `stage`. `stage` is the
   index of the stage at whose start the load is registered, which matters when
   an earlier stage must not ramp this pattern.
@@ -290,7 +293,15 @@ Stages run in order.
 | `static` | `id`, `steps`, `integrator`, `algorithm`, `convergence?`, `holdPatternsAfter: number[]` |
 | `modal` | `id`, `modes` |
 | `reset` | `id` |
-| `transient` | `id`, `steps`, `dt`, `damping: { alphaM, betaK }`, `groundMotions: GroundMotionSpec[]`, `algorithm?`, `convergence?` |
+| `transient` | `id`, `steps`, `dt`, `damping: { alphaM, betaK, modalAnchors? }`, `groundMotions: GroundMotionSpec[]`, `algorithm?`, `convergence?` |
+
+Optional `damping.modalAnchors: { mode1, mode2, ratio }` uses positive, 1-based
+mode numbers and a damping ratio in `[0, 1]`. At transient-stage entry, the engine
+solves the requested modes from the current domain (including preceding gravity)
+and overrides `alphaM` and `betaK` to match that ratio at both modal frequencies.
+No preceding modal stage is required. Unavailable modes fail the run; invalid
+mode numbers or ratios fail decoding. Omitting `modalAnchors` preserves direct
+coefficient behavior.
 
 `GroundMotionSpec`: `{ direction, series: TimeSeriesSpec, scaleFactor }`.
 `direction` is `0` for x, `1` for y, and `2` for z (3D only).
@@ -323,7 +334,7 @@ load factor/time `0`: the stage's initial conditions, i.e. step 0 of that analys
 
 ### Algorithms and convergence
 
-`algorithm` accepts the legacy bare strings `"linear"` / `"newtonRaphson"` or:
+`algorithm` is a tagged object:
 
 - `{ kind: "linear" }`
 - `{ kind: "newton", tangent?, lineSearch? }`

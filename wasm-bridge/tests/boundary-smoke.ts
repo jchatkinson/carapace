@@ -25,7 +25,7 @@ for (const ndm of [2, 3]) {
   const loads = { pattern: [0], node: [1], dof: [0], value: [50], stage: [0] };
   const stages: SequenceSpec["stages"] = [{
     kind: "static", id: "load", steps: 2,
-    integrator: { kind: "loadControl", increment: 0.5 }, algorithm: "linear",
+    integrator: { kind: "loadControl", increment: 0.5 }, algorithm: { kind: "linear" },
     convergence: undefined, holdPatternsAfter: [],
   }];
   input.nodes = nodes; input.trusses = trusses; input.nodalLoads = loads;
@@ -84,19 +84,19 @@ function yieldingInput(ndm: number, transient: boolean, algorithm?: AlgorithmSpe
     stages: [transient ? {
       kind: "transient", id: "yield", steps: 1, dt: 0.1,
       damping: { alphaM: 0, betaK: 0 }, groundMotions: [],
-      // Omit both fields in the legacy case to check backward compatibility.
+      // Omit both fields to check the default linear transient solver.
       ...(algorithm === undefined ? {} : { algorithm, convergence }),
     } : {
       kind: "static", id: "yield", steps: 1,
       integrator: { kind: "loadControl", increment: 1 },
-      algorithm: algorithm ?? "linear", convergence, holdPatternsAfter: [],
+      algorithm: algorithm ?? { kind: "linear" }, convergence, holdPatternsAfter: [],
     }], recorders: [{ response: "nodeDisp", node: 1, dof: 0 }],
   };
   input.nodes = nodes; input.zeroLengths = springs; input.nodalLoads = loads; input.sequence = sequence;
   return input;
 }
 
-const algorithms: AlgorithmSpec[] = ["newtonRaphson", { kind: "newton" }];
+const algorithms: AlgorithmSpec[] = [{ kind: "newton" }];
 for (const tangent of ["current", "reuseAtStepStart", "initial"] as const) {
   algorithms.push({ kind: "newton", tangent }, { kind: "krylovNewton", tangent, maxDimension: 3 });
   for (const kind of ["bisection", "regulaFalsi"] as const) {
@@ -105,12 +105,12 @@ for (const tangent of ["current", "reuseAtStepStart", "initial"] as const) {
 }
 for (const ndm of [2, 3]) {
   for (const transient of [false, true]) {
-    for (const algorithm of [undefined, "linear", { kind: "linear" }, ...algorithms] as const) {
+    for (const algorithm of [undefined, { kind: "linear" }, ...algorithms] as const) {
       const session = decodeInput(yieldingInput(ndm, transient, algorithm));
       try {
         const result = session.advance(1);
         assert(result.done && result.error === undefined, `solver failed: ${JSON.stringify(algorithm)}`);
-        const linear = algorithm === undefined || algorithm === "linear" || (typeof algorithm === "object" && algorithm.kind === "linear");
+        const linear = algorithm === undefined || algorithm.kind === "linear";
         const expected = transient ? (linear ? 1000 / 550 : 999 / 450) : (linear ? 5 / 150 : 4 / 50);
         assert(Math.abs(result.recorderBatches[0].samples[0][1] - expected) < 1e-8, "nonlinear equilibrium");
       } finally { session.free(); }
@@ -132,7 +132,7 @@ for (const [algorithm, field] of invalidAlgorithms) {
 }
 for (const field of ["tol", "maxIter"] as const) {
   for (const value of field === "tol" ? [0, -1, NaN, Infinity] : [0]) {
-    const input = yieldingInput(2, true, "newtonRaphson");
+    const input = yieldingInput(2, true, { kind: "newton" });
     const stage = input.sequence!.stages[0];
     assert(stage.kind === "transient", "validation stage");
     stage.convergence = { kind: "normUnbalance", tol: 1e-6, maxIter: 100, [field]: value };
@@ -148,7 +148,7 @@ for (const dt of [0, -0.1, NaN, Infinity]) {
   const error = expectThrow(() => decodeInput(input)) as DecodeError;
   assert(error.kind === "invalidAnalysisOption" && error.field === "dt", "invalid timestep");
 }
-const failureInput = yieldingInput(2, true, "newtonRaphson");
+const failureInput = yieldingInput(2, true, { kind: "newton" });
 const stage = failureInput.sequence!.stages[0];
 assert(stage.kind === "transient", "transient test stage");
 stage.convergence = { kind: "normUnbalance", tol: 1e-6, maxIter: 1 };
@@ -181,7 +181,7 @@ function softeningInput(ndm: number, integrator: IntegratorSpec): CarapaceInputV
   const sequence: SequenceSpec = {
     stages: [{
       kind: "static", id: "push", steps: 200, integrator,
-      algorithm: "newtonRaphson", convergence: undefined, holdPatternsAfter: [],
+      algorithm: { kind: "newton" }, convergence: undefined, holdPatternsAfter: [],
     }],
     recorders: [{ response: "nodeDisp", node: 1, dof: 0 }],
   };
@@ -216,8 +216,8 @@ for (const ndm of [2, 3]) {
 }
 
 const arcErrors: [IntegratorSpec, AlgorithmSpec, string][] = [
-  [{ ...arcLength, minRadius: 0.1 }, "newtonRaphson", "integrator.initialRadius"],
-  [arcLength, "linear", "algorithm"],
+  [{ ...arcLength, minRadius: 0.1 }, { kind: "newton" }, "integrator.initialRadius"],
+  [arcLength, { kind: "linear" }, "algorithm"],
   [arcLength, { kind: "newton", tangent: "initial" }, "algorithm"],
 ];
 for (const [integrator, algorithm, field] of arcErrors) {
@@ -267,7 +267,7 @@ continuum.quads = { nodeIds: [0, 1, 4, 3, 1, 2, 5, 4], thickness: [1, 1], materi
 continuum.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
 continuum.elementLoads = { pattern: [0], elementKind: ["quad4"], elementIndex: [1], load: [{ kind: "edgeTraction", edge: 1, tx: 1, ty: 0 }], stage: [0] };
 continuum.sequence = {
-  stages: [{ kind: "static", id: "pull", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: "linear", holdPatternsAfter: [] }],
+  stages: [{ kind: "static", id: "pull", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: { kind: "linear" }, holdPatternsAfter: [] }],
   recorders: [{ response: "gaussPoint", elementKind: "quad4", elementIndex: 0, point: 2, quantity: "stress", component: 0 }],
 };
 {
@@ -294,7 +294,7 @@ shell.shell4s = { nodeIds: [0, 1, 2, 3], section: [0] };
 shell.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
 shell.elementLoads = { pattern: [0], elementKind: ["shell4"], elementIndex: [0], load: [{ kind: "shellPressure", pressure: 2 }], stage: [0] };
 shell.sequence = {
-  stages: [{ kind: "static", id: "press", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: "linear", holdPatternsAfter: [] }],
+  stages: [{ kind: "static", id: "press", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: { kind: "linear" }, holdPatternsAfter: [] }],
   recorders: [0, 1, 2, 3].map((node) => ({ response: "reaction" as const, node, dof: 2 })),
 };
 {
@@ -309,4 +309,4 @@ shell.sequence = {
 const shellError = expectThrow(() => decodeInput({ ...shell, shellSections: [{ kind: "elasticMembranePlate", e: 1000, nu: 0.3, h: 0, rho: 0 }] })) as DecodeError;
 assert(shellError.kind === "invalidShellSection", "shell section validation");
 
-console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, shells, configurable static/transient solvers, arc length, legacy inputs, errors.");
+console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, shells, configurable static/transient solvers, arc length, defaults, errors.");

@@ -14,14 +14,13 @@ Static stages can also use arc-length continuation
 and the [design record](arclength.md)) to trace equilibrium paths through
 load limits, softening and snap-back.
 
-## Input compatibility and defaults
+## Input format and defaults
 
-The `algorithm` field accepts the original strings and configurable objects:
+The `algorithm` field accepts configurable objects:
 
 | Input | Behavior |
 | --- | --- |
-| `"linear"` or `{ kind: "linear" }` | One solve per step; no convergence iteration |
-| `"newtonRaphson"` | Newton with the current tangent and no line search |
+| `{ kind: "linear" }` | One solve per step; no convergence iteration |
 | `{ kind: "newton", ... }` | Newton with configurable tangent and optional line search |
 | `{ kind: "krylovNewton", tangent, maxDimension }` | Newton with Krylov acceleration |
 
@@ -134,7 +133,7 @@ derivations and verification are in [arclength.md](arclength.md).
 | `backtracking?` | `{ armijo, minStep }` (defaults `1e-4`, `1/128`) |
 | `stop?` | `{ displacement?: { node, dof, value, exact? }, loadFactor?: { value, exact? }, loadFactorZeroCrossing?, maxChordLength? }` |
 
-Arc length requires `"newtonRaphson"` or `{ kind: "newton" }` with the
+Arc length requires `{ kind: "newton" }` with the
 current tangent and no line search (its own coupled backtracking replaces
 line search), and a `normUnbalance` or `combined` test. When `convergence`
 is omitted it defaults to `{ kind: "combined", forceTol: 1e-6, maxIter: 30 }`.
@@ -158,7 +157,7 @@ const pushover = {
     scales: { kind: "explicit", displacement: 0.01, rotation: 0.01, load: 100 },
     stop: { displacement: { node: 12, dof: 0, value: 0.5, exact: true } },
   },
-  algorithm: "newtonRaphson",
+  algorithm: { kind: "newton" },
   holdPatternsAfter: [],
 } satisfies StageSpec;
 ```
@@ -181,16 +180,14 @@ Native tests in `core/tests/analysis/algorithms.rs` and
 `core/tests/dynamics/transient_corrector.rs` verify the solver implementations.
 `wasm-bridge/tests/wire/stages.rs` verifies configurable algorithms
 against nonlinear static and transient equilibrium. The generated-package
-test `wasm-bridge/tests/boundary-smoke.ts` covers both profiles, legacy inputs,
-object forms, validation, transient convergence failure, and arc length.
+test `wasm-bridge/tests/boundary-smoke.ts` covers both profiles, algorithm objects, validation, transient convergence failure, and arc length.
 Arc-length continuation is verified by `core/tests/analysis/arclength_softening.rs`,
 `core/tests/analysis/arclength_continuation.rs` and
 `wasm-bridge/tests/wire/arclength.rs`.
 
 The JS interface still lacks initial nodal displacement/velocity input,
 iteration/factorization diagnostics for the non-arc-length integrators,
-and custom Series-material tolerance settings. The pysees compiler currently emits only the legacy static
-algorithm strings; exposing these settings in its UI is separate work.
+and custom Series-material tolerance settings. PySees emits algorithm objects for its supported solver choices.
 
 The [archived algorithm design](obsolete/algorithm-design.md) preserves the
 original derivations, Xara references, section numbering used by source
