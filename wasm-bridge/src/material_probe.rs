@@ -18,6 +18,10 @@ use crate::input_v1::materials::{resolve_materials, MaterialSpec};
 #[serde(rename_all = "camelCase")]
 pub struct MaterialProbeConfig {
     pub material: MaterialSpec,
+    /// Materials that composite variants of `material` (`Parallel`, `Series`,
+    /// `MinMax`) refer to by index. Empty for a self-contained material.
+    #[serde(default)]
+    pub arena: Vec<MaterialSpec>,
     #[serde(default)]
     pub initial_strain: Option<f64>,
 }
@@ -50,20 +54,10 @@ pub struct MaterialProbe {
 }
 
 fn kind_name(spec: &MaterialSpec) -> Option<&'static str> {
-    Some(match spec {
-        MaterialSpec::Elastic { .. } | MaterialSpec::ElasticPp { .. } | MaterialSpec::Ent { .. } => {
-            return None
-        }
-        MaterialSpec::Steel01 { .. } | MaterialSpec::Concrete01 { .. } => return None,
-        MaterialSpec::Gap { .. } => "gap",
-        MaterialSpec::Steel02 { .. } => "steel02",
-        MaterialSpec::Concrete02 { .. } => "concrete02",
-        MaterialSpec::Parallel { .. } => "parallel",
-        MaterialSpec::Series { .. } => "series",
-        MaterialSpec::MinMax { .. } => "minMax",
-        MaterialSpec::Hysteretic { .. } => "hysteretic",
-        MaterialSpec::Pinching4 { .. } => "pinching4",
-    })
+    match spec {
+        MaterialSpec::Gap { .. } => Some("gap"),
+        _ => None,
+    }
 }
 
 fn build(material: &Material) -> (Analysis, NodeId) {
@@ -92,7 +86,12 @@ fn build(material: &Material) -> (Analysis, NodeId) {
 
 impl MaterialProbe {
     pub fn new(config: &MaterialProbeConfig) -> Result<Self, MaterialProbeError> {
-        if let Some(material) = kind_name(&config.material) {
+        if let Some(material) = config
+            .arena
+            .iter()
+            .chain(std::iter::once(&config.material))
+            .find_map(kind_name)
+        {
             return Err(MaterialProbeError::UnsupportedMaterial { material });
         }
         let initial_strain = config.initial_strain.unwrap_or(0.0);
@@ -101,11 +100,15 @@ impl MaterialProbe {
                 target: initial_strain,
             });
         }
-        let material = resolve_materials(std::slice::from_ref(&config.material))
+        // The probed material goes last so the arena indices it refers to stay valid.
+        let mut arena = config.arena.clone();
+        arena.push(config.material.clone());
+        let material = resolve_materials(&arena)
             .map_err(|error| MaterialProbeError::InvalidProbe {
                 reason: format!("{error:?}"),
             })?
-            .remove(0);
+            .pop()
+            .expect("arena is non-empty");
         let mut probe = Self::fresh(material, initial_strain);
         probe.apply_strain(initial_strain)?;
         Ok(probe)
