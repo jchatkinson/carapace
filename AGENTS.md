@@ -56,6 +56,9 @@ Integration tests are one binary per area (`tests/<area>/main.rs` plus a module 
 to the same module. Each file's `//!` header says what it verifies and against which reference.
 The docs site publishes a test report (`docs-site/gen_tests.py`) built from `cargo test` output plus each test's `///` doc comment
 and its file's `//!` header, so describe what a test checks, its reference and its tolerance there.
+The benchmark page (`docs-site/gen_benchmarks.py`) renders `docs-site/benchmarks/*.json`, which are committed. They depend on
+the machine and need OpenSeesPy, so CI does not run them: regenerate with
+`comparison/.venv/bin/python comparison/run_benchmarks.py [--only ID]` (add new benchmarks to `BENCHMARKS` there) and commit the JSON.
 
 The wasm bundle PySees uses is built from here by `../pysees/scripts/build-carapace.sh` (cargo build, then
 `wasm-bindgen --target web`, then copied into `src/app/carapace/wasm`). Rebuild and copy it after any

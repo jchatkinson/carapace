@@ -1,0 +1,81 @@
+{
+  "id": "panel-quad4",
+  "title": "Quad4 plane-stress panel",
+  "description": "An N x N mesh of unit square plane-stress Quad4 elements (E 200 GPa, nu 0.3, t 1) clamped on the left edge, with a unit downward load on each right-edge node, solved in one Newton load step (2 iterations). The timed region is assembly, factorisation and solve. Meshes are 40 x 40, 80 x 80 and 140 x 140.",
+  "note": "OpenSees uses its fastest sparse direct solver here, with RCM numbering.",
+  "solver": "OpenSees UmfPack, RCM numberer",
+  "runs": 5,
+  "warmups": 1,
+  "machine": {
+    "cpu": "AMD Ryzen 7 5825U with Radeon Graphics",
+    "threads": 16,
+    "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "openseespy": "3.8.0",
+    "commit": "a607ac2",
+    "dirty": true,
+    "date": "2026-10-17"
+  },
+  "cases": [
+    {
+      "label": "40 x 40 mesh",
+      "free_dofs": 3280,
+      "elements": 1600,
+      "max_relative_difference": 3.337607967779377e-15,
+      "engines": {
+        "carapace": {
+          "median_ms": 99.6575,
+          "min_ms": 98.5596,
+          "max_ms": 102.703,
+          "iterations": 2
+        },
+        "opensees": {
+          "median_ms": 92.69937599992772,
+          "min_ms": 91.65133000033165,
+          "max_ms": 94.66451399975995,
+          "iterations": 2
+        }
+      }
+    },
+    {
+      "label": "80 x 80 mesh",
+      "free_dofs": 12960,
+      "elements": 6400,
+      "max_relative_difference": 2.4202861936828413e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 697.9068,
+          "min_ms": 634.8616,
+          "max_ms": 767.0868,
+          "iterations": 2
+        },
+        "opensees": {
+          "median_ms": 634.8611929997787,
+          "min_ms": 633.1008679999286,
+          "max_ms": 665.0960760002818,
+          "iterations": 2
+        }
+      }
+    },
+    {
+      "label": "140 x 140 mesh",
+      "free_dofs": 39480,
+      "elements": 19600,
+      "max_relative_difference": 2.781108676686017e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 2571.1766,
+          "min_ms": 2353.3633,
+          "max_ms": 2584.0906,
+          "iterations": 2
+        },
+        "opensees": {
+          "median_ms": 2978.8882049997483,
+          "min_ms": 2662.7723020001213,
+          "max_ms": 3086.7387879998205,
+          "iterations": 2
+        }
+      }
+    }
+  ]
+}

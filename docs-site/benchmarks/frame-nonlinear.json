@@ -1,0 +1,141 @@
+{
+  "id": "frame-nonlinear",
+  "title": "Nonlinear frame, increasing size",
+  "description": "A fixed-base 2D moment frame of displacement-based beam-columns (5 Legendre points) with 20-fibre rectangular Steel02 sections (fy 355 MPa, 2% hardening), under inverted-triangle lateral loads on the left column line. Frames are 20 x 4, 40 x 6 and 80 x 8 (stories x bays) with 3 m storeys and 6 m bays. Each is driven to 2% roof drift in 50 steps, once by displacement control on the roof and once by load control to the load that displacement-control run reached, so both end deep in yield. Newton with a displacement-increment test (1e-6, 30 iterations).",
+  "note": "Cost is dominated by fibre state updates, so it grows with element count more than with DOF count.",
+  "solver": "OpenSees SparseGeneral -piv (SuperLU), Plain numberer",
+  "runs": 5,
+  "warmups": 1,
+  "machine": {
+    "cpu": "AMD Ryzen 7 5825U with Radeon Graphics",
+    "threads": 16,
+    "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "openseespy": "3.8.0",
+    "commit": "a607ac2",
+    "dirty": true,
+    "date": "2026-10-17"
+  },
+  "cases": [
+    {
+      "label": "Small, displacement control",
+      "free_dofs": 300,
+      "elements": 180,
+      "max_relative_difference": 6.552737136843065e-15,
+      "engines": {
+        "carapace": {
+          "median_ms": 1040.928,
+          "min_ms": 1031.7817,
+          "max_ms": 1071.648,
+          "iterations": 133
+        },
+        "opensees": {
+          "median_ms": 1168.5859479998726,
+          "min_ms": 1131.0214929999347,
+          "max_ms": 1188.8072749998173,
+          "iterations": 133
+        }
+      }
+    },
+    {
+      "label": "Small, load control",
+      "free_dofs": 300,
+      "elements": 180,
+      "max_relative_difference": 4.168517370297656e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 997.583,
+          "min_ms": 980.6206,
+          "max_ms": 1033.9718,
+          "iterations": 180
+        },
+        "opensees": {
+          "median_ms": 1140.1007090003077,
+          "min_ms": 1114.456544999939,
+          "max_ms": 1149.2829419998998,
+          "iterations": 180
+        }
+      }
+    },
+    {
+      "label": "Medium, displacement control",
+      "free_dofs": 840,
+      "elements": 520,
+      "max_relative_difference": 2.073077843989895e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 3266.8604,
+          "min_ms": 3207.7589,
+          "max_ms": 3312.9975,
+          "iterations": 135
+        },
+        "opensees": {
+          "median_ms": 3536.039553000137,
+          "min_ms": 3507.4322549999124,
+          "max_ms": 3555.8569589998115,
+          "iterations": 135
+        }
+      }
+    },
+    {
+      "label": "Medium, load control",
+      "free_dofs": 840,
+      "elements": 520,
+      "max_relative_difference": 2.0605737594366735e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 3242.7645,
+          "min_ms": 3198.7787,
+          "max_ms": 3301.6139,
+          "iterations": 189
+        },
+        "opensees": {
+          "median_ms": 3639.8222910002005,
+          "min_ms": 3585.3222529999584,
+          "max_ms": 3792.6785479999126,
+          "iterations": 189
+        }
+      }
+    },
+    {
+      "label": "Large, displacement control",
+      "free_dofs": 2160,
+      "elements": 1360,
+      "max_relative_difference": 8.105088783371409e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 9927.6784,
+          "min_ms": 9280.5025,
+          "max_ms": 10476.8065,
+          "iterations": 139
+        },
+        "opensees": {
+          "median_ms": 10521.44398900009,
+          "min_ms": 9988.697321000018,
+          "max_ms": 11211.70846899986,
+          "iterations": 139
+        }
+      }
+    },
+    {
+      "label": "Large, load control",
+      "free_dofs": 2160,
+      "elements": 1360,
+      "max_relative_difference": 1.039760369268118e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 9848.1341,
+          "min_ms": 9478.3211,
+          "max_ms": 9964.9734,
+          "iterations": 196
+        },
+        "opensees": {
+          "median_ms": 10966.315568000027,
+          "min_ms": 10606.576210000185,
+          "max_ms": 11230.411739000374,
+          "iterations": 196
+        }
+      }
+    }
+  ]
+}

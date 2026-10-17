@@ -1,0 +1,81 @@
+{
+  "id": "frame-elastic",
+  "title": "Elastic frame, solver-dominated",
+  "description": "Elastic 2D moment frames of 30 x 4, 60 x 6 and 100 x 10 (stories x bays) under inverted-triangle lateral loads, in 20 load-control steps. There is no material nonlinearity, so element work is small and the sparse factorisation and solve dominate as the DOF count grows. Newton with a displacement-increment test (1e-6, 30 iterations).",
+  "note": "Both engines refactorise the tangent on every iteration.",
+  "solver": "OpenSees SparseGeneral -piv (SuperLU), Plain numberer",
+  "runs": 5,
+  "warmups": 1,
+  "machine": {
+    "cpu": "AMD Ryzen 7 5825U with Radeon Graphics",
+    "threads": 16,
+    "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "openseespy": "3.8.0",
+    "commit": "a607ac2",
+    "dirty": true,
+    "date": "2026-10-17"
+  },
+  "cases": [
+    {
+      "label": "Small, 30 x 4",
+      "free_dofs": 450,
+      "elements": 270,
+      "max_relative_difference": 1.1632691709973647e-14,
+      "engines": {
+        "carapace": {
+          "median_ms": 84.5691,
+          "min_ms": 81.2392,
+          "max_ms": 89.668,
+          "iterations": 40
+        },
+        "opensees": {
+          "median_ms": 46.710478000022704,
+          "min_ms": 43.50298600002134,
+          "max_ms": 54.591755000274134,
+          "iterations": 40
+        }
+      }
+    },
+    {
+      "label": "Medium, 60 x 6",
+      "free_dofs": 1260,
+      "elements": 780,
+      "max_relative_difference": 2.413196789971255e-15,
+      "engines": {
+        "carapace": {
+          "median_ms": 301.5531,
+          "min_ms": 297.4451,
+          "max_ms": 308.8921,
+          "iterations": 40
+        },
+        "opensees": {
+          "median_ms": 148.00827299995944,
+          "min_ms": 144.58609700022862,
+          "max_ms": 155.85539300036544,
+          "iterations": 40
+        }
+      }
+    },
+    {
+      "label": "Large, 100 x 10",
+      "free_dofs": 3300,
+      "elements": 2100,
+      "max_relative_difference": 1.0038145777481066e-15,
+      "engines": {
+        "carapace": {
+          "median_ms": 1275.9357,
+          "min_ms": 1234.4805,
+          "max_ms": 1286.0247,
+          "iterations": 40
+        },
+        "opensees": {
+          "median_ms": 805.0667150000663,
+          "min_ms": 791.576819999591,
+          "max_ms": 864.9125879996973,
+          "iterations": 60
+        }
+      }
+    }
+  ]
+}
