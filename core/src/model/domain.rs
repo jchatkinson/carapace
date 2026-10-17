@@ -1,6 +1,7 @@
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
-use faer::sparse::Triplet;
+use faer::sparse::{SparseColMat, SymbolicSparseColMat, Triplet};
 use nalgebra::{DVector, SMatrix, SVector};
 use slotmap::{Key, SlotMap};
 
@@ -100,6 +101,68 @@ pub struct Domain<
     /// or resolved terms for constrained DOFs),
     /// rebuilt by `number_dofs`.
     dofs: DofTable<NId, NDOF>,
+    /// Sparsity pattern of the assembled stiffness, so repeated assemblies write values straight into
+    /// it instead of building and sorting triplets. Cleared by `number_dofs`.
+    pattern: PatternCache,
+}
+
+/// The CSC structure (column pointers and sorted row indices) of the assembled stiffness matrix.
+struct StiffnessPattern {
+    col_ptr: Vec<usize>,
+    row_idx: Vec<usize>,
+}
+
+impl StiffnessPattern {
+    fn of(k: &SparseMatrix) -> Self {
+        let symbolic = k.symbolic();
+        StiffnessPattern {
+            col_ptr: symbolic.col_ptr().to_vec(),
+            row_idx: symbolic.row_idx().to_vec(),
+        }
+    }
+
+    /// Position in the value array of entry `(row, col)`, if the pattern has it.
+    fn position(&self, row: usize, col: usize) -> Option<usize> {
+        let (start, end) = (self.col_ptr[col], self.col_ptr[col + 1]);
+        self.row_idx[start..end]
+            .binary_search(&row)
+            .ok()
+            .map(|at| start + at)
+    }
+}
+
+/// A shared, replaceable `StiffnessPattern`. Behind a lock so `&self` assembly can fill it in; cloned by
+/// sharing the pattern.
+#[derive(Default)]
+struct PatternCache(Mutex<Option<Arc<StiffnessPattern>>>);
+
+impl PatternCache {
+    fn get(&self) -> Option<Arc<StiffnessPattern>> {
+        self.0
+            .lock()
+            .expect("stiffness pattern cache poisoned")
+            .clone()
+    }
+
+    fn set(&self, pattern: StiffnessPattern) {
+        *self.0.lock().expect("stiffness pattern cache poisoned") = Some(Arc::new(pattern));
+    }
+
+    fn clear(&mut self) {
+        *self.0.get_mut().expect("stiffness pattern cache poisoned") = None;
+    }
+}
+
+impl std::fmt::Debug for PatternCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PatternCache")
+    }
+}
+
+impl Clone for PatternCache {
+    fn clone(&self) -> Self {
+        PatternCache(Mutex::new(self.get()))
+    }
 }
 
 /// `Domain`'s spatial instantiation — six-DOF `Node3`/`Element3`. See
@@ -129,6 +192,7 @@ where
             num_free_dofs: self.num_free_dofs,
             committed_time: self.committed_time,
             dofs: self.dofs.clone(),
+            pattern: self.pattern.clone(),
         }
     }
 }
@@ -168,6 +232,7 @@ where
             num_free_dofs: 0,
             committed_time: 0.0,
             dofs: DofTable::default(),
+            pattern: PatternCache::default(),
         }
     }
 
@@ -177,6 +242,21 @@ where
 
     pub fn add_element(&mut self, element: E) -> E::Id {
         self.elements.insert(element)
+    }
+
+    /// Every node's displacement, in storage order — the only domain state a static step changes before
+    /// `commit` (assembly takes `&self` and no element keeps interior-mutable state), so with
+    /// `restore_displacements` it is a rollback point that costs far less than cloning the domain.
+    pub(crate) fn displacements(&self) -> Vec<[f64; NDOF]> {
+        self.nodes.values().map(|node| node.displacement).collect()
+    }
+
+    /// Puts back displacements saved by `displacements`, with no node added or removed since.
+    pub(crate) fn restore_displacements(&mut self, saved: &[[f64; NDOF]]) {
+        debug_assert_eq!(saved.len(), self.nodes.len());
+        for (node, &displacement) in self.nodes.values_mut().zip(saved) {
+            node.displacement = displacement;
+        }
     }
 
     pub fn node(&self, id: NId) -> &Node<NDIM, NDOF> {
@@ -735,6 +815,7 @@ where
     ///
     /// Returns the number of free DOFs (the size of the global system).
     pub(crate) fn number_dofs(&mut self) -> usize {
+        self.pattern.clear();
         let slaves: HashSet<(NId, usize)> = self.constraints.iter().map(|c| c.slave).collect();
         self.constraint_error = None;
 
@@ -936,10 +1017,55 @@ where
         pseudo_time: f64,
     ) -> (SparseMatrix, DVector<f64>) {
         let n = self.num_free_dofs;
+        if let Some(pattern) = self.pattern.get() {
+            if let Some(system) = self.assemble_into_pattern(&pattern, pseudo_time) {
+                return system;
+            }
+        }
+        // First assembly, or an element wrote an entry the cached pattern lacks: build from triplets and
+        // remember the resulting structure for next time.
         let (triplets, resistance) = self.assemble_stiffness_triplets(pseudo_time);
         let k = SparseMatrix::try_new_from_triplets(n, n, &triplets)
             .expect("equation numbers are always in [0, num_free_dofs)");
+        self.pattern.set(StiffnessPattern::of(&k));
         (k, resistance)
+    }
+
+    /// Assembles the tangent straight into `pattern`'s value array. `None` if an element contributes an entry
+    /// the pattern does not contain (the structure changed), so the caller must rebuild it.
+    fn assemble_into_pattern(
+        &self,
+        pattern: &StiffnessPattern,
+        pseudo_time: f64,
+    ) -> Option<(SparseMatrix, DVector<f64>)> {
+        let n = self.num_free_dofs;
+        if pattern.col_ptr.len() != n + 1 {
+            return None;
+        }
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        let view = self.node_view();
+        let mut sink = PatternSink {
+            domain: self,
+            pattern,
+            values: vec![0.0; pattern.row_idx.len()],
+            resistance: DVector::<f64>::zeros(n),
+            complete: true,
+        };
+        for (element_id, element) in self.elements.iter() {
+            let load = effective_element_load(&active, element_id);
+            element.assemble_tangent(&view, load.as_ref(), &mut sink);
+        }
+        if !sink.complete {
+            return None;
+        }
+        let symbolic = SymbolicSparseColMat::new_checked(
+            n,
+            n,
+            pattern.col_ptr.clone(),
+            None,
+            pattern.row_idx.clone(),
+        );
+        Some((SparseColMat::new(symbolic, sink.values), sink.resistance))
     }
 
     /// Benchmark hook (`core/examples/benchmark_continuum.rs`): wall time of
@@ -1288,6 +1414,52 @@ where
                     for &(eq_b, coeff_b) in terms_b.iter() {
                         self.triplets
                             .push(Triplet::new(eq_a, eq_b, coeff_a * coeff_b * k[(a, b)]));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Scatters element tangents into the value array of a known `StiffnessPattern` and element resistances into
+/// the free-DOF resistance vector. Sets `complete` to false if an entry is not in the pattern.
+struct PatternSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    domain: &'a Domain<NDIM, NDOF, NId, E>,
+    pattern: &'a StiffnessPattern,
+    values: Vec<f64>,
+    resistance: DVector<f64>,
+    complete: bool,
+}
+
+impl<const NDIM: usize, const NDOF: usize, NId, E> TangentSink<NId>
+    for PatternSink<'_, NDIM, NDOF, NId, E>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    fn add<const N: usize>(
+        &mut self,
+        dofs: &[DofRef<NId>; N],
+        k: &SMatrix<f64, N, N>,
+        r: &SVector<f64, N>,
+    ) {
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared(dofs, Some(k), r.as_slice());
+        let dof_terms: [DofTerms<'_>; N] =
+            std::array::from_fn(|a| self.domain.dof_terms(dofs[a].0, dofs[a].1 as usize));
+        for (a, terms_a) in dof_terms.iter().enumerate() {
+            for &(eq_a, coeff_a) in terms_a.iter() {
+                self.resistance[eq_a] += coeff_a * r[a];
+                for (b, terms_b) in dof_terms.iter().enumerate() {
+                    for &(eq_b, coeff_b) in terms_b.iter() {
+                        match self.pattern.position(eq_a, eq_b) {
+                            Some(at) => self.values[at] += coeff_a * coeff_b * k[(a, b)],
+                            None => self.complete = false,
+                        }
                     }
                 }
             }
@@ -1704,5 +1876,147 @@ mod numbering_tests {
         };
         assert_eq!(terms(SpatialDof::Ux), vec![(ux, 1.0), (ry, 3.0)]);
         assert_eq!(terms(SpatialDof::Uz), vec![(uz, 1.0), (ry, -2.0)]);
+    }
+}
+
+#[cfg(test)]
+mod pattern_assembly_tests {
+    use super::*;
+    use crate::model::{ElasticBeamColumn, GeomTransf, Material, Truss};
+
+    /// A fixed-base portal frame, plus a node `e` tied to the beam's far end in ux, numbered and ready to assemble.
+    fn portal() -> (Domain, [NodeId; 5]) {
+        let mut domain = Domain::new();
+        let a = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+        let b = domain.add_node(Node::new([0.0, 3000.0]));
+        let c = domain.add_node(Node::new([6000.0, 3000.0]));
+        let d = domain.add_node(Node::new([6000.0, 0.0]).fix(0).fix(1).fix(2));
+        let e = domain.add_node(Node::new([3000.0, 3000.0]));
+        for (i, j) in [(a, b), (c, d)] {
+            domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+                i,
+                j,
+                200_000.0,
+                8000.0,
+                2.0e8,
+                GeomTransf::Linear,
+            )));
+        }
+        domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+            b,
+            e,
+            200_000.0,
+            6000.0,
+            3.0e8,
+            GeomTransf::Linear,
+        )));
+        domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+            e,
+            c,
+            200_000.0,
+            6000.0,
+            3.0e8,
+            GeomTransf::Linear,
+        )));
+        domain.equal_dof(c, e, &[0]);
+        domain.number_dofs();
+        (domain, [a, b, c, d, e])
+    }
+
+    /// Every stored entry as `(row, col, value)`, in storage order, including explicit zeros.
+    fn entries(k: &SparseMatrix) -> Vec<(usize, usize, f64)> {
+        let symbolic = k.symbolic();
+        let mut out = Vec::new();
+        for col in 0..symbolic.ncols() {
+            for at in symbolic.col_range(col) {
+                out.push((symbolic.row_idx()[at], col, k.val()[at]));
+            }
+        }
+        out
+    }
+
+    fn from_triplets(domain: &Domain) -> (SparseMatrix, DVector<f64>) {
+        let n = domain.num_free_dofs;
+        let (triplets, resistance) = domain.assemble_stiffness_triplets(1.0);
+        (
+            SparseMatrix::try_new_from_triplets(n, n, &triplets).unwrap(),
+            resistance,
+        )
+    }
+
+    /// The first assembly builds the sparsity pattern from triplets and caches it; the second writes straight into
+    /// that pattern. Both must equal a from-scratch triplet assembly exactly, entry for entry, resistance included.
+    #[test]
+    fn cached_pattern_assembly_matches_triplet_assembly() {
+        let (domain, _) = portal();
+        assert!(domain.pattern.get().is_none());
+        let (first, first_resistance) = domain.assemble_tangent_and_resistance(1.0);
+        assert!(
+            domain.pattern.get().is_some(),
+            "first assembly caches the pattern"
+        );
+        let (second, second_resistance) = domain.assemble_tangent_and_resistance(1.0);
+        let (direct, direct_resistance) = from_triplets(&domain);
+        assert_eq!(entries(&second), entries(&direct));
+        assert_eq!(entries(&first), entries(&direct));
+        assert_eq!(second_resistance, direct_resistance);
+        assert_eq!(first_resistance, direct_resistance);
+    }
+
+    /// A pattern missing an entry some element writes (here, one holding only the diagonal) is detected: the result
+    /// is still the correct matrix, and the cache is replaced by the full pattern.
+    #[test]
+    fn incomplete_pattern_falls_back_and_is_rebuilt() {
+        let (domain, _) = portal();
+        let n = domain.num_free_dofs;
+        let (expected, _) = from_triplets(&domain);
+        domain.pattern.set(StiffnessPattern {
+            col_ptr: (0..=n).collect(),
+            row_idx: (0..n).collect(),
+        });
+        let (k, _) = domain.assemble_tangent_and_resistance(1.0);
+        assert_eq!(entries(&k), entries(&expected));
+        assert_eq!(
+            domain.pattern.get().unwrap().row_idx.len(),
+            entries(&expected).len()
+        );
+    }
+
+    /// Renumbering clears the pattern, and an element added after a cached assembly (new couplings) is picked up on
+    /// the next one: the result equals a fresh triplet assembly.
+    #[test]
+    fn structural_change_after_a_cached_assembly_is_picked_up() {
+        let (mut domain, [a, _, c, _, _]) = portal();
+        domain.assemble_tangent_and_resistance(1.0);
+        assert!(domain.pattern.get().is_some());
+        domain.add_element(Element::Truss(Truss::new(
+            a,
+            c,
+            1000.0,
+            Material::Elastic { e: 200_000.0 },
+        )));
+        domain.number_dofs();
+        assert!(
+            domain.pattern.get().is_none(),
+            "renumbering clears the pattern"
+        );
+        for _ in 0..2 {
+            let (k, r) = domain.assemble_tangent_and_resistance(1.0);
+            let (direct, direct_resistance) = from_triplets(&domain);
+            assert_eq!(entries(&k), entries(&direct));
+            assert_eq!(r, direct_resistance);
+        }
+    }
+
+    /// A cloned domain (the per-step rollback snapshot) assembles the same matrix as the original.
+    #[test]
+    fn cloned_domain_assembles_identically() {
+        let (domain, _) = portal();
+        domain.assemble_tangent_and_resistance(1.0);
+        let copy = domain.clone();
+        assert_eq!(
+            entries(&copy.assemble_tangent_and_resistance(1.0).0),
+            entries(&domain.assemble_tangent_and_resistance(1.0).0)
+        );
     }
 }

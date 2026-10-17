@@ -191,7 +191,7 @@ where
             let config = config.clone();
             return self.arc_step(&config);
         }
-        let snapshot = self.domain.clone();
+        let snapshot = self.domain.displacements();
         for &(node, dof, value) in targets {
             self.domain.prescribe_displacement(node, dof, value);
         }
@@ -204,7 +204,7 @@ where
         let result = self.try_step();
 
         if result.is_err() {
-            self.domain = snapshot;
+            self.domain.restore_displacements(&snapshot);
             self.step_count = snapshot_step_count;
             self.load_factor = snapshot_load_factor;
         } else {

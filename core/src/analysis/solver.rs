@@ -57,26 +57,40 @@ fn same_pattern(
 /// Whether `k` is square and symmetric to rounding: every off-diagonal entry matches its transpose to a
 /// relative `1e-10` of the largest entry magnitude, a missing counterpart counting as zero. Assembly
 /// sums the two triangles in different orders, so exact equality would reject sound stiffness matrices.
+///
+/// Linear in the number of entries: columns are visited in order, so the lookup of row `j` in column `i`
+/// only ever moves forward (`cursor[i]`).
 fn is_symmetric(k: &SparseMatrix) -> bool {
     let (symbolic, values) = (k.symbolic(), k.val());
-    if symbolic.nrows() != symbolic.ncols() {
+    let n = symbolic.ncols();
+    if symbolic.nrows() != n {
         return false;
     }
+    let rows = symbolic.row_idx();
     let tolerance = 1e-10 * values.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    let entry = |row: usize, col: usize| {
-        let range = symbolic.col_range(col);
-        symbolic.row_idx()[range.clone()]
-            .binary_search(&row)
-            .map_or(0.0, |at| values[range.start + at])
-    };
-    (0..symbolic.ncols()).all(|col| {
-        let range = symbolic.col_range(col);
-        symbolic.row_idx()[range.clone()]
-            .iter()
-            .zip(&values[range])
-            .filter(|&(&row, _)| row != col)
-            .all(|(&row, &value)| (value - entry(col, row)).abs() <= tolerance)
-    })
+    let mut cursor: Vec<usize> = (0..n).map(|col| symbolic.col_range(col).start).collect();
+    for col in 0..n {
+        for at in symbolic.col_range(col) {
+            let row = rows[at];
+            if row == col {
+                continue;
+            }
+            let end = symbolic.col_range(row).end;
+            let next = &mut cursor[row];
+            while *next < end && rows[*next] < col {
+                *next += 1;
+            }
+            let mirrored = if *next < end && rows[*next] == col {
+                values[*next]
+            } else {
+                0.0
+            };
+            if (values[at] - mirrored).abs() > tolerance {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 impl CachedSymbolic {
@@ -374,5 +388,45 @@ mod tests {
         assert!(SparseSolver::new().factor(&nearly).unwrap().is_cholesky());
         let skewed = matrix(2, &[(0, 0, 4.0), (0, 1, 1.0), (1, 0, 1.001), (1, 1, 3.0)]);
         assert!(!SparseSolver::new().factor(&skewed).unwrap().is_cholesky());
+    }
+
+    /// The linear-time symmetry check agrees with the definition on a scattered pattern: mirrored entries in
+    /// several columns are accepted, and a single entry without its mirror (or with a different one) is not.
+    #[test]
+    fn symmetry_check_handles_scattered_patterns() {
+        let mut entries = vec![
+            (0, 0, 10.0),
+            (1, 1, 10.0),
+            (2, 2, 10.0),
+            (3, 3, 10.0),
+            (4, 4, 10.0),
+        ];
+        for &(i, j, v) in &[
+            (0, 3, 1.0),
+            (1, 4, 2.0),
+            (0, 4, 0.5),
+            (2, 3, 1.5),
+            (3, 4, 0.25),
+            (1, 2, 0.75),
+        ] {
+            entries.push((i, j, v));
+            entries.push((j, i, v));
+        }
+        assert!(is_symmetric(&matrix(5, &entries)));
+        assert!(SparseSolver::new()
+            .factor(&matrix(5, &entries))
+            .unwrap()
+            .is_cholesky());
+
+        let mut lonely = entries.clone();
+        lonely.push((2, 4, 1.0));
+        assert!(!is_symmetric(&matrix(5, &lonely)));
+        let mut lonely_lower = entries.clone();
+        lonely_lower.push((4, 2, 1.0));
+        assert!(!is_symmetric(&matrix(5, &lonely_lower)));
+        let mut different = entries.clone();
+        different.push((2, 4, 1.0));
+        different.push((4, 2, 1.5));
+        assert!(!is_symmetric(&matrix(5, &different)));
     }
 }

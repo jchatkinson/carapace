@@ -154,3 +154,86 @@ fn failed_step_leaves_domain_unchanged() {
     );
     assert_eq!(before, 0.0);
 }
+
+/// A step that fails to converge on a model that has already yielded leaves no trace: not in the nodal
+/// displacements, and not in any material's committed history.
+///
+/// `Analysis` restores only nodal displacements when a step fails (materials are never mutated during
+/// iteration, see `Material`'s trial/commit split), so this checks that claim on a yielding model. Same
+/// `Truss` + `ElasticPP` parallel system as above: step 1 loads past yield and commits `ep = 0.07`. The
+/// unload step to F = 3 is then attempted with a single permitted iteration under `NormDispIncr`, which cannot
+/// converge (`FailedToConverge`). A domain taken from the failed analysis and a clone taken before the failed attempt
+/// must then give bitwise-identical results for the same unload step with a normal iteration budget, and both
+/// must land on the closed-form answer `u = 1/15` that depends on the committed plastic strain.
+#[test]
+fn failed_step_after_yielding_leaves_no_material_trace() {
+    let length = 100.0;
+    let mut domain = Domain::new();
+    let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let node_j = domain.add_node(Node::new([length, 0.0]).fix(1).fix(2));
+    domain.load_node(node_j, 0, 1.0);
+    domain.add_element(Element::Truss(Truss::new(
+        node_i,
+        node_j,
+        1.0,
+        Material::Elastic { e: 50.0 * length },
+    )));
+    domain.add_element(Element::ZeroLength(
+        ZeroLength::new(node_i, node_j).with_material(0, Material::elastic_pp(100.0, 0.01)),
+    ));
+    let analysis_with = |domain: Domain, increment: f64, test: ConvergenceTest| {
+        AnalysisBuilder::new()
+            .constraint_handler(ConstraintHandler::Plain)
+            .integrator(Integrator::LoadControl { increment })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
+            .test(test)
+            .build(domain)
+    };
+    let converging = ConvergenceTest::NormUnbalance {
+        tol: 1e-9,
+        max_iter: 20,
+    };
+    // The single correction is the full displacement change, far above `tol`, so one iteration cannot pass.
+    let never_in_one_iteration = ConvergenceTest::NormDispIncr {
+        tol: 1e-9,
+        max_iter: 1,
+    };
+
+    let mut yielded = analysis_with(domain, 5.0, converging);
+    yielded.step().expect("loading past yield converges");
+    let before_attempt = yielded.domain().clone();
+
+    let mut failing = analysis_with(before_attempt.clone(), 3.0, never_in_one_iteration);
+    assert!(matches!(
+        failing.step(),
+        Err(AnalysisError::FailedToConverge { step: 1 })
+    ));
+    let after_failure = failing.into_domain();
+    assert_eq!(
+        before_attempt.node(node_j).displacement,
+        after_failure.node(node_j).displacement,
+        "the failed attempt must not leave displacement partially applied"
+    );
+
+    let mut control = analysis_with(before_attempt, 3.0, converging);
+    let mut retried = analysis_with(after_failure, 3.0, converging);
+    control.step().expect("unload step converges");
+    retried
+        .step()
+        .expect("unload step converges after a failed attempt");
+    let (u_control, u_retried) = (
+        control.domain().node(node_j).displacement[0],
+        retried.domain().node(node_j).displacement[0],
+    );
+    assert_eq!(
+        u_control, u_retried,
+        "a failed attempt must not change the result of the next step"
+    );
+    assert!(
+        (u_retried - 1.0 / 15.0).abs() < 1e-9,
+        "expected u = 1/15, got {u_retried}"
+    );
+}
