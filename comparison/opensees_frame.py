@@ -13,7 +13,7 @@ import openseespy.opensees as ops
 
 
 def run(stories=10, bays=3, steps=50, model="elastic", system="SparseGeneral",
-        displacement_increment=None):
+        displacement_increment=None, numberer="Plain"):
     start = perf_counter()
     ops.wipe()
     ops.model("basic", "-ndm", 2, "-ndf", 3)
@@ -63,10 +63,9 @@ def run(stories=10, bays=3, steps=50, model="elastic", system="SparseGeneral",
         ops.load(nodes[story, 0], base_load * story, 0.0, 0.0)
     roof = nodes[stories, 0]
     ops.constraints("Plain")
-    ops.numberer("Plain")
-    if system != "SparseGeneral":
-        raise ValueError("this comparison uses SuperLU via SparseGeneral -piv")
-    ops.system("SparseGeneral", "-piv")
+    ops.numberer(numberer)
+    # "SparseGeneral" alone means SuperLU with partial pivoting, as in the original benchmark.
+    ops.system(*("SparseGeneral -piv" if system == "SparseGeneral" else system).split())
     ops.test("NormDispIncr", 1e-6, 30)
     ops.algorithm("Newton")
     if displacement_increment is None:

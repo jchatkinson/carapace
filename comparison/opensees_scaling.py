@@ -13,7 +13,8 @@ COLUMN, BEAM = (8000.0, 2.0e8), (6000.0, 3.0e8)
 
 
 
-def run(stories, bays, steps, fibers=20, points=5, load_base=1.0, displacement_increment=None):
+def run(stories, bays, steps, fibers=20, points=5, load_base=1.0, displacement_increment=None,
+        system="SparseGeneral -piv", numberer="Plain"):
     ops.wipe()
     ops.model("basic", "-ndm", 2, "-ndf", 3)
     nodes = {}
@@ -47,8 +48,8 @@ def run(stories, bays, steps, fibers=20, points=5, load_base=1.0, displacement_i
         ops.load(nodes[s, 0], load_base * s, 0.0, 0.0)
     roof = nodes[stories, 0]
     ops.constraints("Plain")
-    ops.numberer("Plain")
-    ops.system("SparseGeneral", "-piv")
+    ops.numberer(numberer)
+    ops.system(*system.split())
     ops.test("NormDispIncr", 1e-6, 30)
     ops.algorithm("Newton")
     if displacement_increment is None:

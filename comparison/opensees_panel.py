@@ -9,7 +9,7 @@ from time import perf_counter
 import openseespy.opensees as ops
 
 
-def run(n, system="UmfPack"):
+def run(n, system="UmfPack", numberer="RCM"):
     ops.wipe()
     ops.model("basic", "-ndm", 2, "-ndf", 2)
     at = lambda i, j: j * (n + 1) + i + 1
@@ -29,7 +29,7 @@ def run(n, system="UmfPack"):
     for j in range(n + 1):
         ops.load(at(n, j), 0.0, -1.0)
     ops.constraints("Plain")
-    ops.numberer("RCM")
+    ops.numberer(numberer)
     ops.system(*system.split())
     ops.test("NormDispIncr", 1e-9, 10)
     ops.algorithm("Newton")

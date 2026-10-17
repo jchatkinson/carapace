@@ -2,17 +2,20 @@
   "id": "panel-quad4",
   "title": "Quad4 plane-stress panel",
   "description": "An N x N mesh of unit square plane-stress Quad4 elements (E 200 GPa, nu 0.3, t 1) clamped on the left edge, with a unit downward load on each right-edge node, solved in one Newton load step (2 iterations). The timed region is assembly, factorisation and solve. Meshes are 40 x 40, 80 x 80 and 140 x 140.",
-  "note": "OpenSees uses its fastest sparse direct solver here, with RCM numbering.",
-  "solver": "OpenSees UmfPack, RCM numberer",
+  "note": "A 2D mesh is not narrowly banded, so band and profile solvers do poorly here.",
   "runs": 5,
   "warmups": 1,
+  "opensees_runs": 3,
+  "opensees_warmups": 1,
+  "timeout_factor": 25,
+  "min_timeout_s": 2.0,
   "machine": {
     "cpu": "AMD Ryzen 7 5825U with Radeon Graphics",
     "threads": 16,
     "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
     "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
     "openseespy": "3.8.0",
-    "commit": "a607ac2",
+    "commit": "cf8428b",
     "dirty": true,
     "date": "2026-10-17"
   },
@@ -21,61 +24,572 @@
       "label": "40 x 40 mesh",
       "free_dofs": 3280,
       "elements": 1600,
-      "max_relative_difference": 3.337607967779377e-15,
-      "engines": {
-        "carapace": {
-          "median_ms": 99.6575,
-          "min_ms": 98.5596,
-          "max_ms": 102.703,
-          "iterations": 2
+      "carapace": {
+        "median_ms": 68.9109,
+        "min_ms": 68.1432,
+        "max_ms": 69.4939,
+        "iterations": 2
+      },
+      "opensees": [
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 89.5135869996011,
+          "min_ms": 88.98913600023661,
+          "max_ms": 90.74074999989534,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
         },
-        "opensees": {
-          "median_ms": 92.69937599992772,
-          "min_ms": 91.65133000033165,
-          "max_ms": 94.66451399975995,
-          "iterations": 2
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 98.19061899906956,
+          "min_ms": 98.02369399949384,
+          "max_ms": 101.59732200008875,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 106.11975500069093,
+          "min_ms": 104.31336100009503,
+          "max_ms": 107.00281000026735,
+          "iterations": 2,
+          "max_relative_difference": 3.344546861683284e-15
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 98.42479300095874,
+          "min_ms": 94.65422899847908,
+          "max_ms": 100.75088800113008,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 97.6462390008237,
+          "min_ms": 95.67858999980672,
+          "max_ms": 99.4546479996643,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 107.67955799929041,
+          "min_ms": 107.56720800054609,
+          "max_ms": 108.50376100097492,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "BandGeneral",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 100.82179399978486,
+          "min_ms": 99.81169999991835,
+          "max_ms": 109.13212500054215,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "BandGeneral",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 255.51867700050934,
+          "min_ms": 254.72286100011843,
+          "max_ms": 274.0571340000315,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "ProfileSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 158.0025729999761,
+          "min_ms": 157.27868799876887,
+          "max_ms": 160.25797399925068,
+          "iterations": 2,
+          "max_relative_difference": 3.344546861683284e-15
+        },
+        {
+          "solver": "ProfileSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 281.0494089990243,
+          "min_ms": 279.34173200083023,
+          "max_ms": 285.8456220001244,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 60.11311499969452,
+          "min_ms": 59.1758110003866,
+          "max_ms": 65.96526700013783,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 71.65491199884855,
+          "min_ms": 68.98451900087821,
+          "max_ms": 75.2053510004771,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 127.65013799980807,
+          "min_ms": 76.44377099859412,
+          "max_ms": 179.55938600061927,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "BandSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 64.11255499915569,
+          "min_ms": 63.12415599859378,
+          "max_ms": 68.57334800042736,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "BandSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 138.899184001275,
+          "min_ms": 133.01382300051046,
+          "max_ms": 139.28187499914202,
+          "iterations": 2,
+          "max_relative_difference": 3.344546861683284e-15
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 65.4003109993937,
+          "min_ms": 63.523167998937424,
+          "max_ms": 66.4224580013979,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 67.5175449996459,
+          "min_ms": 66.81463099994289,
+          "max_ms": 67.93144299990672,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 72.12863200038555,
+          "min_ms": 66.85741900037101,
+          "max_ms": 73.19682999877841,
+          "iterations": 2,
+          "max_relative_difference": 3.337607967779377e-15
         }
-      }
+      ]
     },
     {
       "label": "80 x 80 mesh",
       "free_dofs": 12960,
       "elements": 6400,
-      "max_relative_difference": 2.4202861936828413e-14,
-      "engines": {
-        "carapace": {
-          "median_ms": 697.9068,
-          "min_ms": 634.8616,
-          "max_ms": 767.0868,
-          "iterations": 2
+      "carapace": {
+        "median_ms": 252.944,
+        "min_ms": 250.0981,
+        "max_ms": 258.5073,
+        "iterations": 2
+      },
+      "opensees": [
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 558.6684079989936,
+          "min_ms": 537.416753000798,
+          "max_ms": 562.4568900002487,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
         },
-        "opensees": {
-          "median_ms": 634.8611929997787,
-          "min_ms": 633.1008679999286,
-          "max_ms": 665.0960760002818,
-          "iterations": 2
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 587.4442029999045,
+          "min_ms": 575.2700540015212,
+          "max_ms": 595.6174729999475,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 661.0293810008443,
+          "min_ms": 659.8883499991643,
+          "max_ms": 675.4081620001671,
+          "iterations": 2,
+          "max_relative_difference": 2.4175106361212784e-14
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 559.5975209998869,
+          "min_ms": 541.8761790006101,
+          "max_ms": 566.500435999842,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 594.7281849985302,
+          "min_ms": 582.7435639985197,
+          "max_ms": 606.6905789994053,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 619.031153000833,
+          "min_ms": 611.8371709999337,
+          "max_ms": 619.4695419999334,
+          "iterations": 2,
+          "max_relative_difference": 2.4175106361212784e-14
+        },
+        {
+          "solver": "BandGeneral",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 1156.570997000017,
+          "min_ms": 1154.4081069987442,
+          "max_ms": 1172.0660680002766,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "BandGeneral",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 3552.4903899986384,
+          "min_ms": 3508.7588360001973,
+          "max_ms": 3560.024049000276,
+          "iterations": 2,
+          "max_relative_difference": 2.4175106361212784e-14
+        },
+        {
+          "solver": "ProfileSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 2234.864538999318,
+          "min_ms": 2218.732085000738,
+          "max_ms": 2242.507265000313,
+          "iterations": 2,
+          "max_relative_difference": 2.4175106361212784e-14
+        },
+        {
+          "solver": "ProfileSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 4266.130413998326,
+          "min_ms": 4252.604805000374,
+          "max_ms": 4271.18447400062,
+          "iterations": 2,
+          "max_relative_difference": 2.4175106361212784e-14
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 472.349261999625,
+          "min_ms": 438.18097399889666,
+          "max_ms": 495.5274300009478,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 414.69199400125945,
+          "min_ms": 405.2233759994124,
+          "max_ms": 420.10128000038094,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 478.15287099911075,
+          "min_ms": 463.11237000008987,
+          "max_ms": 480.66356100025587,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "BandSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 567.98645300114,
+          "min_ms": 542.1943759993155,
+          "max_ms": 578.8480580013129,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "BandSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 1579.7106490008446,
+          "min_ms": 1559.2442430006486,
+          "max_ms": 1607.6642890002404,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 456.0449429991422,
+          "min_ms": 442.10798099993553,
+          "max_ms": 473.397504998502,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 395.54064000003564,
+          "min_ms": 388.3454620008706,
+          "max_ms": 400.8833739990223,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 452.487327000199,
+          "min_ms": 451.32284100145625,
+          "max_ms": 483.8537750001706,
+          "iterations": 2,
+          "max_relative_difference": 2.4202861936828413e-14
         }
-      }
+      ]
     },
     {
       "label": "140 x 140 mesh",
       "free_dofs": 39480,
       "elements": 19600,
-      "max_relative_difference": 2.781108676686017e-14,
-      "engines": {
-        "carapace": {
-          "median_ms": 2571.1766,
-          "min_ms": 2353.3633,
-          "max_ms": 2584.0906,
-          "iterations": 2
+      "carapace": {
+        "median_ms": 949.6715,
+        "min_ms": 942.7222,
+        "max_ms": 976.4338,
+        "iterations": 2
+      },
+      "opensees": [
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 2856.0196600010386,
+          "min_ms": 2819.375172000946,
+          "max_ms": 2884.232513000825,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
         },
-        "opensees": {
-          "median_ms": 2978.8882049997483,
-          "min_ms": 2662.7723020001213,
-          "max_ms": 3086.7387879998205,
-          "iterations": 2
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 2714.5037569989654,
+          "min_ms": 2677.90574799983,
+          "max_ms": 2789.6525250016566,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "SparseGeneral -piv",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 3368.00507100088,
+          "min_ms": 3318.538351000825,
+          "max_ms": 3402.2257449996687,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 2400.2404929997283,
+          "min_ms": 2394.2665249996935,
+          "max_ms": 2434.4445019996783,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 2553.563468998618,
+          "min_ms": 2531.5148170011526,
+          "max_ms": 2608.413859999928,
+          "iterations": 2,
+          "max_relative_difference": 2.781108676686017e-14
+        },
+        {
+          "solver": "UmfPack",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 2872.5475749997713,
+          "min_ms": 2832.753126998796,
+          "max_ms": 2894.824791999781,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "BandGeneral",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 8777.569284000492,
+          "min_ms": 8700.386055999843,
+          "max_ms": 8970.57147600026,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "BandGeneral",
+          "numberer": "RCM",
+          "status": "timeout",
+          "limit_ms": 23741.787500000002
+        },
+        {
+          "solver": "ProfileSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 20418.528487000003,
+          "min_ms": 20356.098070998996,
+          "max_ms": 20486.962461000076,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "ProfileSPD",
+          "numberer": "RCM",
+          "status": "timeout",
+          "limit_ms": 23741.787500000002
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 2498.0764640004054,
+          "min_ms": 2472.2519489987462,
+          "max_ms": 2564.0698870010965,
+          "iterations": 2,
+          "max_relative_difference": 2.7700064464397656e-14
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 1631.5877550005098,
+          "min_ms": 1524.7703089989955,
+          "max_ms": 1632.4419020002097,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "SparseSPD",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 2233.544049999182,
+          "min_ms": 2113.0269980003504,
+          "max_ms": 2245.7951180003874,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "BandSPD",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 3993.1661780010472,
+          "min_ms": 3917.0104220011126,
+          "max_ms": 4006.901159998961,
+          "iterations": 2,
+          "max_relative_difference": 2.781108676686017e-14
+        },
+        {
+          "solver": "BandSPD",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 14314.024178000182,
+          "min_ms": 13909.48946500066,
+          "max_ms": 14406.81897399918,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "Plain",
+          "status": "ok",
+          "median_ms": 2422.816628999499,
+          "min_ms": 2400.092885000049,
+          "max_ms": 2447.498330999224,
+          "iterations": 2,
+          "max_relative_difference": 2.7700064464397656e-14
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "RCM",
+          "status": "ok",
+          "median_ms": 1620.9524890000466,
+          "min_ms": 1502.15869099884,
+          "max_ms": 1627.8583050007,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
+        },
+        {
+          "solver": "SparseSYM",
+          "numberer": "AMD",
+          "status": "ok",
+          "median_ms": 2209.925209001085,
+          "min_ms": 2042.4576789991988,
+          "max_ms": 2217.5758370012773,
+          "iterations": 2,
+          "max_relative_difference": 2.7755575615628914e-14
         }
-      }
+      ]
     }
   ]
 }
