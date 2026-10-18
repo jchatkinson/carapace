@@ -634,7 +634,7 @@ from trial-state contamination.
    and rollback/history-isolation tests. Add geometric and refinement cases.
 5. Add planar/spatial wire settings, decode errors, session diagnostics,
    and native boundary tests. Rebuild generated JS/TypeScript declarations
-   through `wasm-pack`, then run Node/TypeScript boundary tests. Update
+   with `scripts/build-wasm.sh`, then run Node/TypeScript boundary tests. Update
    `docs/algorithms.md` and README with the implemented API and restrictions.
 
 Completion requires `cargo test --workspace` on native followed by the

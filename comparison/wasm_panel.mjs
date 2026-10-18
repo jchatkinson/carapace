@@ -2,11 +2,11 @@
 // reactions and Gauss-point stresses as JSON. The case is the JSON file given as argv[2]:
 // { nodes: [[x, y]], quads: [[n0..n3]], triangles: [[n0..n2]], thickness, e, nu,
 //   formulation: "full" | "enhanced", fixed: [node], loads: [[node, dof, value]] }
-// Run after: wasm-pack build wasm-bridge --target nodejs --out-dir ../pkg
-import { createRequire } from "node:module";
+// Run after: scripts/build-wasm.sh (the shipped build, in pkg/)
+import { loadCarapace } from "./load_wasm.mjs";
 import { readFileSync } from "node:fs";
 
-const { decodeInput } = createRequire(import.meta.url)("../pkg/carapace_wasm.js");
+const { decodeInput } = await loadCarapace();
 const c = JSON.parse(readFileSync(process.argv[2], "utf8"));
 
 const quads = c.quads ?? [], triangles = c.triangles ?? [];

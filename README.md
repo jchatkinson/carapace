@@ -171,11 +171,11 @@ carapace/
 # native (fast iteration, real debuggers, no browser/Node round-trip)
 cargo test --workspace
 
-# one-time tool setup
-cargo install wasm-pack --locked
+# one-time tool setup (wasm-bindgen must match Cargo.lock)
+cargo install wasm-bindgen-cli --version 0.2.128 --locked
 
-# build wasm, generate JS glue and TypeScript types, and package for Node
-wasm-pack build wasm-bridge --target nodejs --out-dir ../pkg
+# build the shipped wasm: JS glue, TypeScript types and binary in pkg/ (loads under Node and browsers)
+scripts/build-wasm.sh
 
 # check the generated package through its application API (Node 22.18+)
 node wasm-bridge/tests/boundary-smoke.ts
@@ -185,16 +185,16 @@ npm exec --package=typescript -- tsc --strict --noEmit --target es2022 --lib esn
   --module nodenext wasm-bridge/tests/boundary-smoke.ts
 ```
 
-For a browser or browser worker, build with `--target web --out-dir ../pkg-web`
-instead. This produces ES modules; initialize the wasm module with its default
-`init()` export before calling `decodeInput`.
+The build is `--target web` (ES modules). A browser or worker initializes the module with the default
+`init()` export before calling `decodeInput`; under Node, `comparison/load_wasm.mjs` loads the same files with
+`initSync`.
 
 Always verify a change on the native target first, wasm32 second — it
 isolates logic bugs from platform/toolchain bugs faster than debugging
 inside a wasm runtime directly.
 
-`wasm-pack` manages the matching `wasm-bindgen` tool and generates everything
-in `pkg/`, including `carapace_wasm.d.ts`. Do not edit generated files.
+`scripts/build-wasm.sh` generates everything in `pkg/`, including `carapace_wasm.d.ts`. Do not edit
+generated files.
 The application interface is `decodeInput(input)` → `WasmSession`, with
 `advance(stepBudget)` → `StepOutcome` and `currentStageId()` methods.
 

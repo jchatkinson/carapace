@@ -1,8 +1,10 @@
-// Run with Node 22.18+ after wasm-pack build; also type-check against generated .d.ts.
-import { decodeInput } from "../../pkg/carapace_wasm.js";
+// Run with Node 22.18+ after scripts/build-wasm.sh (tests the shipped build); also type-check against generated .d.ts.
+import { loadCarapace } from "../../comparison/load_wasm.mjs";
 import type {
   AlgorithmSpec, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, SequenceSpec, StepOutcome,
 } from "../../pkg/carapace_wasm.js";
+
+const { decodeInput } = await loadCarapace();
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);

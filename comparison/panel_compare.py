@@ -2,7 +2,7 @@
 `enhancedQuad`): same mesh, same plane-stress isotropic material, tip loads. Compares nodal
 displacements, support reactions and Gauss-point stresses.
 
-Usage (from the repo root, after `wasm-pack build wasm-bridge --target nodejs --out-dir ../pkg`):
+Usage (from the repo root, after `scripts/build-wasm.sh`):
     comparison/.venv/bin/python comparison/panel_compare.py
 
 The plain elements (`quad` vs Carapace `full`, `tri31` vs `tri3`) are the same formulation and

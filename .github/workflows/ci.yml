@@ -12,17 +12,15 @@ jobs:
         with: { targets: wasm32-unknown-unknown }
       - uses: Swatinem/rust-cache@v2
       - run: mkdir -p target && cargo test --workspace --no-fail-fast 2>&1 | tee target/test.log
-      - run: cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
+      # The same build PySees ships (scripts/build-wasm.sh): simd128 + wasm-bindgen.
+      - uses: taiki-e/install-action@v2
+        with: { tool: "wasm-bindgen@0.2.128" }
+      - run: scripts/build-wasm.sh pkg
       - run: cargo doc --workspace --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }
       - run: python3 docs-site/gen_tests.py target/test.log target/doc/tests/index.html
       - run: python3 docs-site/gen_benchmarks.py target/doc/benchmarks/index.html
       # The remaining steps assemble the published site, so they only run on main.
-      - if: github.ref == 'refs/heads/main'
-        uses: taiki-e/install-action@v2
-        with: { tool: "wasm-bindgen@0.2.128" }
-      - if: github.ref == 'refs/heads/main'
-        run: wasm-bindgen target/wasm32-unknown-unknown/release/carapace_wasm.wasm --out-dir pkg --target web
       - if: github.ref == 'refs/heads/main'
         run: npx --yes typedoc@0.28 --tsconfig docs-site/tsconfig.json --entryPoints pkg/carapace_wasm.d.ts --out target/doc/wasm
       - if: github.ref == 'refs/heads/main'

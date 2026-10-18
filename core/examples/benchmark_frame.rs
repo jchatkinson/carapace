@@ -12,6 +12,7 @@
 //!   --steps <usize>     Number of load steps (default: 50)
 //!   --model <str>       Model type: 'elastic' or 'fiber' (default: 'elastic')
 //!   --displacement-increment <f64>  Control roof x displacement per step (mm)
+//!   --load-base <f64>   Lateral load per story index (N); default 10000 (elastic) or 25000 (fiber)
 //!   --json              Output machine-readable JSON
 
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ struct BenchmarkConfig {
     steps: usize,
     model: String,
     displacement_increment: Option<f64>,
+    load_base: Option<f64>,
     json: bool,
 }
 
@@ -40,6 +42,7 @@ fn parse_args() -> BenchmarkConfig {
         steps: 50,
         model: "elastic".to_string(),
         displacement_increment: None,
+        load_base: None,
         json: false,
     };
 
@@ -77,6 +80,12 @@ fn parse_args() -> BenchmarkConfig {
                         .parse().expect("displacement increment must be a number"),
                 );
             }
+            "--load-base" => {
+                i += 1;
+                config.load_base = Some(
+                    args.get(i).expect("missing load base").parse().expect("load base must be a number"),
+                );
+            }
             "--json" => {
                 config.json = true;
             }
@@ -102,7 +111,7 @@ fn main() {
     let beam_iz: f64 = 3.0e8;   // mm^4
     let e_modulus: f64 = 200000.0; // MPa
 
-    let p_base: f64 = if config.model == "fiber" { 25000.0 } else { 10000.0 }; // N
+    let p_base: f64 = config.load_base.unwrap_or(if config.model == "fiber" { 25000.0 } else { 10000.0 }); // N
 
     let setup_start = Instant::now();
     let mut domain = Domain::new();

@@ -24,6 +24,8 @@ uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, 
   wire table. Follow its checklists.
 - `docs/input-format.md`: the wire format. Keep it in sync with any change to `input_v1`.
 - `docs/algorithms.md`, `docs/arclength.md`: solution algorithms.
+- `docs/wasm-performance.md`: wasm build flags and the measurements behind them. Read before touching the build;
+  `wasm-opt` was measured slower, so do not add it back.
 
 ## Rules
 
@@ -60,7 +62,6 @@ The benchmark page (`docs-site/gen_benchmarks.py`) renders `docs-site/benchmarks
 the machine and need OpenSeesPy, so CI does not run them: regenerate with
 `comparison/.venv/bin/python comparison/run_benchmarks.py [--only ID]` (add new benchmarks to `BENCHMARKS` there) and commit the JSON.
 
-The wasm bundle PySees uses is built from here by `../pysees/scripts/build-carapace.sh` (cargo build, then
-`wasm-bindgen --target web`, then copied into `src/app/carapace/wasm`). Rebuild and copy it after any
+The wasm build is `scripts/build-wasm.sh` (cargo with simd128, `wasm-bindgen --target web`; no `wasm-opt`, which measured slower; see `docs/wasm-performance.md`). CI and PySees both use it. PySees runs it via `../pysees/scripts/build-carapace.sh` (which then copies the output into `src/app/carapace/wasm`). Rebuild and copy it after any
 change PySees should see. `comparison/check_refactor.sh` checks numerical output against recorded baselines
 (`comparison/baseline/`) and should show no drift after a refactor.

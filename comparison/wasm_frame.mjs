@@ -1,16 +1,16 @@
 // Wasm counterpart of core/examples/benchmark_frame.rs (same frame, same JSON shape).
 // Timing covers the advance(1) loop only; decodeInput is reported as setup_ms.
-// Run after: wasm-pack build wasm-bridge --target nodejs --out-dir ../pkg
-import { createRequire } from "node:module";
+// Run after: scripts/build-wasm.sh (the shipped build, in pkg/)
+import { loadCarapace } from "./load_wasm.mjs";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 
-const { decodeInput } = createRequire(import.meta.url)("../pkg/carapace_wasm.js");
+const { decodeInput } = await loadCarapace();
 
 const { values: opts } = parseArgs({ options: {
   stories: { type: "string", default: "10" }, bays: { type: "string", default: "3" },
   steps: { type: "string", default: "50" }, model: { type: "string", default: "elastic" },
-  "displacement-increment": { type: "string" }, "warm-runs": { type: "string", default: "0" },
+  "displacement-increment": { type: "string" }, "load-base": { type: "string" }, "warm-runs": { type: "string", default: "0" },
 } });
 const stories = +opts.stories, bays = +opts.bays, steps = +opts.steps;
 const model = opts.model, dispInc = opts["displacement-increment"] === undefined ? undefined : +opts["displacement-increment"];
@@ -57,7 +57,7 @@ function buildInput() {
       t.a.push(col ? colA : beamA); t.iz.push(col ? colI : beamI); t.transform.push("linear");
     });
   }
-  const pBase = model === "fiber" ? 25000 : 10000;
+  const pBase = opts["load-base"] !== undefined ? +opts["load-base"] : model === "fiber" ? 25000 : 10000;
   for (let s = 1; s <= stories; s++) {
     const l = input.nodalLoads;
     l.pattern.push(0); l.node.push(idx(s, 0)); l.dof.push(0); l.value.push(pBase * s); l.stage.push(0);

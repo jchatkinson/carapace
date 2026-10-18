@@ -1,9 +1,9 @@
 // Times an N x N Quad4 panel (clamped left edge, shear on the right edge) through the wasm build.
 // Usage: node comparison/wasm_continuum.mjs [N] [reps] [full|enhanced]
-// Run after: wasm-pack build wasm-bridge --target nodejs --out-dir ../pkg
-import { createRequire } from "node:module";
+// Run after: scripts/build-wasm.sh (the shipped build, in pkg/)
+import { loadCarapace } from "./load_wasm.mjs";
 
-const { decodeInput } = createRequire(import.meta.url)("../pkg/carapace_wasm.js");
+const { decodeInput } = await loadCarapace();
 const n = Number(process.argv[2] ?? 50), reps = Number(process.argv[3] ?? 3), formulation = process.argv[4] ?? "full";
 const id = (i, j) => j * (n + 1) + i;
 const coords = [], fixed = [], quadNodes = [], loadNodes = [];

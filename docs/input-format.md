@@ -9,7 +9,7 @@ definitions generated from them. If this page and the types disagree, the types
 win. To see the exact declarations:
 
 ```bash
-wasm-pack build wasm-bridge --target nodejs --out-dir ../pkg
+scripts/build-wasm.sh
 # -> pkg/carapace_wasm.d.ts  (generated, gitignored, do not edit)
 ```
 

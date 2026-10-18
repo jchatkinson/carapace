@@ -13,7 +13,7 @@ import openseespy.opensees as ops
 
 
 def run(stories=10, bays=3, steps=50, model="elastic", system="SparseGeneral",
-        displacement_increment=None, numberer="Plain"):
+        displacement_increment=None, numberer="Plain", load_base=None):
     start = perf_counter()
     ops.wipe()
     ops.model("basic", "-ndm", 2, "-ndf", 3)
@@ -58,7 +58,7 @@ def run(stories=10, bays=3, steps=50, model="elastic", system="SparseGeneral",
 
     ops.timeSeries("Linear", 1)
     ops.pattern("Plain", 1, 1)
-    base_load = 25000.0 if model == "fiber" else 10000.0
+    base_load = load_base if load_base is not None else 25000.0 if model == "fiber" else 10000.0
     for story in range(1, stories + 1):
         ops.load(nodes[story, 0], base_load * story, 0.0, 0.0)
     roof = nodes[stories, 0]
@@ -103,4 +103,6 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--model", choices=["elastic", "fiber"], default="elastic")
     parser.add_argument("--displacement-increment", type=float)
-    print(json.dumps(run(**vars(parser.parse_args())), indent=2))
+    parser.add_argument("--load-base", type=float, help="lateral load per story index (N)")
+    args = vars(parser.parse_args())
+    print(json.dumps(run(**args), indent=2))
