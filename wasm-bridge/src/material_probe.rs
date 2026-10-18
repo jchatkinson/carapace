@@ -34,15 +34,28 @@ pub struct MaterialProbeResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum MaterialProbeError {
     /// The material kind isn't in the probe's supported set.
-    UnsupportedMaterial { material: &'static str },
+    UnsupportedMaterial {
+        material: &'static str,
+    },
     /// The target strain isn't finite.
-    InvalidTarget { target: f64 },
-    InvalidProbe { reason: String },
+    InvalidTarget {
+        target: f64,
+    },
+    InvalidProbe {
+        reason: String,
+    },
     /// The nonlinear solve failed; the last committed state is intact.
-    SolverFailure { target: f64, detail: String },
+    SolverFailure {
+        target: f64,
+        detail: String,
+    },
 }
 
 pub struct MaterialProbe {
@@ -129,7 +142,10 @@ impl MaterialProbe {
     /// strain reports the committed response without stepping, so it never
     /// advances material state. A failed target leaves the last committed
     /// state intact.
-    pub fn apply_strain(&mut self, target: f64) -> Result<MaterialProbeResponse, MaterialProbeError> {
+    pub fn apply_strain(
+        &mut self,
+        target: f64,
+    ) -> Result<MaterialProbeResponse, MaterialProbeError> {
         if !target.is_finite() {
             return Err(MaterialProbeError::InvalidTarget { target });
         }

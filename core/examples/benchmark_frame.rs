@@ -19,9 +19,12 @@ use std::collections::HashMap;
 use std::env;
 use std::time::Instant;
 
-use carapace_core::analysis::{Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy};
+use carapace_core::analysis::{
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
+};
 use carapace_core::model::{
-    BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, Fiber, GeomTransf, Material, Node,
+    BeamIntegration, DispBeamColumn, Domain, ElasticBeamColumn, Element, Fiber, GeomTransf,
+    Material, Node,
 };
 
 struct BenchmarkConfig {
@@ -76,14 +79,19 @@ fn parse_args() -> BenchmarkConfig {
             "--displacement-increment" => {
                 i += 1;
                 config.displacement_increment = Some(
-                    args.get(i).expect("missing displacement increment")
-                        .parse().expect("displacement increment must be a number"),
+                    args.get(i)
+                        .expect("missing displacement increment")
+                        .parse()
+                        .expect("displacement increment must be a number"),
                 );
             }
             "--load-base" => {
                 i += 1;
                 config.load_base = Some(
-                    args.get(i).expect("missing load base").parse().expect("load base must be a number"),
+                    args.get(i)
+                        .expect("missing load base")
+                        .parse()
+                        .expect("load base must be a number"),
                 );
             }
             "--json" => {
@@ -103,15 +111,19 @@ fn main() {
     assert!(config.steps >= 1, "steps must be >= 1");
 
     let h_story: f64 = 3000.0; // mm
-    let l_bay: f64 = 6000.0;   // mm
+    let l_bay: f64 = 6000.0; // mm
 
     let col_area: f64 = 8000.0; // mm^2
-    let col_iz: f64 = 2.0e8;    // mm^4
+    let col_iz: f64 = 2.0e8; // mm^4
     let beam_area: f64 = 6000.0; // mm^2
-    let beam_iz: f64 = 3.0e8;   // mm^4
+    let beam_iz: f64 = 3.0e8; // mm^4
     let e_modulus: f64 = 200000.0; // MPa
 
-    let p_base: f64 = config.load_base.unwrap_or(if config.model == "fiber" { 25000.0 } else { 10000.0 }); // N
+    let p_base: f64 = config.load_base.unwrap_or(if config.model == "fiber" {
+        25000.0
+    } else {
+        10000.0
+    }); // N
 
     let setup_start = Instant::now();
     let mut domain = Domain::new();
@@ -135,14 +147,30 @@ fn main() {
     // Fiber definitions if needed
     let col_h = (col_iz / col_area).sqrt();
     let col_fibers = vec![
-        Fiber::new(col_h, col_area / 2.0, Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0)),
-        Fiber::new(-col_h, col_area / 2.0, Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0)),
+        Fiber::new(
+            col_h,
+            col_area / 2.0,
+            Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0),
+        ),
+        Fiber::new(
+            -col_h,
+            col_area / 2.0,
+            Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0),
+        ),
     ];
 
     let beam_h = (beam_iz / beam_area).sqrt();
     let beam_fibers = vec![
-        Fiber::new(beam_h, beam_area / 2.0, Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0)),
-        Fiber::new(-beam_h, beam_area / 2.0, Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0)),
+        Fiber::new(
+            beam_h,
+            beam_area / 2.0,
+            Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0),
+        ),
+        Fiber::new(
+            -beam_h,
+            beam_area / 2.0,
+            Material::steel01(355.0, e_modulus, 0.02, 0.0, 1.0, 0.0, 1.0),
+        ),
     ];
 
     let mut element_count = 0;
@@ -209,7 +237,11 @@ fn main() {
     let increment = 1.0 / config.steps as f64;
     let roof_node = nodes[&(config.stories, 0)];
     let integrator = match config.displacement_increment {
-        Some(increment) => Integrator::DisplacementControl { node: roof_node, dof: 0, increment },
+        Some(increment) => Integrator::DisplacementControl {
+            node: roof_node,
+            dof: 0,
+            increment,
+        },
         None => Integrator::LoadControl { increment },
     };
     let mut analysis = AnalysisBuilder::new()
@@ -253,7 +285,10 @@ fn main() {
 
     if config.json {
         let history_str: Vec<String> = roof_history.iter().map(|d| format!("{:.10}", d)).collect();
-        let load_history_str: Vec<String> = load_factor_history.iter().map(|value| format!("{:.10}", value)).collect();
+        let load_history_str: Vec<String> = load_factor_history
+            .iter()
+            .map(|value| format!("{:.10}", value))
+            .collect();
         println!(
             "{{\n  \"engine\": \"carapace\",\n  \"model\": \"{}\",\n  \"stories\": {},\n  \"bays\": {},\n  \"nodes\": {},\n  \"elements\": {},\n  \"free_dofs\": {},\n  \"steps\": {},\n  \"setup_ms\": {:.4},\n  \"solve_ms\": {:.4},\n  \"total_ms\": {:.4},\n  \"final_roof_disp\": {:.10},\n  \"roof_disp_history\": [{}],\n  \"load_factor_history\": [{}],\n  \"iterations\": {}\n}}",
             config.model,
@@ -276,12 +311,22 @@ fn main() {
         println!("  Carapace Frame Benchmark");
         println!("============================================================");
         println!("  Model type:      {}", config.model);
-        println!("  Grid dimensions: {} stories x {} bays", config.stories, config.bays);
-        println!("  Mesh statistics: {} nodes, {} elements, {} free DOFs", total_nodes, element_count, free_dofs);
+        println!(
+            "  Grid dimensions: {} stories x {} bays",
+            config.stories, config.bays
+        );
+        println!(
+            "  Mesh statistics: {} nodes, {} elements, {} free DOFs",
+            total_nodes, element_count, free_dofs
+        );
         println!("  Load steps:      {}", config.steps);
         println!("------------------------------------------------------------");
         println!("  Setup time:      {:.3} ms", setup_ms);
-        println!("  Solve time:      {:.3} ms ({:.3} ms/step)", solve_ms, solve_ms / config.steps as f64);
+        println!(
+            "  Solve time:      {:.3} ms ({:.3} ms/step)",
+            solve_ms,
+            solve_ms / config.steps as f64
+        );
         println!("  Total time:      {:.3} ms", total_ms);
         println!("  Final roof disp: {:.6} mm", final_roof_disp);
         println!("============================================================");

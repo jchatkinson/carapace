@@ -153,18 +153,30 @@ fn composites_resolve_through_the_arena() {
         MaterialSpec::Parallel {
             children: vec![(0, 1.0), (1, 2.0)],
         },
-        vec![MaterialSpec::Elastic { e: 10.0 }, MaterialSpec::Elastic { e: 5.0 }],
+        vec![
+            MaterialSpec::Elastic { e: 10.0 },
+            MaterialSpec::Elastic { e: 5.0 },
+        ],
     ))
     .unwrap();
     close(&run(&mut p, &[0.1]), &[2.0]);
     let mut p = MaterialProbe::new(&config(
-        MaterialSpec::Series { children: vec![0, 1] },
-        vec![MaterialSpec::Elastic { e: 10.0 }, MaterialSpec::Elastic { e: 10.0 }],
+        MaterialSpec::Series {
+            children: vec![0, 1],
+        },
+        vec![
+            MaterialSpec::Elastic { e: 10.0 },
+            MaterialSpec::Elastic { e: 10.0 },
+        ],
     ))
     .unwrap();
     close(&run(&mut p, &[1.0]), &[5.0]);
     let gapped = MaterialProbe::new(&config(
-        MaterialSpec::MinMax { inner: 0, min_strain: -1.0, max_strain: 1.0 },
+        MaterialSpec::MinMax {
+            inner: 0,
+            min_strain: -1.0,
+            max_strain: 1.0,
+        },
         vec![MaterialSpec::Gap { e: 1.0, gap: 0.1 }],
     ));
     assert_eq!(
@@ -176,9 +188,30 @@ fn composites_resolve_through_the_arena() {
 /// Steel02 and Concrete02 are probe-able now.
 #[test]
 fn steel02_and_concrete02_probe() {
-    let mut p = probe(MaterialSpec::Steel02 { fy: 50.0, e0: 1000.0, b: 0.01, r0: 15.0, cr1: 0.925, cr2: 0.15, a1: 0.0, a2: 1.0, a3: 0.0, a4: 1.0 });
-    assert!(run(&mut p, &[0.01, 0.0, -0.01]).iter().all(|s| s.abs() <= 60.0));
-    let mut p = probe(MaterialSpec::Concrete02 { fc: -30.0, epsc0: -0.002, fcu: -20.0, epscu: -0.006, rat: 0.1, ft: 3.0, ets: 200.0 });
+    let mut p = probe(MaterialSpec::Steel02 {
+        fy: 50.0,
+        e0: 1000.0,
+        b: 0.01,
+        r0: 15.0,
+        cr1: 0.925,
+        cr2: 0.15,
+        a1: 0.0,
+        a2: 1.0,
+        a3: 0.0,
+        a4: 1.0,
+    });
+    assert!(run(&mut p, &[0.01, 0.0, -0.01])
+        .iter()
+        .all(|s| s.abs() <= 60.0));
+    let mut p = probe(MaterialSpec::Concrete02 {
+        fc: -30.0,
+        epsc0: -0.002,
+        fcu: -20.0,
+        epscu: -0.006,
+        rat: 0.1,
+        ft: 3.0,
+        ets: 200.0,
+    });
     let r = run(&mut p, &[0.0005, -0.002]);
     assert!(r[0] > 0.0 && r[1] < -20.0);
 }

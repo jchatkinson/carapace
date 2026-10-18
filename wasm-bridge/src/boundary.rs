@@ -14,7 +14,9 @@ use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 use crate::input_v1::{self, CarapaceInputV1};
-use crate::material_probe::{MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse};
+use crate::material_probe::{
+    MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse,
+};
 
 /// Opaque handle to a decoded, steppable analysis session — the `Session`
 /// enum itself can't cross the boundary directly, since `wasm_bindgen`
