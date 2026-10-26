@@ -1,8 +1,11 @@
 # CSFM in Carapace: implementation and test plan
 
-Status: phase 0 in progress. The golden fixtures and their measured sensitivities are in
-[core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md). Still to do in phase 0: the tangent checker, the
-§4 C reference calculations, and the §4 G and H fixtures. Nothing in Carapace's code has changed yet.
+Status: phase 0 complete. The golden fixtures and their measured sensitivities are in
+[core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md), including the §4 G and H fixtures. The generic
+tangent-vs-finite-difference checker is in `core/src/testkit.rs`, exercised against existing materials and elements
+in `core/tests/materials/tangent_fd.rs` and `core/tests/elements/tangent_fd.rs`. The §4 C independent reference
+calculations are in [core/tests/csfm/reference](../core/tests/csfm/reference/README.md). Nothing in Carapace's
+production code (`CsfmConcrete`, `CsfmRebar`, `EmbeddedBar`) has changed yet - that starts at phase 1.
 
 Goal: move the Compatible Stress Field Method (CSFM) analysis from CalcsApp (`../calcs.app/lib/fem`, TypeScript)
 into Carapace, so that Carapace becomes the solver CalcsApp ships. This plan covers only the CSFM procedure and its

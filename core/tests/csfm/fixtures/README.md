@@ -35,6 +35,8 @@ Commit the CalcsApp source before regenerating, so that `calcsAppDirty` is `fals
 | `embedding.json` | `resolveRebarPaths` output: nodes with host element, `xi`, `eta`, `N`, and rods. Cases: crossing, along and on shared edges, a T3 diagonal and through-node path, a distorted Q4, the deep beam, the span beam, and an outside-mesh error case. TS binds each end on its own, while Carapace binds a segment to the host containing its midpoint. |
 | `models/*.json` | One TS load path each, under the parity settings: the model, the schedule, the solver settings, and for every increment the displacements, Gauss strain and stress, kc2, status and retries. |
 | `summary.json` | Parity outcomes, sensitivity, the γ sweep, and outcomes under the UI's solver settings. |
+| `critical-load.json` | `findCriticalLoad` bracketing (plan §4 G) on the deep-beam model: the load fraction at which the concrete tensile-strain criterion is first reached, bisected to `loadFractionTolerance`. Carapace's own bracketing on the same model and stop criteria should reproduce `outcome.loadFraction` within that tolerance. |
+| `cracked-tangent.json` | A free-DOF tangent stiffness matrix and right-hand side (plan §4 H), dumped from a converged, cracked state of `span-beam-5kip-gamma-0.001` at full load. Boundary conditions are eliminated exactly (no TS penalty), so it is directly comparable to what Carapace's exact supports produce. `maxAsymmetry` confirms the matrix is genuinely nonsymmetric (kc2 coupling); faer's LU should solve it to `rel` 1e-10 residual. |
 
 Models: `q4-startup`, `patch-2in-q4`, `patch-2in-t3` (first 5%), `patch-8in-{1x1,2x2}-*` (the six option
 combinations), `deep-beam` (12x6, 7.5 kip, γ 0.01) and `span-beam-5kip-gamma-0.001` (15x7, 10 kip). All reach their
@@ -66,8 +68,6 @@ the penalty nor the convergence test can account for a parity failure.
 
 The 50 kip abort is the load-control limit point. It is not a located peak and not a material limit (plan §2.5).
 
-Not yet exported:
-
-- the `findCriticalLoad` bracketing (§4 G);
-- a dumped cracked tangent for the solver test (§4 H);
-- the independent reference calculations (§4 C).
+The independent reference calculations for §4 C (the CMM panel, the tension chord) are not golden fixtures - they
+don't come from calcs.app - and live instead under
+[core/tests/csfm/reference](../reference/README.md).
