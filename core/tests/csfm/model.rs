@@ -38,11 +38,10 @@ fn usize_of(v: &Value) -> usize {
         .unwrap_or_else(|| panic!("expected a non-negative integer, got {v}")) as usize
 }
 
-/// Builds the `Domain` for one `model` object: mesh and `CsfmConcrete` elements, exact fixed-DOF
-/// supports (plan §2.4 — Carapace has no penalty mode to opt into), nodal loads, and `CsfmRebar`
-/// embedded bars via `embed_polyline`. Panics (via the fixture's own invariants) rather than
-/// returning `Result` — a fixture that doesn't build is a test bug, not a case under test.
-pub fn build(model: &Value) -> BuiltModel {
+/// Mesh nodes plus exact fixed-DOF supports (plan §2.4 — Carapace has no penalty mode to opt
+/// into) — the part every `model` object's elements, loads and rebar build on top of, regardless
+/// of which material they end up using.
+fn build_nodes(model: &Value) -> (Domain, Vec<NodeId>) {
     assert!(
         model["nodeSprings"].as_array().unwrap().is_empty(),
         "no current CSFM fixture uses node springs; add support to model.rs before relying on this"
@@ -51,7 +50,6 @@ pub fn build(model: &Value) -> BuiltModel {
     let mesh = &model["mesh"];
     let node_x = mesh["nodeX"].as_array().unwrap();
     let node_y = mesh["nodeY"].as_array().unwrap();
-    let thickness = f64_of(&mesh["thickness"]);
 
     let mut fixed: Vec<Vec<usize>> = vec![Vec::new(); node_x.len()];
     for bc in model["boundaryConditions"].as_array().unwrap() {
@@ -73,6 +71,17 @@ pub fn build(model: &Value) -> BuiltModel {
             domain.add_node(node)
         })
         .collect();
+    (domain, node_ids)
+}
+
+/// Builds the `Domain` for one `model` object: mesh and `CsfmConcrete` elements, exact fixed-DOF
+/// supports, nodal loads, and `CsfmRebar` embedded bars via `embed_polyline`. Panics (via the
+/// fixture's own invariants) rather than returning `Result` — a fixture that doesn't build is a
+/// test bug, not a case under test.
+pub fn build(model: &Value) -> BuiltModel {
+    let (mut domain, node_ids) = build_nodes(model);
+    let mesh = &model["mesh"];
+    let thickness = f64_of(&mesh["thickness"]);
 
     let concrete = &model["concrete"];
     let law = match concrete["law"].as_str().unwrap() {
@@ -172,6 +181,122 @@ pub fn build(model: &Value) -> BuiltModel {
                 tension_stiffening,
             )
             .expect("fixture's rebar path parameters must be valid");
+            let bars = embed_polyline(&domain, &polyline, bar_area, &material)
+                .expect("fixture's rebar path must embed cleanly in its mesh");
+            let ids: Vec<ElementId> = bars
+                .into_iter()
+                .map(|bar| domain.add_element(Element::EmbeddedBar(bar)))
+                .collect();
+            RodPath {
+                path_id: path["id"].as_str().unwrap().to_string(),
+                bars: ids,
+            }
+        })
+        .collect();
+
+    BuiltModel {
+        domain,
+        nodes: node_ids,
+        rod_paths,
+    }
+}
+
+/// `build`'s linear-elastic counterpart (plan §4 E): the same mesh, exact supports, loads and
+/// rebar topology, but every concrete element is isotropic `PlaneStress { e: ecm, nu: 0.0 }`
+/// (`CsfmConcrete`'s own `ecm`, not hardcoded — the same formula CalcsApp's
+/// `expectLinearDeepBeamToBalance` hardcodes `27_579` for `fck = 30`, `G = E / 2` i.e. `nu = 0`)
+/// and every rebar path is plain bilinear-free `Material::Elastic { e }` at its own `Es`, matching
+/// TS's ad hoc `continuumLaw`/`rodLaw` for that test exactly. `CsfmConcrete`/`CsfmRebar` are
+/// deliberately not used here: at the origin they already reduce to this same isotropic tangent
+/// (plan §2.1/§2.2's origin seed), so using them here would just be re-testing that seed as the
+/// purported linear reference rather than giving an independent genuinely-linear one.
+pub fn build_linear(model: &Value) -> BuiltModel {
+    let (mut domain, node_ids) = build_nodes(model);
+    let mesh = &model["mesh"];
+    let thickness = f64_of(&mesh["thickness"]);
+
+    let fck = f64_of(&model["fck"]);
+    let ecm = match PlaneMaterial::csfm_concrete(
+        fck,
+        None,
+        CsfmConcreteLaw::ParabolaRectangle,
+        false,
+        None,
+    )
+    .expect("fixture's fck must be valid")
+    {
+        PlaneMaterial::CsfmConcrete(fields) => fields.ecm,
+        _ => unreachable!(),
+    };
+    let plane_material =
+        PlaneMaterial::plane_stress(ecm, 0.0).expect("Ecm is finite and positive by construction");
+
+    let element_types = mesh["elementTypes"].as_array().unwrap();
+    let element_offsets: Vec<usize> = mesh["elementOffsets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(usize_of)
+        .collect();
+    let element_nodes: Vec<usize> = mesh["elementNodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(usize_of)
+        .collect();
+
+    for (e, kind) in element_types.iter().enumerate() {
+        let start = element_offsets[e];
+        match kind.as_str().unwrap() {
+            "T3" => {
+                let n = [
+                    node_ids[element_nodes[start]],
+                    node_ids[element_nodes[start + 1]],
+                    node_ids[element_nodes[start + 2]],
+                ];
+                domain.add_element(Element::Tri3(Tri3::new(
+                    n[0],
+                    n[1],
+                    n[2],
+                    thickness,
+                    plane_material.clone(),
+                )));
+            }
+            "Q4" => {
+                let n: [NodeId; 4] = std::array::from_fn(|i| node_ids[element_nodes[start + i]]);
+                domain.add_element(Element::Quad4(Quad4::new(
+                    n,
+                    thickness,
+                    plane_material.clone(),
+                )));
+            }
+            other => panic!("unknown element type {other}"),
+        }
+    }
+
+    for load in model["loads"].as_array().unwrap() {
+        domain.load_node(
+            node_ids[usize_of(&load["node"])],
+            usize_of(&load["dof"]),
+            f64_of(&load["value"]),
+        );
+    }
+
+    let rod_paths: Vec<RodPath> = model["rebarPaths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| {
+            let polyline: Vec<[f64; 2]> = path["polyline"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| [f64_of(&p["x"]), f64_of(&p["y"])])
+                .collect();
+            let bar_area = f64_of(&path["barAreaMm2"]) * f64_of(&path["barCount"]);
+            let material = Material::Elastic {
+                e: f64_of(&path["elasticModulusMpa"]),
+            };
             let bars = embed_polyline(&domain, &polyline, bar_area, &material)
                 .expect("fixture's rebar path must embed cleanly in its mesh");
             let ids: Vec<ElementId> = bars
