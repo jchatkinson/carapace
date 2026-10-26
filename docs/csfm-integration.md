@@ -1,5 +1,7 @@
 # CSFM integration feasibility
 
+> The implementation and test plan is [csfm-plan.md](csfm-plan.md); it supersedes "Suggested order" below.
+
 Status: investigation only. No code has been written, and no performance has
 been measured; the performance notes below are estimates from reading both
 codebases.
