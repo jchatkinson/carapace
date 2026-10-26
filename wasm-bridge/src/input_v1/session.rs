@@ -135,6 +135,14 @@ pub enum AnalysisErrorDetail {
     InvalidModel {
         error: ModelErrorDetail,
     },
+    /// `core::AnalysisError::LoadControlExhausted`: a `loadControlCutbacks`
+    /// stage halved its increment down to `minIncrement` and still failed
+    /// to converge. `acceptedLoadFactor` is the last *committed* pseudo-time
+    /// (from an earlier successful step, if any).
+    LoadControlExhausted {
+        step: usize,
+        accepted_load_factor: f64,
+    },
 }
 
 /// `core::ArcFailure`, restated for the wire.
@@ -270,6 +278,13 @@ impl From<AnalysisError> for AnalysisErrorDetail {
             AnalysisError::ContinuationComplete => AnalysisErrorDetail::ContinuationComplete,
             AnalysisError::InvalidModel(error) => AnalysisErrorDetail::InvalidModel {
                 error: error.into(),
+            },
+            AnalysisError::LoadControlExhausted {
+                step,
+                accepted_load_factor,
+            } => AnalysisErrorDetail::LoadControlExhausted {
+                step,
+                accepted_load_factor,
             },
         }
     }

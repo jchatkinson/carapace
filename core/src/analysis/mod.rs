@@ -34,6 +34,6 @@ pub use line_search::LineSearch;
 pub use modal::{modal_analysis, Mode};
 pub(crate) use newton_loop::iterate_to_equilibrium;
 pub use solver::{SparseFactorization, SparseSolver};
-pub use state::{Analysis, Analysis3, StepResult};
+pub use state::{Analysis, Analysis3, CutbackInfo, StepResult};
 pub use tangent_strategy::TangentStrategy;
 pub use transient::{TransientAnalysis, TransientAnalysis3, TransientStepResult};

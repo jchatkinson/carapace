@@ -162,6 +162,7 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
             cached_factorization: None,
             arc: None,
             bordered: BorderedSolver::default(),
+            load_control_remainder: 0.0,
         })
     }
 }

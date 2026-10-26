@@ -4,6 +4,7 @@ mod arclength_softening;
 mod cyclic_protocol;
 mod displacement_control;
 mod dof_activation;
+mod load_control_cutbacks;
 mod load_patterns;
 mod newton;
 mod prescribed_displacement;

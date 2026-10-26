@@ -779,6 +779,7 @@ where
             iterations: accepted.corrector_solves,
             factorizations,
             arc: Some(info),
+            cutbacks: None,
         })
     }
 

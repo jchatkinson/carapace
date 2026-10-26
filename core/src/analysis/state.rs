@@ -58,6 +58,14 @@ pub struct Analysis<
     /// The bordered system's ordering cache — separate from `solver`'s
     /// `n`-DOF cache so neither evicts the other.
     pub(crate) bordered: BorderedSolver,
+    /// `Integrator::LoadControlCutbacks` only: the part of the last call's
+    /// requested increment that a cutback left uncovered, to be requested
+    /// again (in full — not pre-halved) by the next call, exactly as TS's
+    /// `solveLoadPath` reschedules `fraction - result.acceptedFraction`.
+    /// `0.0` when the last call fully covered its request, or when no
+    /// `LoadControlCutbacks` call has happened yet. Reset to `0.0` by
+    /// `set_integrator` — a new integrator starts a fresh schedule.
+    pub(crate) load_control_remainder: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +85,26 @@ pub struct StepResult {
     /// attempt and `factorizations` counts bordered factorizations across
     /// every attempt, predictor included.
     pub arc: Option<ArcStepInfo>,
+    /// Adaptive-substepping diagnostics, for `Integrator::LoadControlCutbacks`
+    /// steps only.
+    pub cutbacks: Option<CutbackInfo>,
+}
+
+/// One `Integrator::LoadControlCutbacks` call's substepping outcome —
+/// `AnalysisError::LoadControlExhausted`'s accepted-less counterpart for the
+/// success path. `accepted_increment < nominal_increment` means the
+/// remainder was carried to the next call (`StepResult::load_factor` only
+/// reflects what was actually accepted this call).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CutbackInfo {
+    /// What this call requested — the integrator's `increment` on the
+    /// first call of a schedule, or a prior call's uncovered remainder.
+    pub nominal_increment: f64,
+    /// What actually converged and got committed this call.
+    pub accepted_increment: f64,
+    /// How many times the nominal size was halved before `accepted_increment`
+    /// converged (`0` if it converged on the first attempt).
+    pub retries: u32,
 }
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> Analysis<NDIM, NDOF, NId, E>
@@ -141,6 +169,7 @@ where
         } else if let Some(state) = &mut self.arc {
             state.reopen();
         }
+        self.load_control_remainder = 0.0;
         self.integrator = integrator;
     }
 
@@ -190,6 +219,13 @@ where
             }
             let config = config.clone();
             return self.arc_step(&config);
+        }
+        if let Integrator::LoadControlCutbacks {
+            increment,
+            min_increment,
+        } = self.integrator
+        {
+            return self.step_with_cutbacks(increment, min_increment, targets);
         }
         let snapshot = self.domain.displacements();
         for &(node, dof, value) in targets {
@@ -295,7 +331,78 @@ where
             iterations,
             factorizations,
             arc: None,
+            cutbacks: None,
         })
+    }
+
+    /// `Integrator::LoadControlCutbacks`'s driver — see its doc comment for
+    /// the scheduling contract. `increment`/`min_increment` are this
+    /// call's configured nominal/floor sizes; the actual size requested
+    /// this call is `load_control_remainder` when nonzero (a prior call's
+    /// uncovered leftover), else `increment`.
+    ///
+    /// Each attempt reuses the ordinary single-shot path (`try_step`) by
+    /// temporarily swapping in a plain `Integrator::LoadControl { increment:
+    /// attempt }` — that keeps the predictor/corrector logic, the
+    /// `Combined` test's frozen reference, and `Algorithm::Linear`'s
+    /// trivial arm all exactly as they are for an un-cutback step, with
+    /// only the retry/revert loop layered on top.
+    fn step_with_cutbacks(
+        &mut self,
+        increment: f64,
+        min_increment: f64,
+        targets: &[(NId, usize, f64)],
+    ) -> Result<StepResult, AnalysisError> {
+        if !(increment.is_finite() && increment > 0.0) {
+            return Err(AnalysisError::InvalidOption {
+                field: "integrator.increment",
+            });
+        }
+        if !(min_increment.is_finite() && min_increment > 0.0 && min_increment <= increment) {
+            return Err(AnalysisError::InvalidOption {
+                field: "integrator.minIncrement",
+            });
+        }
+
+        let requested = if self.load_control_remainder > 0.0 {
+            self.load_control_remainder
+        } else {
+            increment
+        };
+        let mut attempt = requested;
+        let mut retries = 0u32;
+
+        loop {
+            let saved_integrator = std::mem::replace(
+                &mut self.integrator,
+                Integrator::LoadControl { increment: attempt },
+            );
+            let outcome = self.step_prescribed(targets);
+            self.integrator = saved_integrator;
+
+            match outcome {
+                Ok(mut result) => {
+                    self.load_control_remainder = (requested - attempt).max(0.0);
+                    result.cutbacks = Some(CutbackInfo {
+                        nominal_increment: requested,
+                        accepted_increment: attempt,
+                        retries,
+                    });
+                    return Ok(result);
+                }
+                Err(AnalysisError::FailedToConverge { .. }) => {
+                    attempt /= 2.0;
+                    retries += 1;
+                    if attempt < min_increment {
+                        return Err(AnalysisError::LoadControlExhausted {
+                            step: self.step_count + 1,
+                            accepted_load_factor: self.load_factor,
+                        });
+                    }
+                }
+                Err(other) => return Err(other),
+            }
+        }
     }
 }
 
