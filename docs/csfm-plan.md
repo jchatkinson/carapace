@@ -13,8 +13,31 @@ and `embed_polyline.rs` (patch tests, truss equivalence, the FD checker, mask co
 `embedding.json` case including the deep/span beam totals, and the outside-mesh/degenerate-path/ambiguous-host errors).
 Not yet covered: a non-converging Q4 inverse on a badly distorted element as its own test, and a direct strain/value
 comparison of midpoint-host binding against TS's per-end binding on the shared-edge and through-node fixture cases
-(segment counts there already match, but not yet the embedded field values point-for-point). The static procedure
-(phase 3) has not started.
+(segment counts there already match, but not yet the embedded field values point-for-point).
+
+Phase 3 (static procedure) is complete: §4 C, E, F and H pass, and every current CSFM model fixture runs natively
+end-to-end and matches TS increment-by-increment. `Integrator::LoadControlCutbacks` (`core/src/analysis/integrator.rs`,
+`state.rs`) adds adaptive substepping to load control per §2.5 point 1, tested directly in
+`core/tests/analysis/load_control_cutbacks.rs` (none of the current model fixtures ever needed a cutback, so the
+nonlinear parity runs below use plain `LoadControl`). `core/tests/csfm/model.rs` builds a native `Domain` from a
+`models/*.json` fixture (`build`, CSFM materials) or its linear-elastic counterpart (`build_linear`, plain isotropic/
+elastic materials); `nonlinear.rs` runs every fixture's schedule and checks displacements/bar stress against TS (§4 F);
+`linear_sanity.rs` covers §4 E (one-Newton-correction equilibrium on the linear deep beam, and TS `solveLinearElastic`
+parity via the new `linear-elastic.json` fixture); `independent_reference.rs` covers §4 C (`CsfmConcrete`/`CsfmRebar`
+against `tension_chord.py`/`cmm_panel.py` directly, no FE model needed for a uniform strain state). §4 H's
+cracked-tangent/LU-routing test lives in `core/src/analysis/solver.rs`'s own unit tests, since `SparseMatrix` is
+`pub(crate)` and a triplet-built matrix can't be assembled from `core/tests/`.
+
+Two bugs were found and fixed during phase 3, outside Carapace itself: `tension_chord.py`'s TCM mean-strain formula
+used the wrong bond stage for its branch intercept (fixed; see its own file for the derivation), which also moved
+`cmm_panel.py`'s numbers; and `cmm_panel.py`'s stress/strain rotation helper doubled the shear term even for stress,
+caught directly by comparing against `CsfmConcrete::trial_stress_tangent`. CalcsApp's own `export-csfm-golden.ts`
+gained `exportLinearElastic` (and a fix to the `NodalLoad` shape it was passing) to produce `linear-elastic.json`.
+Session-scheduling support for `LoadControlCutbacks` over the wire (`wasm-bridge/src/input_v1/session.rs`'s
+`steps_remaining` accounting still assumes one call = one full nominal increment) is deferred to phase 5, which needs
+it anyway for the wire format.
+
+Phase 4 (limit states and arc-length) has not started.
 
 Goal: move the Compatible Stress Field Method (CSFM) analysis from CalcsApp (`../calcs.app/lib/fem`, TypeScript)
 into Carapace, so that Carapace becomes the solver CalcsApp ships. This plan covers only the CSFM procedure and its
