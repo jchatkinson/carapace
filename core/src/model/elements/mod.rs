@@ -2,8 +2,8 @@ use nalgebra::{SMatrix, SVector};
 use slotmap::new_key_type;
 
 use super::{
-    ElementLoad, ElementLoad3, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_NDIM,
-    SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
+    ElementLoad, ElementLoad3, LimitKind, LimitStateConfig, Node, Node3, Node3Id, NodeId,
+    ELEMENT_DOF, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 mod ops;
@@ -455,6 +455,19 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         }
         let [i, j] = Element::pair(self);
         Element::fiber_responses(self, nodes.get(i), nodes.get(j))
+    }
+
+    fn limit_utilization(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        limits: &LimitStateConfig,
+    ) -> Option<(f64, LimitKind)> {
+        match self {
+            Element::Tri3(t) => t.limit_utilization(nodes, limits),
+            Element::Quad4(q) => q.limit_utilization(nodes, limits),
+            Element::EmbeddedBar(bar) => bar.limit_utilization(nodes, limits),
+            _ => None,
+        }
     }
 }
 /// 3D element catalog — `Domain3`'s counterpart to `Element`. Closed

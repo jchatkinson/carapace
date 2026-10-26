@@ -12,7 +12,9 @@
 //! T(theta)` (plan §2.1) — not a rotated secant, and not CalcsApp's
 //! regime-aware finite difference, which this law replaces.
 
-use super::{PlaneMaterial, PlaneMaterialError, PlaneMatrix, PlaneVector};
+use super::{
+    LimitKind, LimitStateConfig, PlaneMaterial, PlaneMaterialError, PlaneMatrix, PlaneVector,
+};
 
 /// Which concrete compression envelope this law uses (plan §1 point 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +53,12 @@ pub struct CsfmConcreteFields {
 }
 
 const EPS_C2: f64 = -0.002;
+/// The default crushing strain limit (plan §6 decision 5), for **both**
+/// compression laws: `findCriticalLoad`'s own `StopCriteria` exists in TS
+/// but is unused by the worker path, so there is no TS default to port —
+/// this value is the plan's own decision, not a parity figure.
+/// [`LimitStateConfig::concrete_crushing_limit`] can override it.
+const EPS_CU2: f64 = -0.0035;
 /// The exact-origin isotropic seed applies within this strain magnitude on
 /// every Cartesian component (plan §1, §4 A — matches CalcsApp's
 /// `ORIGIN_STRAIN`). It is a numerical policy, not the law's derivative
@@ -286,4 +294,35 @@ pub(super) fn evaluate(f: &CsfmConcreteFields, strain: &PlaneVector) -> (PlaneVe
     let d = t.transpose() * c_p * t;
     let stress = t.transpose() * PlaneVector::new(sigma1, sigma2, 0.0);
     (stress, d)
+}
+
+/// `(utilization, LimitKind)` at `strain` (plan §2.5 point 3): crushing
+/// (`max(0, -eps_2) / limit_c`, `limit_c` defaulting to `|EPS_CU2|` unless
+/// `config.concrete_crushing_limit` gives a usable override) always, and
+/// the optional tensile-strain criterion (`max(0, eps_1) / limit_t`)
+/// instead when `config.concrete_tensile_limit` is usable and gives the
+/// higher of the two — `limit_t` has no material-intrinsic default, so
+/// this criterion is otherwise never evaluated at all, not merely
+/// defaulted. Neither depends on any other resolved field (`fck`, `law`,
+/// `softening`, ...) — both limits are either the plan §6 decision-5
+/// constant or a caller-supplied override — so this takes only the strain
+/// and the config, unlike [`evaluate`].  Utilizations are not clamped.
+pub(super) fn limit_utilization(
+    strain: &PlaneVector,
+    config: &LimitStateConfig,
+) -> (f64, LimitKind) {
+    let (eps1, eps2, _theta) = principal(strain);
+    let limit_c = LimitStateConfig::usable(config.concrete_crushing_limit).unwrap_or(EPS_CU2.abs());
+    let crushing = (-eps2).max(0.0) / limit_c;
+    match LimitStateConfig::usable(config.concrete_tensile_limit) {
+        Some(limit_t) => {
+            let tension = eps1.max(0.0) / limit_t;
+            if tension > crushing {
+                (tension, LimitKind::ConcreteTensileStrain)
+            } else {
+                (crushing, LimitKind::ConcreteCrushing)
+            }
+        }
+        None => (crushing, LimitKind::ConcreteCrushing),
+    }
 }

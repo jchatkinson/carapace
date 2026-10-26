@@ -11,9 +11,10 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LoadPatternId,
-    LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView, ShellResponse, SparseMatrix,
-    TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LimitKind,
+    LimitStateConfig, LoadPatternId, LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView,
+    ShellResponse, SparseMatrix, TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF,
+    SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -347,6 +348,30 @@ where
     /// for every element kind that is not a shell.
     pub fn element_shell_responses(&self, id: E::Id) -> Option<Vec<ShellResponse>> {
         self.elements[id].shell_responses(&self.node_view())
+    }
+
+    /// The controlling (worst, highest-utilization) `(element, utilization,
+    /// kind)` over every element's `ElementOps::limit_utilization` (plan
+    /// `docs/csfm-plan.md` §2.5 point 3), evaluated at the current *trial*
+    /// state — `None` when no element in the model reports a limit state at
+    /// all (e.g. no CSFM materials). `limits` is forwarded to every
+    /// element unchanged; pass `&LimitStateConfig::default()` for the
+    /// always-on crushing/rupture criteria alone.
+    pub fn controlling_limit_utilization(
+        &self,
+        limits: &LimitStateConfig,
+    ) -> Option<(E::Id, f64, LimitKind)> {
+        let view = self.node_view();
+        let mut worst: Option<(E::Id, f64, LimitKind)> = None;
+        for (id, element) in self.elements.iter() {
+            let Some((utilization, kind)) = element.limit_utilization(&view, limits) else {
+                continue;
+            };
+            if worst.is_none_or(|(_, best, _)| utilization > best) {
+                worst = Some((id, utilization, kind));
+            }
+        }
+        worst
     }
 
     /// Support/equilibrium reaction at `(node, dof)`: net internal element

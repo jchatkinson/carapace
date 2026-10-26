@@ -70,6 +70,7 @@ mod csfm_concrete;
 mod csfm_rebar;
 mod elastic_like;
 mod hysteretic;
+mod limit_state;
 mod pinching4;
 mod plane;
 mod shell_section;
@@ -78,6 +79,7 @@ mod steel02;
 
 pub use csfm_rebar::{CsfmRebarFields, CsfmRebarRouting};
 pub use hysteretic::HystereticFields;
+pub use limit_state::{LimitKind, LimitStateConfig};
 pub use pinching4::{Pinching4DmgCyc, Pinching4Fields, Pinching4State};
 pub use plane::{
     CsfmConcreteFields, CsfmConcreteLaw, PlaneMaterial, PlaneMaterialError, PlaneMatrix,
@@ -446,6 +448,24 @@ impl Material {
             panic!("csfm_rebar_ruptured called on a non-CsfmRebar material");
         };
         csfm_rebar::ruptured(fields, strain)
+    }
+
+    /// `CsfmRebar`-only: the rupture utilization at `strain` (plan §2.5
+    /// point 3) — `RebarRupture`'s formula always, and `RebarStrainLimit`'s
+    /// instead when `rebar_strain_limit` is usable (finite and positive)
+    /// and gives a higher utilization. Utilization `1` is "landed on the
+    /// limit"; `csfm_rebar_ruptured` uses a strict `>` past it (plan §2.5:
+    /// "the query reports both"). Panics if `self` is not
+    /// `Material::CsfmRebar`.
+    pub fn csfm_rebar_limit_utilization(
+        &self,
+        strain: f64,
+        rebar_strain_limit: Option<f64>,
+    ) -> (f64, LimitKind) {
+        let Material::CsfmRebar(fields) = self else {
+            panic!("csfm_rebar_limit_utilization called on a non-CsfmRebar material");
+        };
+        csfm_rebar::limit_utilization(fields, strain, rebar_strain_limit)
     }
 
     /// Shared core: `(stress, tangent, next_committed_state)`. Leaf

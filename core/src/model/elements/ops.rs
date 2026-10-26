@@ -13,7 +13,7 @@ use arrayvec::ArrayVec;
 use nalgebra::{SMatrix, SVector};
 use slotmap::{Key, SlotMap};
 
-use crate::model::Node;
+use crate::model::{LimitKind, LimitStateConfig, Node};
 
 /// The most nodes any element in this crate connects: two-node frame
 /// elements, three- and four-node planar elements (2D membranes, 3D shell
@@ -316,4 +316,21 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         &self,
         nodes: &NodeView<'_, NDIM, NDOF, NId>,
     ) -> Option<Vec<Vec<(f64, f64)>>>;
+
+    /// The worst (highest) material-limit utilization among this element's
+    /// integration points, and which kind it is (plan
+    /// `docs/csfm-plan.md` §2.5 point 3) — `None` for every element kind
+    /// with no limit state to report (every element but a CSFM continuum
+    /// element or an `EmbeddedBar` over a `CsfmRebar`). Evaluated at the
+    /// *trial* state (no commit needed: CSFM's laws are stateless, exactly
+    /// like `gauss_responses`/`local_force`). The default accepts every
+    /// element kind and reports nothing, matching
+    /// `gauss_responses`/`shell_responses`/`fiber_responses`'s own default.
+    fn limit_utilization(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+        _limits: &LimitStateConfig,
+    ) -> Option<(f64, LimitKind)> {
+        None
+    }
 }

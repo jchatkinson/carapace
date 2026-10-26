@@ -19,6 +19,7 @@ use nalgebra::{SMatrix, SVector};
 
 use super::csfm_concrete;
 pub use super::csfm_concrete::{CsfmConcreteFields, CsfmConcreteLaw};
+use super::{LimitKind, LimitStateConfig};
 
 /// A plane strain or stress vector `[x, y, xy]` (engineering shear for strain).
 pub type PlaneVector = SVector<f64, 3>;
@@ -312,6 +313,22 @@ impl PlaneMaterial {
         }
         let _ = strain;
         self.clone()
+    }
+
+    /// `CsfmConcrete`-only: `(utilization, LimitKind)` at `strain` (plan
+    /// §2.5 point 3) — crushing always, and the tensile-strain criterion
+    /// instead when `config.concrete_tensile_limit` is usable and higher.
+    /// Utilization `1` is "landed on the limit"; values are not clamped.
+    /// Panics if `self` is not `PlaneMaterial::CsfmConcrete`.
+    pub fn csfm_concrete_limit_utilization(
+        &self,
+        strain: &PlaneVector,
+        config: &LimitStateConfig,
+    ) -> (f64, LimitKind) {
+        if !matches!(self, PlaneMaterial::CsfmConcrete(_)) {
+            panic!("csfm_concrete_limit_utilization called on a non-CsfmConcrete material");
+        }
+        csfm_concrete::limit_utilization(strain, config)
     }
 
     /// Whether the response is linear in strain and history-free (what the

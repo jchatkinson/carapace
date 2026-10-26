@@ -11,7 +11,7 @@
 //! curve exactly, which is monotonic-only by construction and not an
 //! approximation of hysteresis.
 
-use super::{Material, MaterialError};
+use super::{LimitKind, LimitStateConfig, Material, MaterialError};
 
 /// Which average-strain model a path's effective reinforcement ratio
 /// routes to (plan §1): the Tension Chord Model above the critical ratio
@@ -434,5 +434,38 @@ pub(super) fn ruptured(f: &CsfmRebarFields, strain: f64) -> bool {
         strain.abs() > f.eps_u
     } else {
         strain > f.eps_m_at_ft
+    }
+}
+
+/// `(utilization, LimitKind)` at `strain` (plan §2.5 point 3): the rupture
+/// utilization always (the same branch split as [`ruptured`] — tension with
+/// tension stiffening uses `eps / eps_m_at_ft`; compression and bare steel
+/// both use `|eps| / eps_u`, since `-eps` and `|eps|` agree when `eps <=
+/// 0`, which is exactly when that branch applies), and the user strain
+/// limit's `|eps| / limit` instead when `rebar_strain_limit` is usable and
+/// gives the higher of the two. Utilization `1` is "landed on the limit";
+/// unlike [`ruptured`]'s strict `>`, this is not clamped and crosses `1`
+/// continuously, so a path can be checked just below and above a landing
+/// to tell the two apart (plan §4 G).
+pub(super) fn limit_utilization(
+    f: &CsfmRebarFields,
+    strain: f64,
+    rebar_strain_limit: Option<f64>,
+) -> (f64, LimitKind) {
+    let rupture = if strain <= 0.0 || !f.tension_stiffening {
+        strain.abs() / f.eps_u
+    } else {
+        strain / f.eps_m_at_ft
+    };
+    match LimitStateConfig::usable(rebar_strain_limit) {
+        Some(limit) => {
+            let user = strain.abs() / limit;
+            if user > rupture {
+                (user, LimitKind::RebarStrainLimit)
+            } else {
+                (rupture, LimitKind::RebarRupture)
+            }
+        }
+        None => (rupture, LimitKind::RebarRupture),
     }
 }

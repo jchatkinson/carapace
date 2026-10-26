@@ -21,7 +21,7 @@ use nalgebra::{SMatrix, SVector};
 
 use super::plane_common::{plane_dofs, PlaneView};
 use super::{DofMask, ElementForce, TangentSink};
-use crate::model::{Material, NodeId};
+use crate::model::{LimitKind, LimitStateConfig, Material, NodeId};
 
 /// `EmbeddedBar`'s host, carrying the host's own node list and this
 /// segment's strain-displacement coefficient per host node (`coeffs[i] =
@@ -240,5 +240,22 @@ impl EmbeddedBar {
         let ruptured = matches!(&self.material, Material::CsfmRebar(_))
             && self.material.csfm_rebar_ruptured(strain);
         (axial_force, strain, stress, ruptured)
+    }
+
+    /// The `CsfmRebar` rupture/strain-limit utilization at the current
+    /// (trial) strain (`None` if the material isn't `CsfmRebar`).
+    pub(super) fn limit_utilization(
+        &self,
+        view: &PlaneView<'_>,
+        limits: &LimitStateConfig,
+    ) -> Option<(f64, LimitKind)> {
+        if !matches!(&self.material, Material::CsfmRebar(_)) {
+            return None;
+        }
+        let strain = self.committed_strain(view);
+        Some(
+            self.material
+                .csfm_rebar_limit_utilization(strain, limits.rebar_strain_limit),
+        )
     }
 }

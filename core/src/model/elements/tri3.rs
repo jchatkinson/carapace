@@ -8,7 +8,7 @@ use super::plane_common::{
 };
 use super::{DofMask, ElementForce, GaussResponse, TangentSink, VectorSink};
 use crate::model::continuum::{physical_derivatives, tri3_dshape, validate_triangle, Jacobian};
-use crate::model::{ElementLoad, NodeId, PlaneMaterial, PlaneVector};
+use crate::model::{ElementLoad, LimitKind, LimitStateConfig, NodeId, PlaneMaterial, PlaneVector};
 
 #[derive(Debug, Clone)]
 pub struct Tri3 {
@@ -150,6 +150,24 @@ impl Tri3 {
             strain: strain.into(),
             stress: stress.into(),
         }]
+    }
+
+    /// The `CsfmConcrete` limit utilization at the one Gauss point (`None`
+    /// if the material isn't `CsfmConcrete`).
+    pub(super) fn limit_utilization(
+        &self,
+        view: &PlaneView<'_>,
+        limits: &LimitStateConfig,
+    ) -> Option<(f64, LimitKind)> {
+        if !matches!(self.material, PlaneMaterial::CsfmConcrete(_)) {
+            return None;
+        }
+        let g = self.geometry(view);
+        let strain = self.strain(&g, view);
+        Some(
+            self.material
+                .csfm_concrete_limit_utilization(&strain, limits),
+        )
     }
 
     #[cfg(test)]

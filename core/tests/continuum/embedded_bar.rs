@@ -1,10 +1,14 @@
 //! `EmbeddedBar` (plan `docs/csfm-plan.md` §2.3, §4 D): patch tests on T3
 //! and Q4 hosts under uniform strain, rigid translation, exact agreement
-//! with a `Truss` on shared nodes, and the generic tangent-vs-finite-
-//! difference checker on a nonlinear `CsfmRebar`.
+//! with a `Truss` on shared nodes, the generic tangent-vs-finite-
+//! difference checker on a nonlinear `CsfmRebar`, and (plan §2.5 point 3)
+//! `EmbeddedBar::limit_utilization`/`Domain::controlling_limit_utilization`
+//! picking the right controlling element and `LimitKind` between a
+//! `CsfmConcrete` host and its embedded `CsfmRebar`.
 
 use carapace_core::model::{
-    Domain, Element, ElementOps, EmbeddedBar, Material, Node, NodeId, Truss,
+    CsfmConcreteLaw, Domain, Element, ElementOps, EmbeddedBar, LimitKind, LimitStateConfig,
+    Material, Node, NodeId, PlaneMaterial, Tri3, Truss,
 };
 use carapace_core::testkit::{assert_element_tangent_matches_fd, FdConfig};
 use slotmap::SlotMap;
@@ -264,4 +268,135 @@ fn dof_mask_is_translations_only() {
     assert!(mask.contains(0));
     assert!(mask.contains(1));
     assert!(!mask.contains(2));
+}
+
+/// A plain (non-CSFM) `Tri3`/`EmbeddedBar` pair reports no limit state at
+/// all — `limit_utilization` is `None` per element and
+/// `controlling_limit_utilization` is `None` for the whole domain.
+#[test]
+fn limit_utilization_is_none_without_csfm_materials() {
+    let coords = [[0.0, 0.0], [4.0, 0.0], [0.0, 4.0]];
+    let mut domain: Domain = Domain::new();
+    let ids: [NodeId; 3] = std::array::from_fn(|i| domain.add_node(Node::new(coords[i])));
+    domain.add_element(Element::Tri3(Tri3::new(
+        ids[0],
+        ids[1],
+        ids[2],
+        1.0,
+        PlaneMaterial::plane_stress(30e3, 0.2).unwrap(),
+    )));
+    let (direction, length) = segment_geometry(coords[0], coords[1]);
+    domain.add_element(Element::EmbeddedBar(EmbeddedBar::in_tri3(
+        ids,
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        direction,
+        length,
+        1.0,
+        Material::Elastic { e: 200_000.0 },
+    )));
+    assert_eq!(
+        domain.controlling_limit_utilization(&LimitStateConfig::default()),
+        None
+    );
+}
+
+const LEG_LENGTH: f64 = 4.0;
+
+fn rebar_material() -> Material {
+    Material::csfm_rebar(
+        200_000.0, 500.0, 540.0, 0.05, 2.9, 32000.0, 16.0, 0.02, 0.67, true,
+    )
+    .unwrap()
+}
+
+fn rebar_bounds() -> (f64, f64) {
+    let Material::CsfmRebar(fields) = rebar_material() else {
+        panic!()
+    };
+    (fields.eps_m_at_ft, fields.eps_u)
+}
+
+/// Builds the `Tri3` (`CsfmConcrete`) + one-leg `EmbeddedBar` (`CsfmRebar`)
+/// fixture with node 1's `ux` already set to `ux1`, since nothing public
+/// mutates a node already inserted into a `Domain` (same pattern as the
+/// patch tests above: set `Node::displacement` before `add_node`).
+fn concrete_and_rebar_leg(
+    ux1: f64,
+) -> (
+    Domain,
+    carapace_core::model::ElementId,
+    carapace_core::model::ElementId,
+) {
+    let coords = [[0.0, 0.0], [LEG_LENGTH, 0.0], [0.0, LEG_LENGTH]];
+    let mut domain: Domain = Domain::new();
+    let ids: [NodeId; 3] = std::array::from_fn(|i| {
+        let mut node = Node::new(coords[i]);
+        if i == 1 {
+            node.displacement[0] = ux1;
+        }
+        domain.add_node(node)
+    });
+    let concrete_id = domain.add_element(Element::Tri3(Tri3::new(
+        ids[0],
+        ids[1],
+        ids[2],
+        1.0,
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap(),
+    )));
+    let (direction, length) = segment_geometry(coords[0], coords[1]);
+    let bar_id = domain.add_element(Element::EmbeddedBar(EmbeddedBar::in_tri3(
+        ids,
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        direction,
+        length,
+        1.0,
+        rebar_material(),
+    )));
+    (domain, concrete_id, bar_id)
+}
+
+/// A `Tri3` host (`CsfmConcrete`) with one `EmbeddedBar` (`CsfmRebar`)
+/// bound to its two legs: pure uniaxial strain along that leg (CST, so
+/// `eps_x = u1x / length` exactly, `eps_y = gamma_xy = 0` for this
+/// right-triangle geometry) isolates each limit in turn.
+/// `Domain::controlling_limit_utilization` must pick the rebar when pulled
+/// into tension past its own rupture utilization (concrete crushing stays
+/// at exactly `0`, since `eps_2 = 0` there), and the concrete when pushed
+/// into compression past `|EPS_CU2|` (the rebar's own utilization stays
+/// small, since the same strain is far inside its bare-steel range).
+#[test]
+fn domain_reports_the_controlling_element_and_kind() {
+    const EPS_CU2: f64 = -0.0035;
+    let (eps_m_at_ft, eps_u) = rebar_bounds();
+
+    // Tension: strain = 1.5 * eps_m_at_ft, well past rebar rupture.
+    let (domain, concrete_id, bar_id) = concrete_and_rebar_leg(1.5 * eps_m_at_ft * LEG_LENGTH);
+    let (element, utilization, kind) = domain
+        .controlling_limit_utilization(&LimitStateConfig::default())
+        .expect("rebar rupture utilization must be reported");
+    assert_eq!(element, bar_id);
+    assert_eq!(kind, LimitKind::RebarRupture);
+    assert!((utilization - 1.5).abs() < 1e-9, "{utilization}");
+    // Concrete stays at exactly zero: pure tension, eps_2 = 0.
+    let concrete_strain = domain.element_gauss_responses(concrete_id).unwrap()[0].strain;
+    assert_eq!(concrete_strain[1], 0.0);
+
+    // Compression: strain = 1.5 * EPS_CU2, well past the default crushing
+    // limit but far inside the rebar's own bare-steel range.
+    let (domain, concrete_id, bar_id) = concrete_and_rebar_leg(1.5 * EPS_CU2 * LEG_LENGTH);
+    let (element, utilization, kind) = domain
+        .controlling_limit_utilization(&LimitStateConfig::default())
+        .expect("concrete crushing utilization must be reported");
+    assert_eq!(element, concrete_id);
+    assert_eq!(kind, LimitKind::ConcreteCrushing);
+    assert!((utilization - 1.5).abs() < 1e-9, "{utilization}");
+    let rebar_strain = domain.element_gauss_responses(bar_id).unwrap()[0].strain[0];
+    let rebar_utilization = rebar_strain.abs() / eps_u;
+    assert!(
+        rebar_utilization < 1.0 && rebar_utilization > 0.0,
+        "rebar should be stressed but nowhere near its own limit: {rebar_utilization}"
+    );
 }

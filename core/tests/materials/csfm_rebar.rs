@@ -4,9 +4,13 @@
 //! tangent against the central-difference checker on smooth branches,
 //! the TCM startup bridge's continuity, the numerical policies (tangent
 //! clamp, POM origin guard, rupture) tested on their own, bilinear
-//! bare-steel behavior, and construction errors.
+//! bare-steel behavior, construction errors, and (plan §2.5 point 3) the
+//! `limit_utilization` query on every rupture sub-case (tension with
+//! tension stiffening, compression, bare steel) plus the optional
+//! caller-supplied strain limit, each checked just below and above its
+//! utilization-1 landing and against `csfm_rebar_ruptured`'s strict `>`.
 
-use carapace_core::model::{Material, MaterialError};
+use carapace_core::model::{LimitKind, Material, MaterialError};
 use carapace_core::testkit::{assert_material_tangent_matches_fd, FdConfig};
 use serde_json::Value;
 
@@ -405,4 +409,150 @@ fn tcm_startup_exceeding_yield_is_rejected() {
         200_000.0, 500.0, 550.0, 0.05, fctm, ecm, 20.0, 0.01, 2.0, true,
     );
     assert!(matches!(result, Err(MaterialError::TcmStartupExceedsYield)));
+}
+
+/// Tension with tension stiffening: `limit_utilization` is `eps /
+/// eps_m_at_ft`, landing at exactly `eps_m_at_ft` — the same strain
+/// `csfm_rebar_ruptured` flips at, but with its strict `>` (plan §2.5:
+/// "the query reports both ... tests use states just below and just above
+/// the limit, not exactly at it").
+#[test]
+fn tension_rupture_utilization_lands_at_eps_m_at_ft_distinct_from_ruptured() {
+    let fixture = fixture();
+    let case = fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["label"] == "tcm-lambda-0.67")
+        .unwrap();
+    let (material, _) = material_for_case(case);
+    let Material::CsfmRebar(fields) = &material else {
+        panic!()
+    };
+    let eps_m_at_ft = fields.eps_m_at_ft;
+
+    for (strain, expect_above) in [
+        (eps_m_at_ft * 0.999, false),
+        (eps_m_at_ft, false),
+        (eps_m_at_ft * 1.001, true),
+    ] {
+        let (utilization, kind) = material.csfm_rebar_limit_utilization(strain, None);
+        assert_eq!(kind, LimitKind::RebarRupture);
+        let expected = strain / eps_m_at_ft;
+        assert!(close(utilization, expected, 1e-12, 1e-9), "{utilization}");
+        assert_eq!(material.csfm_rebar_ruptured(strain), expect_above);
+    }
+    assert!(
+        (material.csfm_rebar_limit_utilization(eps_m_at_ft, None).0 - 1.0).abs() < 1e-9,
+        "landing must read utilization 1 while ruptured() ({}) is still false",
+        material.csfm_rebar_ruptured(eps_m_at_ft)
+    );
+}
+
+/// Compression (`-eps / eps_u`) and bare steel in either direction (`|eps|
+/// / eps_u`) are the same formula — both apply exactly when the branch
+/// split in `csfm_rebar::limit_utilization`/`ruptured` says so (`strain <=
+/// 0` or tension stiffening off) — landing at `eps_u` just like
+/// `csfm_rebar_ruptured`'s own threshold there.
+#[test]
+fn compression_and_bare_steel_utilization_both_land_at_eps_u() {
+    let fixture = fixture();
+    let case = fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["label"] == "bare")
+        .unwrap();
+    let (material, _) = material_for_case(case);
+    let Material::CsfmRebar(fields) = &material else {
+        panic!()
+    };
+    let eps_u = fields.eps_u;
+    assert!(!fields.tension_stiffening, "the \"bare\" case must be bare-mode (tension stiffening off) for the bare-steel sub-case below");
+
+    // Compression: tension-stiffened rebar's own `-eps / eps_u` branch
+    // (strain <= 0) coincides with bare mode's `|eps| / eps_u` here since
+    // this fixture case has tension stiffening off either way, so build a
+    // tension-stiffened sibling material to isolate the compression
+    // sub-case explicitly.
+    let tcm_case = fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["label"] == "tcm-lambda-0.67")
+        .unwrap();
+    let (tcm_material, _) = material_for_case(tcm_case);
+    let Material::CsfmRebar(tcm_fields) = &tcm_material else {
+        panic!()
+    };
+    assert!(tcm_fields.tension_stiffening);
+    for (strain, expect_above) in [
+        (-tcm_fields.eps_u * 0.999, false),
+        (-tcm_fields.eps_u, false),
+        (-tcm_fields.eps_u * 1.001, true),
+    ] {
+        let (utilization, kind) = tcm_material.csfm_rebar_limit_utilization(strain, None);
+        assert_eq!(kind, LimitKind::RebarRupture);
+        assert!(
+            close(utilization, strain.abs() / tcm_fields.eps_u, 1e-12, 1e-9),
+            "{utilization}"
+        );
+        assert_eq!(tcm_material.csfm_rebar_ruptured(strain), expect_above);
+    }
+
+    // Bare steel, both directions.
+    for sign in [1.0, -1.0] {
+        for (strain, expect_above) in [
+            (sign * eps_u * 0.999, false),
+            (sign * eps_u, false),
+            (sign * eps_u * 1.001, true),
+        ] {
+            let (utilization, kind) = material.csfm_rebar_limit_utilization(strain, None);
+            assert_eq!(kind, LimitKind::RebarRupture);
+            assert!(
+                close(utilization, strain.abs() / eps_u, 1e-12, 1e-9),
+                "{utilization}"
+            );
+            assert_eq!(material.csfm_rebar_ruptured(strain), expect_above);
+        }
+    }
+}
+
+/// A caller-supplied `rebar_strain_limit` is opt-in (absent by default,
+/// unlike crushing's always-on default on the concrete side) and becomes
+/// the controlling kind only once it exceeds the rupture utilization.
+#[test]
+fn rebar_strain_limit_is_opt_in_and_can_control() {
+    let fixture = fixture();
+    let case = fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["label"] == "bare")
+        .unwrap();
+    let (material, _) = material_for_case(case);
+    let Material::CsfmRebar(fields) = &material else {
+        panic!()
+    };
+    // Narrower than eps_u, so it controls before rupture does.
+    let limit = fields.eps_u * 0.5;
+    let (default_utilization, default_kind) = material.csfm_rebar_limit_utilization(limit, None);
+    assert_eq!(default_kind, LimitKind::RebarRupture);
+    assert!(default_utilization < 1.0, "{default_utilization}");
+
+    let (below, _) = material.csfm_rebar_limit_utilization(limit * 0.999, Some(limit));
+    let (at_limit, kind_at) = material.csfm_rebar_limit_utilization(limit, Some(limit));
+    let (above, kind_above) = material.csfm_rebar_limit_utilization(limit * 1.001, Some(limit));
+    assert_eq!(kind_at, LimitKind::RebarStrainLimit);
+    assert_eq!(kind_above, LimitKind::RebarStrainLimit);
+    assert!(below < 1.0, "{below}");
+    assert!((at_limit - 1.0).abs() < 1e-9, "{at_limit}");
+    assert!(above > 1.0, "{above}");
+
+    // A non-finite/non-positive limit is treated as absent.
+    for bad in [f64::NAN, 0.0, -1.0] {
+        let (u, kind) = material.csfm_rebar_limit_utilization(limit, Some(bad));
+        assert_eq!(kind, LimitKind::RebarRupture);
+        assert!((u - default_utilization).abs() < 1e-12, "{u}");
+    }
 }

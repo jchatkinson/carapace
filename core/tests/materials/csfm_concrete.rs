@@ -5,9 +5,14 @@
 //! stencil stays on one branch (`rel` 1e-5), the deliberate origin-seed
 //! policy checked on its own, closed-form checks of the branch values,
 //! objectivity at repeated principal strains, the `kc2` coupling's effect
-//! on `D`'s symmetry, and construction errors.
+//! on `D`'s symmetry, construction errors, and (plan §2.5 point 3) the
+//! `limit_utilization` query: the default crushing limit `|EPS_CU2|`, a
+//! caller override, and the optional tensile-strain criterion, each
+//! checked just below and above its own utilization-1 landing.
 
-use carapace_core::model::{CsfmConcreteLaw, PlaneMaterial, PlaneMaterialError, PlaneVector};
+use carapace_core::model::{
+    CsfmConcreteLaw, LimitKind, LimitStateConfig, PlaneMaterial, PlaneMaterialError, PlaneVector,
+};
 use carapace_core::testkit::{assert_plane_material_tangent_matches_fd, FdConfig};
 use serde_json::Value;
 
@@ -538,4 +543,102 @@ fn invalid_fck_and_gamma_are_errors() {
         None
     )
     .is_ok());
+}
+
+/// `limit_utilization`'s crushing criterion: `max(0, -eps_2) / |EPS_CU2|`
+/// by default, reaching exactly `1` at `eps_2 = EPS_CU2` and crossing it
+/// continuously (not clamped), unlike nothing here needing TS's rupture
+/// convention — that distinction is rebar-only (`csfm_rebar.rs`). A pure
+/// uniaxial compressive strain (`eps_1 = 0`) isolates `eps_2`.
+#[test]
+fn crushing_utilization_lands_at_eps_cu2_by_default() {
+    let material =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap();
+    let config = LimitStateConfig::default();
+    let at = |eps2: f64| {
+        material.csfm_concrete_limit_utilization(&PlaneVector::new(0.0, eps2, 0.0), &config)
+    };
+    let (below, kind_below) = at(EPS_CU2 * 0.999);
+    let (at_limit, kind_at) = at(EPS_CU2);
+    let (above, kind_above) = at(EPS_CU2 * 1.001);
+    assert_eq!(kind_below, LimitKind::ConcreteCrushing);
+    assert_eq!(kind_at, LimitKind::ConcreteCrushing);
+    assert_eq!(kind_above, LimitKind::ConcreteCrushing);
+    assert!(below < 1.0, "{below}");
+    assert!((at_limit - 1.0).abs() < 1e-12, "{at_limit}");
+    assert!(above > 1.0, "{above}");
+    // Pure tension (eps_2 = 0) never crushes.
+    assert_eq!(at(0.0).0, 0.0);
+}
+
+/// A caller-supplied `concrete_crushing_limit` overrides `|EPS_CU2|`
+/// entirely (plan §2.5 point 3: "a user compressive strain limit").
+#[test]
+fn crushing_utilization_respects_a_caller_override() {
+    let material =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap();
+    let limit = 0.002; // narrower than the default |EPS_CU2| = 0.0035.
+    let config = LimitStateConfig {
+        concrete_crushing_limit: Some(limit),
+        ..Default::default()
+    };
+    let strain = PlaneVector::new(0.0, -limit, 0.0);
+    let (utilization, kind) = material.csfm_concrete_limit_utilization(&strain, &config);
+    assert_eq!(kind, LimitKind::ConcreteCrushing);
+    assert!((utilization - 1.0).abs() < 1e-12, "{utilization}");
+    // The same strain against the default limit is comfortably below 1.
+    let default_config = LimitStateConfig::default();
+    let (default_utilization, _) =
+        material.csfm_concrete_limit_utilization(&strain, &default_config);
+    assert!(default_utilization < 1.0, "{default_utilization}");
+    // A non-finite/non-positive override falls back to the default rather
+    // than panicking or propagating NaN.
+    for bad in [f64::NAN, 0.0, -1.0] {
+        let bad_config = LimitStateConfig {
+            concrete_crushing_limit: Some(bad),
+            ..Default::default()
+        };
+        let (u, _) = material.csfm_concrete_limit_utilization(&strain, &bad_config);
+        assert!((u - default_utilization).abs() < 1e-12, "{u}");
+    }
+}
+
+/// The tensile-strain criterion has no material-intrinsic default: it is
+/// absent unless `concrete_tensile_limit` is given, and only then can it
+/// become the controlling (higher-utilization) kind over crushing — this
+/// is `findCriticalLoad`'s own `maxConcreteTensileStrain` stop criterion
+/// (plan §2.5 point 3, exercised end to end in `csfm/arclength.rs`'s
+/// `findCriticalLoad` parity test).
+#[test]
+fn tensile_strain_utilization_is_opt_in_and_can_control() {
+    let material =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap();
+    let limit_t = 3e-6;
+    // Mild net tension (eps_2 = 0, so crushing is zero): absent the
+    // tensile-strain config, utilization is just crushing = 0 regardless
+    // of eps_1.
+    let strain_at_limit = PlaneVector::new(limit_t, 0.0, 0.0);
+    let (default_utilization, default_kind) =
+        material.csfm_concrete_limit_utilization(&strain_at_limit, &LimitStateConfig::default());
+    assert_eq!(default_utilization, 0.0);
+    assert_eq!(default_kind, LimitKind::ConcreteCrushing);
+
+    let config = LimitStateConfig {
+        concrete_tensile_limit: Some(limit_t),
+        ..Default::default()
+    };
+    let at = |eps1: f64| {
+        material.csfm_concrete_limit_utilization(&PlaneVector::new(eps1, 0.0, 0.0), &config)
+    };
+    let (below, _) = at(limit_t * 0.999);
+    let (at_limit, kind_at) = at(limit_t);
+    let (above, kind_above) = at(limit_t * 1.001);
+    assert_eq!(kind_at, LimitKind::ConcreteTensileStrain);
+    assert_eq!(kind_above, LimitKind::ConcreteTensileStrain);
+    assert!(below < 1.0, "{below}");
+    assert!((at_limit - 1.0).abs() < 1e-9, "{at_limit}");
+    assert!(above > 1.0, "{above}");
 }
