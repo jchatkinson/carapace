@@ -574,21 +574,21 @@ This is outside this plan, but it constrains its choices.
 - **Rollout.** Run Carapace behind a `model.fem.solver` flag beside `solveLoadPath` until the UI regressions agree.
   Then retire `nonlinear.ts`, `csfm-nonlinear.ts`, `rod.ts` and the TS sparse LU/SuperLU path.
 
-## 6. Open decisions
+## 6. Decisions
 
-1. **Regularization default.** The CalcsApp UI ships `gamma: 0.1`, phase 7a recommends 0.01, and phase 7b shows
-   gamma = 0.1 lets the concrete carry the span-beam tie (bar 6.3 vs about 67 MPa). Carapace should have **no**
-   default and require an explicit value. The CalcsApp default should drop to ≤ 1e-3 at cutover. This needs the
-   owner's decision.
-2. **Rebar concrete inputs.** `csfmRebar` can either take `fctm` and `Ecm` explicitly, or reference a `csfmConcrete`.
-   Explicit is simpler and keeps `Material` self-contained. A reference prevents mismatches. Recommendation:
-   explicit in core, with an optional reference resolved by the wire decoder.
+Items 1, 2 and 5 were decided by the owner on 2026-10-25. The rest are standing scope notes.
+
+1. **Regularization default (decided).** Carapace has **no** default: `tensileRegularization`, when present, must
+   give `gamma`. Phase 7b showed that gamma = 0.1 lets the concrete carry the span-beam tie (bar 6.3 vs about
+   67 MPa), so the CalcsApp UI default is now `gamma = 0.001`.
+2. **Rebar concrete inputs (decided).** `csfmRebar` takes `fctm` and `Ecm` explicitly in core, which keeps `Material`
+   self-contained. The wire decoder may later resolve them from a referenced `csfmConcrete`, as a convenience.
 3. **Fracture-energy tension softening** (phase 7b, "Optional future change"). Out of scope. It has a negative
    tangent and would need arc-length, which phase 4 provides.
 4. **Crisfield line search and secant-Newton.** Port them only on evidence from §4, F.
-5. **Compression failure criterion.** TS has none in the worker path; `findCriticalLoad` exists but is unused by the
-   UI. Default concrete limit: `eps_cu2` for parabola-rectangle. Confirm whether elastic-ideally-plastic should use
-   the same limit.
+5. **Compression failure criterion (decided).** TS has none in the worker path; `findCriticalLoad` exists but is
+   unused by the UI. The default crushing limit is `eps_cu2 = -0.0035` for **both** compression laws, and a user
+   limit can override it.
 6. **TS defects found while planning (fixed in CalcsApp).** Carapace matches the fixed behavior, and the phase 0
    export runs after these fixes.
    - **Crack-transition band:** removed from CalcsApp, and passing it is an error (§1). Carapace does not
