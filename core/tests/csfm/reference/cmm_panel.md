@@ -23,10 +23,16 @@ sigma_y = rho_y * sigma_sy + sigma_c_y
 tau_xy  =                    tau_c_xy
 ```
 
-`(sigma_c_x, sigma_c_y, tau_c_xy)` is the ordinary stress-transformation
-(Mohr's circle) of the concrete principal stresses `(sigma1, sigma2)` back
-from the strain's principal angle `theta` to `x`-`y` — plain tensor rotation,
-not a CSFM-specific formula.
+`(sigma_c_x, sigma_c_y, tau_c_xy)` is the ordinary Mohr's-circle rotation of `(sigma1, sigma2)`
+back to `x`-`y`: `tau_c_xy = (sigma1 - sigma2)/2 * sin(2 theta)`, the tensor shear component
+directly — stress has no engineering/tensor shear distinction (only *strain* does, through
+`gamma_xy = 2 * eps_xy`). An earlier version of `cmm_panel.py` used one `from_principal` helper
+for both strain and stress and doubled the shear term unconditionally (correct for recovering
+`gamma_xy` from a strain decomposition, wrong for stress), so this file's own `tau_c_xy`/`tau_xy`
+were exactly double what they should be. Caught when Carapace's `CsfmConcrete::trial_stress_tangent`
+— an ordinary tensor stress rotation — returned exactly half of this file's original number; now
+split into `from_principal_stress` (undoubled) and `from_principal_strain` (doubled, used only by
+`assert_round_trip`'s strain check).
 
 **Compatibility.** Bar strain in each direction equals the membrane's own
 normal strain there (smeared reinforcement, shared by CMM and CSFM). Bar
@@ -56,22 +62,25 @@ Both use `fck = 30` MPa (`Ecm`, `fctm` derived), `Es = 200000` MPa,
 directions are identical.
 
 **B — biaxial, asymmetric reinforcement.** `rho_x = 0.012` (`d = 16` mm),
-`rho_y = 0.008` (`d = 12` mm); strain `eps_x = 0.0022`, `eps_y = 0.0017`,
-`gamma_xy = 0.0045`.
+`rho_y = 0.008` (`d = 12` mm); strain `eps_x = 0.0020`, `eps_y = 0.0017`,
+`gamma_xy = 0.0045`. (`eps_x` is `0.0020`, not `0.0022`: at `0.0022` it falls
+outside bar_x's TCM branch under the corrected `sigma_min`-anchored formula
+below — see that section's note.)
 
-## Expected quantities (from `cmm_panel.py`, run 2026-10-25)
+## Expected quantities (from `cmm_panel.py`, run 2026-10-26, after the
+`tension_chord.py` TCM-intercept fix and the `from_principal` shear-doubling fix)
 
 | Quantity | A | B |
 |---|---|---|
-| `eps1` | 3.850000e-3 | 4.213846e-3 |
-| `eps2` | -6.500000e-4 | -3.138463e-4 |
-| `theta` | 45.000 deg | 41.830 deg |
-| `kc2` | 0.746826 | 0.719456 |
+| `eps1` | 3.850000e-3 | 4.104994e-3 |
+| `eps2` | -6.500000e-4 | -4.049945e-4 |
+| `theta` | 45.000 deg | 43.093 deg |
+| `kc2` | 0.746826 | 0.727432 |
 | `sigma1` | 0 MPa | 0 MPa |
-| `sigma2` | -12.196602 MPa | -6.242465 MPa |
-| `sigma_c_x, sigma_c_y, tau_c_xy` | -6.098301, -6.098301, 12.196602 | -2.776550, -3.465915, 6.204284 |
-| `sigma_sx, sigma_sy` | 368.0307, 368.0307 | 479.9447, 400.1596 |
-| `sigma_x, sigma_y, tau_xy` | -2.417994, -2.417994, 12.196602 | 2.982786, -0.264638, 6.204284 |
+| `sigma2` | -12.196602 MPa | -7.943323 MPa |
+| `sigma_c_x, sigma_c_y, tau_c_xy` | -6.098301, -6.098301, 6.098301 | -3.707470, -4.235852, 3.962865 |
+| `sigma_sx, sigma_sy` | 416.0614, 416.0614 | 479.8894, 460.3193 |
+| `sigma_x, sigma_y, tau_xy` | -1.937687, -1.937687, 6.098301 | 2.051203, -0.553298, 3.962865 |
 
 Re-derive, don't hand-copy: run `python3 -I core/tests/csfm/reference/cmm_panel.py`.
 
@@ -113,11 +122,11 @@ crack-angle-corrected 2D spacing):
   `1/sr_full(theta) = |cos(theta)|/sr_x + |sin(theta)|/sr_y` (the standard
   Vecchio-Collins-style combination for a crack oblique to both reinforcement
   layers) in place of that bar's own 1D `sr`, and reports the resulting shift.
-  Observed: **3.82%** (case A, both directions, by symmetry) and **2.09%** /
-  **5.07%** (case B, x / y). The largest observed shift is just over 5%.
+  Observed: **6.76%** (case A, both directions, by symmetry) and **4.18%** /
+  **8.81%** (case B, x / y). The largest observed shift is just under 9%.
 - **Tolerance: `rel 10%`** on bar stress, fixed here (before any Carapace
-  result exists) with roughly 2x margin over the largest measured shift
-  (5.07%), since the two cases above do not exhaustively cover every crack
+  result exists) with a modest margin over the largest measured shift
+  (8.81%), since the two cases above do not exhaustively cover every crack
   angle and reinforcement ratio a real test might use. If a future test needs
   a case further from these two (e.g. a much more oblique crack with very
   unequal reinforcement), recompute `crack_spacing_band` for it before relying

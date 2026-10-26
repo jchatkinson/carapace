@@ -22,7 +22,9 @@ uses — this is the standard TCM bond assumption, not a CSFM-specific choice).
 
 Let `x = 0` at a crack, where the concrete carries zero stress and the bar
 carries the full force, stress `sigma0`. Axial equilibrium of the bar alone
-(force lost to bond, transferred into the concrete) gives
+(force lost to bond, transferred into the concrete) gives, during the
+stabilized-cracking stage (bond `tau_b1`, cracks already at their final
+spacing `sr`):
 
 ```
 d(As * sigma_s(x))/dx = -tau_b1 * (pi * d)        (bond shear over the bar's perimeter)
@@ -31,26 +33,38 @@ d(As * sigma_s(x))/dx = -tau_b1 * (pi * d)        (bond shear over the bar's per
 ```
 
 linear, until bond saturates at the midpoint between cracks, `x = sr/2`, where
-by symmetry with the neighboring crack `dsigma_s/dx` reverses:
-
-```
-sigma_s_min = sigma0 - (4 tau_b1 / d)(sr/2) = sigma0 - 2 tau_b1 sr / d
-```
+by symmetry with the neighboring crack `dsigma_s/dx` reverses.
 
 ## Mean strain
 
-The bar stays elastic pointwise (bond only redistributes force along the bar,
-it does not change the bar's own `sigma = Es eps` law), so
-`eps_s(x) = sigma_s(x)/Es`, linear like the stress. Averaging over the half
-spacing (by symmetry, the same as averaging over a full spacing):
+**An earlier version of this section derived the mean strain as the plain
+spatial average of the stress profile above**,
+`eps_m = sigma0/Es - tau_b1 * sr / (Es * d)`. That is wrong, and the bug this
+file exists to avoid repeating: the bar's *mean strain* is not simply the
+spatial average of its *current* pointwise elastic strain, because the strain
+at a point also carries the history of how that point's bond state got there
+(it was once part of the crack-formation stage, under `tau_b0`, before the
+crack pattern stabilized at `sr`). The correct Tension Chord Model result
+(Marti/Alvarez/Kaufmann/Sigrist) instead anchors the stabilized branch's
+*intercept* in the crack-formation stage's bond (`tau_b0`), while its *slope*
+is set by the stabilized stage's bond (`tau_b1`) exactly as derived above —
+both facts live in one formula because the branch happens to be affine with
+slope `1/Es` regardless of which bond stage sets the intercept, which is
+exactly why the bug above was easy to write and hard to notice from the slope
+check alone (`self_checks`'s slope assertion passes for *either* intercept).
+The correct relation:
 
 ```
-eps_m(sigma0) = (1/Es) * (sigma0 + sigma_s_min)/2 = sigma0/Es - tau_b1 * sr / (Es * d)
+sigma_min = tau_b0 * sr / d                  (zero-strain intercept, crack-formation bond)
+eps_m(sigma0) = (sigma0 - sigma_min) / Es
 ```
 
-This holds for `sigma0` in `[sigma_cr, fy]` — the *stabilized-cracking* branch.
-`tension_chord.py::eps_m` implements exactly this, with `tau_b1` and `sr`
-computed from `TcmParams`.
+This holds for `sigma0` in `[sigma_min, fy]` — TCM branch 1. `tension_chord.py::eps_m`
+implements exactly this. `sigma_min` is also the plan's "TCM startup bridge"
+threshold (`docs/csfm-plan.md` S1/S6) and `CsfmRebarFields::sigma_min` — the
+same quantity under both names, confirmed directly against CalcsApp's own
+comment on `averageTensionStiffeningStrain`'s inverse: "TCM branch 1 is
+`Es * eps + sigmaMin`" (`csfm-nonlinear.ts`).
 
 ## Crack spacing
 

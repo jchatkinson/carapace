@@ -3,15 +3,25 @@
 
 Derivation (see tension_chord.md for the full writeup): a bar of diameter `d`
 embedded in a concrete tie of effective reinforcement ratio `rho`, pulled so that
-the stress at a crack is `sigma0`. Between cracks, rigid-plastic bond (constant
-shear stress) gives a linear steel-stress profile; averaging it over half the
-crack spacing gives the mean strain
+the stress at a crack is `sigma0`. The model has two bond stages: an uncracked
+stage (bond `tau_b0`, active while cracks are still forming and setting the
+stabilized spacing `sr`) and a stabilized-cracking stage (bond `tau_b1`, active
+between already-formed cracks). The mean strain's *slope* in `sigma0` comes from
+the stabilized stage alone (bond resistance there does not depend on `sigma0`),
+but its *intercept* is set by the crack-formation stage, at the stress
+`sigma_min` where a bar held by `tau_b0` over the full (already stabilized)
+spacing `sr` would show zero net elongation:
 
-    eps_m(sigma0) = sigma0 / Es - tau_b1 * sr / (Es * d)
+    sigma_min = tau_b0 * sr / d
+    eps_m(sigma0) = (sigma0 - sigma_min) / Es
 
-valid for sigma0 in [sigma_cr, fy], where sigma_cr = fctm * (1 - rho) / rho is the
-stress at first cracking and fy is yield. This is run BEFORE any Carapace result
-exists: it is the a priori reference for CsfmRebar's inverse relation (plan
+valid for sigma0 in [sigma_min, fy]. (An earlier version of this file used
+`tau_b1` for the intercept too, i.e. `sigma0 / Es - tau_b1 * sr / (Es * d)`,
+which is wrong: it conflates the two bond stages and gives an intercept half of
+`sigma_min`. The current `CsfmRebar`/CalcsApp TCM branch 1 is exactly `Es * eps +
+sigmaMin` - see `csfm-nonlinear.ts`'s own comment on `averageTensionStiffeningStrain`
+- which is what caught this.) This is run BEFORE any Carapace result exists: it
+is the a priori reference for CsfmRebar's inverse relation (plan
 docs/csfm-plan.md, S4 C), not something fit to it.
 
 No numpy (not installed in this environment); everything here is scalar closed form.
@@ -53,6 +63,15 @@ class TcmParams:
         return self.lam * self.d * self.fctm * (1.0 - self.rho) / (2.0 * self.tau_b0 * self.rho)
 
     @property
+    def sigma_min(self) -> float:
+        """The TCM branch-1 mean-strain formula's zero-strain intercept: the crack-formation
+        stage's bond (tau_b0, not the stabilized stage's tau_b1) applied over the full stabilized
+        spacing sr. This is also the plan's "TCM startup bridge" threshold (docs/csfm-plan.md
+        S1/S6) - the same quantity, not a coincidence: both are "the crack stress below which the
+        bar's net elongation over one spacing, under tau_b0, would be non-positive"."""
+        return self.tau_b0 * self.sr / self.d
+
+    @property
     def sigma_cr(self) -> float:
         """Steel stress at a crack the instant it forms. Just before cracking the
         bar and the concrete share one strain eps_cr = fctm/Ecm (uncracked,
@@ -80,17 +99,17 @@ class TcmParams:
 
 def eps_m(p: TcmParams, sigma0: float) -> float:
     """Mean (average) steel strain along the tie at crack stress `sigma0`,
-    valid for sigma0 in [p.sigma_cr, p.fy] (the 'stabilized cracking' branch)."""
-    if not (p.sigma_cr - 1e-9 <= sigma0 <= p.fy + 1e-9):
-        raise ValueError(f"sigma0={sigma0} outside stabilized-cracking branch "
-                          f"[{p.sigma_cr}, {p.fy}]")
-    return sigma0 / p.es - p.tau_b1 * p.sr / (p.es * p.d)
+    valid for sigma0 in [p.sigma_min, p.fy] (TCM branch 1)."""
+    if not (p.sigma_min - 1e-9 <= sigma0 <= p.fy + 1e-9):
+        raise ValueError(f"sigma0={sigma0} outside TCM branch 1 "
+                          f"[{p.sigma_min}, {p.fy}]")
+    return (sigma0 - p.sigma_min) / p.es
 
 
 def sigma_of_eps_m(p: TcmParams, eps: float, tol: float = 1e-14) -> float:
     """Inverse of eps_m by bisection (eps_m is affine/monotone increasing in
-    sigma0 on the stabilized branch, so the inverse is unique there)."""
-    lo, hi = p.sigma_cr, p.fy
+    sigma0 on this branch, so the inverse is unique there)."""
+    lo, hi = p.sigma_min, p.fy
     flo, fhi = eps_m(p, lo) - eps, eps_m(p, hi) - eps
     if flo > 0 or fhi < 0:
         raise ValueError(f"eps={eps} outside the range reachable on the stabilized branch "

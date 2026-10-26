@@ -103,22 +103,34 @@ def principal(ex: float, ey: float, gxy: float) -> tuple[float, float, float]:
     return avg + radius, avg - radius, theta
 
 
-def from_principal(s1: float, s2: float, theta: float) -> tuple[float, float, float]:
-    """Inverse of `principal` for a symmetric 2-tensor: (x, y, xy) at angle
-    theta from principal values (s1, s2). Same transformation for stress and
-    (engineering-shear) strain -- ordinary tensor rotation, not a CSFM-specific
-    formula."""
+def from_principal_stress(s1: float, s2: float, theta: float) -> tuple[float, float, float]:
+    """Inverse of `principal` for *stress* (or any tensor whose off-diagonal component has no
+    engineering/tensor doubling ambiguity): (x, y, xy) at angle theta from principal values
+    (s1, s2) -- ordinary tensor rotation, the standard Mohr's-circle formula, not a
+    CSFM-specific one. `xy` here is the tensor shear component directly; a *strain* caller that
+    wants engineering-shear `gxy` back must double it itself (see `from_principal_strain`) --
+    conflating the two (returning `2 * half_diff * sin(2 theta)` unconditionally) is the bug an
+    earlier version of this file had: it made the concrete stress rotation below exactly double
+    `tau_c_xy`, caught when Carapace's `CsfmConcrete::trial_stress_tangent` (itself an ordinary
+    tensor stress rotation) returned half of this file's `tau_c_xy`."""
     avg = (s1 + s2) / 2.0
     half_diff = (s1 - s2) / 2.0
     c2, s2a = math.cos(2.0 * theta), math.sin(2.0 * theta)
-    return avg + half_diff * c2, avg - half_diff * c2, 2.0 * half_diff * s2a
+    return avg + half_diff * c2, avg - half_diff * c2, half_diff * s2a
+
+
+def from_principal_strain(e1: float, e2: float, theta: float) -> tuple[float, float, float]:
+    """`from_principal_stress`, but for engineering-shear strain: doubles the tensor shear
+    component back into `gxy = 2 * eps_xy`, undoing `principal`'s own `gxy / 2`."""
+    x, y, tensor_xy = from_principal_stress(e1, e2, theta)
+    return x, y, 2.0 * tensor_xy
 
 
 def assert_round_trip(ex: float, ey: float, gxy: float, tol: float = 1e-12) -> None:
     """Mohr decomposition then its own inverse must reproduce the input
     exactly (to rounding) -- the 'equilibrium to rounding' identity bucket."""
     e1, e2, theta = principal(ex, ey, gxy)
-    bx, by, bgxy = from_principal(e1, e2, theta)
+    bx, by, bgxy = from_principal_strain(e1, e2, theta)
     scale = max(1.0, abs(ex), abs(ey), abs(gxy))
     assert abs(bx - ex) < tol * scale, (bx, ex)
     assert abs(by - ey) < tol * scale, (by, ey)
@@ -141,11 +153,12 @@ class PanelCase:
 def bar_stress(bar: TcmParams, eps: float) -> float:
     """Stress in one reinforcement direction at membrane strain `eps`, equal
     to the bar's own average strain by the smeared compatibility assumption.
-    TCM branch for eps on [eps_m(sigma_cr), eps_m(fy)]; bare elastic steel
-    below that (not reached by either case below -- both are chosen to sit on
-    the TCM branch, away from the first-crack transition the plan's "startup
-    bridge" discussion flags as a separate, non-closed-form concern)."""
-    lo, hi = eps_m(bar, bar.sigma_cr), eps_m(bar, bar.fy)
+    TCM branch for eps on [0, eps_m(fy)] (eps_m(sigma_min) = 0 by construction);
+    bare elastic steel below that (not reached by either case below -- both
+    are chosen to sit on the TCM branch, away from the first-crack transition
+    the plan's "startup bridge" discussion flags as a separate,
+    non-closed-form concern)."""
+    lo, hi = 0.0, eps_m(bar, bar.fy)
     if not (lo <= eps <= hi):
         raise ValueError(f"eps={eps} outside the TCM branch [{lo}, {hi}] for this case; "
                          f"choose a case strain that avoids the first-crack transition")
@@ -158,7 +171,7 @@ def solve_panel(case: PanelCase) -> dict:
     assert eps1 >= eps2 - 1e-15
 
     sigma1, sigma2 = concrete_principal_stress(case.fck, eps1, eps2)
-    sigma_c_x, sigma_c_y, tau_c_xy = from_principal(sigma1, sigma2, theta)
+    sigma_c_x, sigma_c_y, tau_c_xy = from_principal_stress(sigma1, sigma2, theta)
 
     sigma_sx = bar_stress(case.bar_x, case.ex)
     sigma_sy = bar_stress(case.bar_y, case.ey)
@@ -201,12 +214,13 @@ def bar_stress_with_sr(bar: TcmParams, eps: float, sr_override: float) -> float:
     by `sr_override` (used only to measure the simplification's effect, not as
     part of the CMM reference solution itself)."""
     patched = TcmParams(bar.es, bar.ecm, bar.fy, bar.ft, bar.fctm, bar.d, bar.rho, bar.lam)
-    # eps_m(sigma0) = sigma0/Es - tau_b1*sr/(Es*d); solve for sigma0 at the
-    # overridden sr by the same closed form, bypassing TcmParams.sr.
-    lo, hi = patched.sigma_cr, patched.fy
+    # eps_m(sigma0) = (sigma0 - sigma_min) / Es, sigma_min = tau_b0 * sr / d; solve for sigma0 at
+    # the overridden sr by the same closed form, bypassing TcmParams.sr/sigma_min.
+    lo, hi = patched.tau_b0 * sr_override / patched.d, patched.fy
 
     def eps_m_override(sigma0: float) -> float:
-        return sigma0 / patched.es - patched.tau_b1 * sr_override / (patched.es * patched.d)
+        sigma_min_override = patched.tau_b0 * sr_override / patched.d
+        return (sigma0 - sigma_min_override) / patched.es
 
     flo, fhi = eps_m_override(lo) - eps, eps_m_override(hi) - eps
     if flo > 0 or fhi < 0:
@@ -252,7 +266,7 @@ def main() -> None:
 
     case_b = PanelCase(
         name="B: biaxial, asymmetric reinforcement",
-        fck=fck, ex=0.0022, ey=0.0017, gxy=0.0045,
+        fck=fck, ex=0.0020, ey=0.0017, gxy=0.0045,
         bar_x=bar_bx, bar_y=bar_by,
     )
 
