@@ -36,6 +36,20 @@ pub enum ModelError {
         element: usize,
         reason: &'static str,
     },
+    /// `embed_polyline`'s segment `segment` (after splitting at every mesh-
+    /// edge crossing) has no point inside any continuum host — it crosses a
+    /// hole, a notch, the gap between disconnected regions, or lies wholly
+    /// outside the mesh — or hit a non-converging/degenerate natural-
+    /// coordinate inverse on a badly distorted host.
+    EmbeddedBarOutsideMesh { segment: usize },
+    /// `embed_polyline`'s segment `segment` has its midpoint inside more
+    /// than one continuum host (overlapping elements): which one should
+    /// bind it is ambiguous.
+    EmbeddedBarAmbiguousHost { segment: usize },
+    /// A polyline passed to `embed_polyline` is empty, has fewer than two
+    /// vertices, or every consecutive pair of vertices is coincident (no
+    /// non-zero-length segment at all).
+    EmbeddedBarDegeneratePath,
 }
 
 impl fmt::Display for ModelError {
@@ -78,6 +92,21 @@ impl fmt::Display for ModelError {
             ModelError::InvalidElement { element, reason } => {
                 write!(f, "element {element} is invalid: {reason}")
             }
+            ModelError::EmbeddedBarOutsideMesh { segment } => write!(
+                f,
+                "embedded-bar segment {segment} lies outside every continuum host \
+                 (a hole, a notch, a gap between disconnected regions, or a non-convergent \
+                 natural-coordinate inverse on a badly distorted element)"
+            ),
+            ModelError::EmbeddedBarAmbiguousHost { segment } => write!(
+                f,
+                "embedded-bar segment {segment}'s midpoint lies inside more than one \
+                 continuum host (overlapping elements)"
+            ),
+            ModelError::EmbeddedBarDegeneratePath => write!(
+                f,
+                "an embedded-bar polyline needs at least one non-zero-length segment"
+            ),
         }
     }
 }

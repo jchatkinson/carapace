@@ -1,3 +1,4 @@
+mod embed_polyline;
 mod embedded_bar;
 mod loads;
 mod mixed;

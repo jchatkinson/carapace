@@ -171,6 +171,13 @@ pub enum ModelErrorDetail {
         element: usize,
         reason: &'static str,
     },
+    EmbeddedBarOutsideMesh {
+        segment: usize,
+    },
+    EmbeddedBarAmbiguousHost {
+        segment: usize,
+    },
+    EmbeddedBarDegeneratePath,
 }
 
 impl From<ModelError> for ModelErrorDetail {
@@ -201,6 +208,13 @@ impl From<ModelError> for ModelErrorDetail {
             ModelError::InvalidElement { element, reason } => {
                 ModelErrorDetail::InvalidElement { element, reason }
             }
+            ModelError::EmbeddedBarOutsideMesh { segment } => {
+                ModelErrorDetail::EmbeddedBarOutsideMesh { segment }
+            }
+            ModelError::EmbeddedBarAmbiguousHost { segment } => {
+                ModelErrorDetail::EmbeddedBarAmbiguousHost { segment }
+            }
+            ModelError::EmbeddedBarDegeneratePath => ModelErrorDetail::EmbeddedBarDegeneratePath,
         }
     }
 }

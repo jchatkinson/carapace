@@ -267,6 +267,13 @@ where
         &self.elements[id]
     }
 
+    /// Every element, with its key — e.g. for `embed_polyline` to find
+    /// which continuum elements a point lies in without `Domain` having
+    /// to know anything about embedding itself.
+    pub fn elements(&self) -> impl Iterator<Item = (E::Id, &E)> {
+        self.elements.iter()
+    }
+
     fn node_view(&self) -> NodeView<'_, NDIM, NDOF, NId> {
         NodeView::new(&self.nodes)
     }
