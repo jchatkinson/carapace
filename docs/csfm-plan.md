@@ -40,9 +40,10 @@ The CalcsApp procedure, which is the parity target:
    - Tension is zero. Optional numerical regularization adds `sigma_t = gamma fctm (1 - exp(-eps/eps_reg))`, with
      `eps_reg = gamma fctm / Ecm` derived rather than configured, so the tension tangent at the origin is `Ecm`.
      Absent regularization must give the exact zero-tension law.
-   - The library also has an optional Hermite crack-transition band (`crackTransitionStrain`). It is **out of scope**:
-     the worker never sets it, and TS applies it to `sigma_max` only, so at equal principal strains inside the band
-     the two directions use different laws. The stress then depends on the arbitrary principal direction (§6).
+   - CalcsApp used to have an optional Hermite crack-transition band (`crackTransitionStrain`). It was applied to
+     `sigma_max` only, so at equal principal strains the two directions used different laws, and the stress
+     depended on the arbitrary principal direction. It was unused by the worker and has been **removed**: passing
+     it is now an error (§6). Both principal directions now use one scalar law.
    - At the exact origin (all strains < 1e-9) the tangent is seeded as isotropic
      `diag(E0, E0, E0/2)`, where `E0` is the compression origin tangent.
    - The Cartesian tangent in TS is a regime-aware finite difference. It is not rotated secants (phase 7a §2).
@@ -53,10 +54,11 @@ The CalcsApp procedure, which is the parity target:
      `rho_eff ≥ rho_crit`, or the Pull-Out Model (POM) otherwise. Inputs are `tau_b0 = 2 fctm`, `tau_b1 = fctm`,
      crack spacing `sr = lambda d fctm (1 - rho)/(2 tau_b0 rho)` (default `lambda = 0.67`), and the branch boundaries
      computed at resolve time.
-   - TCM has a cubic startup bridge below `sigma_min / Es`, which is C1 only when `2 sigma_min ≤ fy`. TS does not
-     enforce that condition. With a large `lambda` the bridge end point falls past yield and the stress jumps; for
-     example, `lambda = 2` gives about 573.5 MPa just below the startup strain and 512.2 MPa at it. This is a TS
-     defect (§6).
+   - TCM has a cubic startup bridge below `sigma_min / Es`, which is C1 only when `2 sigma_min ≤ fy`. Past that the
+     bridge overshoots yield and the stress jumps; for example, `lambda = 2` gave about 573.5 MPa just below the
+     startup strain and 512.2 MPa at it. `resolveModel` now **rejects** `2 sigma_min > fy` (§6).
+     - With TCM routing, `2 sigma_min ≤ lambda (fy - (Es/Ecm - 1) fctm)`, so this rejects only `lambda > 1`, which
+       is outside the 0.5–1.0 range the UI offers.
    - POM has an origin guard: stress 0 and tangent `Es` up to a strain of 1e-9.
    - The tangent is the analytic reciprocal slope (phase 7b §1), bounded to `[Es/1e4, 10 Es]`.
    - Rupture, with a strict `>` comparison:
@@ -587,13 +589,14 @@ This is outside this plan, but it constrains its choices.
 5. **Compression failure criterion.** TS has none in the worker path; `findCriticalLoad` exists but is unused by the
    UI. Default concrete limit: `eps_cu2` for parabola-rectangle. Confirm whether elastic-ideally-plastic should use
    the same limit.
-6. **TS defects found while planning.** Carapace does not reproduce either one. Fix both in CalcsApp before the
-   phase 0 export, or exclude the affected states from the fixtures.
-   - **Crack-transition band:** applied to `sigma_max` only, so the result depends on the arbitrary principal
-     direction at equal principal strains (§1). It is unused by the worker. Recommendation: leave it out of Carapace.
-     Either delete it from TS, or apply it to both directions if it is ever wanted.
-   - **TCM startup bridge:** discontinuous when `2 sigma_min > fy` (§1). Recommendation: Carapace rejects that
-     input. CalcsApp should add the same validation in `resolveModel` so that both reject it. The alternative,
-     deriving a bridge that stays on branch 1, changes results and would need its own validation.
+6. **TS defects found while planning (fixed in CalcsApp).** Carapace matches the fixed behavior, and the phase 0
+   export runs after these fixes.
+   - **Crack-transition band:** removed from CalcsApp, and passing it is an error (§1). Carapace does not
+     implement it. If it is ever wanted, it must apply to both principal directions.
+   - **TCM startup bridge:** both reject `2 sigma_min > fy` (§1). CalcsApp's `csfm-nonlinear.test.ts` covers three
+     cases:
+     - the rejected `lambda = 2` case;
+     - the UI's worst case, `lambda = 1` just above `rho_crit`, which stays continuous;
+     - equal principal strains giving equal stresses in every regime.
 7. **Bond-slip.** Out of scope. `rod.ts` keeps a `RodCoupling` seam for it. Here, `EmbeddedBar` would gain slip DOFs,
    which needs nodes it owns and is a later element.
