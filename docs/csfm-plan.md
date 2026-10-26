@@ -1,13 +1,20 @@
 # CSFM in Carapace: implementation and test plan
 
-Status: phases 0-1 complete. The golden fixtures and their measured sensitivities are in
+Status: phases 0-2 mostly complete. The golden fixtures and their measured sensitivities are in
 [core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md), including the §4 G and H fixtures. The generic
 tangent-vs-finite-difference checker is in `core/src/testkit.rs`, exercised against existing materials and elements
 in `core/tests/materials/tangent_fd.rs` and `core/tests/elements/tangent_fd.rs`. The §4 C independent reference
 calculations are in [core/tests/csfm/reference](../core/tests/csfm/reference/README.md). `PlaneMaterial::CsfmConcrete`
 and `Material::CsfmRebar` (§2.1, §2.2) are implemented in `core/src/model/materials/csfm_concrete.rs` and
-`csfm_rebar.rs`, with §4 A-B tests in `core/tests/materials/csfm_concrete.rs` and `csfm_rebar.rs`. `EmbeddedBar` and
-the static procedure (phases 2-3) have not started.
+`csfm_rebar.rs`, with §4 A-B tests in `core/tests/materials/csfm_concrete.rs` and `csfm_rebar.rs`. `Element::EmbeddedBar`,
+the T3/Q4 natural-coordinate inverses, and `embed_polyline` (§2.3) are implemented in `core/src/model/elements/embedded_bar.rs`,
+`core/src/model/continuum/natural_coords.rs` and `embed.rs`, with most of §4 D covered in `core/tests/continuum/embedded_bar.rs`
+and `embed_polyline.rs` (patch tests, truss equivalence, the FD checker, mask conformance, segment counts against every
+`embedding.json` case including the deep/span beam totals, and the outside-mesh/degenerate-path/ambiguous-host errors).
+Not yet covered: a non-converging Q4 inverse on a badly distorted element as its own test, and a direct strain/value
+comparison of midpoint-host binding against TS's per-end binding on the shared-edge and through-node fixture cases
+(segment counts there already match, but not yet the embedded field values point-for-point). The static procedure
+(phase 3) has not started.
 
 Goal: move the Compatible Stress Field Method (CSFM) analysis from CalcsApp (`../calcs.app/lib/fem`, TypeScript)
 into Carapace, so that Carapace becomes the solver CalcsApp ships. This plan covers only the CSFM procedure and its
