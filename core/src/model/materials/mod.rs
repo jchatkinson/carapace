@@ -66,6 +66,8 @@
 mod composite;
 mod concrete01;
 mod concrete02;
+mod csfm_concrete;
+mod csfm_rebar;
 mod elastic_like;
 mod hysteretic;
 mod pinching4;
@@ -74,12 +76,68 @@ mod shell_section;
 mod steel01;
 mod steel02;
 
+pub use csfm_rebar::{CsfmRebarFields, CsfmRebarRouting};
 pub use hysteretic::HystereticFields;
 pub use pinching4::{Pinching4DmgCyc, Pinching4Fields, Pinching4State};
-pub use plane::{PlaneMaterial, PlaneMaterialError, PlaneMatrix, PlaneVector};
+pub use plane::{
+    CsfmConcreteFields, CsfmConcreteLaw, PlaneMaterial, PlaneMaterialError, PlaneMatrix,
+    PlaneVector,
+};
 pub use shell_section::{ShellMatrix, ShellSection, ShellSectionError, ShellVector};
 pub use steel01::Steel01Loading;
 pub use steel02::Steel02Kon;
+
+/// Why a `Material` constructor's inputs are unusable. Unlike the leaf
+/// materials ported from OpenSees (which construct unconditionally — any
+/// garbage-in/garbage-out is the caller's problem, matching the C++), a
+/// `CsfmRebar` must validate at construction (plan `docs/csfm-plan.md`
+/// §2.2): `evaluate` has no error channel (`Domain` assembly cannot fail),
+/// so every precondition an inverse branch needs has to be checked before
+/// the material exists.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MaterialError {
+    /// A steel modulus/yield/ultimate parameter is not finite and
+    /// positive, or `ft <= fy`, or `eps_u <= fy / es` (so the hardening
+    /// branch would have a non-positive or infinite modulus).
+    InvalidSteelProperties,
+    /// The effective reinforcement ratio is not in `(0, 1)`.
+    InvalidReinforcementRatio,
+    /// A bond/concrete input (`fctm`, `ecm`, bar diameter, crack-spacing
+    /// coefficient `lambda`) is not finite and positive.
+    InvalidConcreteInputs,
+    /// TCM routing with `2 * sigma_min > fy`: the startup bridge would
+    /// overshoot the yield branch and the forward stress would jump at the
+    /// startup strain (plan §1, §6). Reduce `lambda`, or widen the
+    /// reinforcement ratio enough to route to POM instead.
+    TcmStartupExceedsYield,
+}
+
+impl MaterialError {
+    pub fn message(&self) -> &'static str {
+        match self {
+            MaterialError::InvalidSteelProperties => {
+                "steel properties must be finite and positive with ft > fy and eps_u > fy / es"
+            }
+            MaterialError::InvalidReinforcementRatio => {
+                "effective reinforcement ratio must satisfy 0 < rho_eff < 1"
+            }
+            MaterialError::InvalidConcreteInputs => {
+                "fctm, ecm, bar diameter and lambda must be finite and positive"
+            }
+            MaterialError::TcmStartupExceedsYield => {
+                "2 * sigma_min exceeds fy: reduce lambda or this reinforcement ratio routes to POM"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for MaterialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for MaterialError {}
 
 #[derive(Debug, Clone)]
 pub enum Material {
@@ -305,6 +363,24 @@ pub enum Material {
         max_strain: f64,
         failed: bool,
     },
+    /// CSFM embedded-rebar law (plan `docs/csfm-plan.md` §1 point 3, §2.2):
+    /// bilinear bare steel in compression (and in tension when tension
+    /// stiffening is off), or the inverse of the Tension Chord Model (TCM)
+    /// / Pull-Out Model (POM) average strain in tension. Construct via
+    /// [`Material::csfm_rebar`] — every field here is resolved once at
+    /// construction (routing, crack spacing, branch boundaries), exactly
+    /// as CalcsApp's `resolveModel` does, so `evaluate` is a total,
+    /// branch-dispatching function with no error channel.
+    ///
+    /// Stateless and nonlinear-elastic: unloading retraces the loading
+    /// curve (`commit` is a no-op, like `Elastic`/`Gap`/`Ent`) — this is
+    /// monotonic-only by construction, not an approximation of hysteresis.
+    ///
+    /// Boxed for the same reason as `HystereticFields` (see above):
+    /// `CsfmRebarFields` carries the full set of resolved TCM/POM
+    /// quantities, and inlining it would make every `Material` pay for the
+    /// largest variant's stack space.
+    CsfmRebar(Box<CsfmRebarFields>),
 }
 
 impl Material {
@@ -355,7 +431,21 @@ impl Material {
                 }
             }
             Material::MinMax { inner, .. } => inner.initial_tangent(),
+            Material::CsfmRebar(fields) => fields.es,
         }
+    }
+
+    /// `CsfmRebar`-only: whether `strain` is past the rupture threshold
+    /// (plan §1's sign- and mode-dependent thresholds — tension with
+    /// tension stiffening past `eps_m(ft)`, compression or bare steel past
+    /// `eps_u`), reported alongside `trial_stress_tangent`'s rupture
+    /// response (stress `±ft`, a small positive secant) rather than only
+    /// absorbed into it. Panics if `self` is not `Material::CsfmRebar`.
+    pub fn csfm_rebar_ruptured(&self, strain: f64) -> bool {
+        let Material::CsfmRebar(fields) = self else {
+            panic!("csfm_rebar_ruptured called on a non-CsfmRebar material");
+        };
+        csfm_rebar::ruptured(fields, strain)
     }
 
     /// Shared core: `(stress, tangent, next_committed_state)`. Leaf
@@ -384,6 +474,10 @@ impl Material {
                 max_strain,
                 failed,
             } => composite::evaluate_min_max(inner, *min_strain, *max_strain, *failed, strain),
+            Material::CsfmRebar(fields) => {
+                let (stress, tangent) = csfm_rebar::evaluate(fields, strain);
+                (stress, tangent, self.clone())
+            }
         }
     }
 }

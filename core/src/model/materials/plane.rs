@@ -17,6 +17,9 @@ use std::fmt;
 
 use nalgebra::{SMatrix, SVector};
 
+use super::csfm_concrete;
+pub use super::csfm_concrete::{CsfmConcreteFields, CsfmConcreteLaw};
+
 /// A plane strain or stress vector `[x, y, xy]` (engineering shear for strain).
 pub type PlaneVector = SVector<f64, 3>;
 /// The `3x3` plane constitutive tangent.
@@ -47,6 +50,16 @@ pub enum PlaneMaterial {
     /// strain, so per-point history is observable.
     #[cfg(test)]
     Probe { last: [f64; 3] },
+    /// CSFM concrete law (plan `docs/csfm-plan.md` §1 point 2, §2.1): a
+    /// stateless rotating principal-strain law with `nu = 0`. Construct via
+    /// [`PlaneMaterial::csfm_concrete`].
+    ///
+    /// Boxed (`CsfmConcreteFields` bundles the resolved derived properties
+    /// and configuration) rather than inlined, for the same reason
+    /// `Material::Hysteretic`/`Material::Pinching4` are boxed (see their
+    /// doc comments): every linear variant above would otherwise pay for
+    /// this one's stack space.
+    CsfmConcrete(Box<CsfmConcreteFields>),
 }
 
 /// Why a `PlaneMaterial`'s constants are unusable.
@@ -58,6 +71,11 @@ pub enum PlaneMaterialError {
     InvalidPoissonRatio,
     /// The constitutive matrix is not finite, symmetric positive definite.
     NotPositiveDefinite,
+    /// `fck` is not in `0 < fck <= 50` MPa (plan §1 point 2), or an `ecm`
+    /// override is not finite and positive.
+    InvalidFck,
+    /// A tensile-regularization `gamma` does not satisfy `0 < gamma < 1`.
+    InvalidRegularizationGamma,
 }
 
 impl PlaneMaterialError {
@@ -67,6 +85,12 @@ impl PlaneMaterialError {
             PlaneMaterialError::InvalidPoissonRatio => "Poisson ratio is out of range",
             PlaneMaterialError::NotPositiveDefinite => {
                 "the constitutive matrix is not symmetric positive definite"
+            }
+            PlaneMaterialError::InvalidFck => {
+                "fck must satisfy 0 < fck <= 50 MPa, and an Ecm override must be finite and positive"
+            }
+            PlaneMaterialError::InvalidRegularizationGamma => {
+                "tensile-regularization gamma must satisfy 0 < gamma < 1"
             }
         }
     }
@@ -134,14 +158,14 @@ impl PlaneMaterial {
                 Err(PlaneMaterialError::InvalidPoissonRatio)
             }
         };
-        match *self {
+        match self {
             PlaneMaterial::PlaneStress { e, nu } => {
-                positive(e)?;
-                poisson(nu, 1.0)?;
+                positive(*e)?;
+                poisson(*nu, 1.0)?;
             }
             PlaneMaterial::PlaneStrain { e, nu } => {
-                positive(e)?;
-                poisson(nu, 0.5)?;
+                positive(*e)?;
+                poisson(*nu, 0.5)?;
             }
             PlaneMaterial::Orthotropic {
                 ex,
@@ -150,9 +174,9 @@ impl PlaneMaterial {
                 g_xy,
                 angle,
             } => {
-                positive(ex)?;
-                positive(ey)?;
-                positive(g_xy)?;
+                positive(*ex)?;
+                positive(*ey)?;
+                positive(*g_xy)?;
                 if !nu_xy.is_finite() || !angle.is_finite() || nu_xy * nu_xy >= ex / ey {
                     return Err(PlaneMaterialError::InvalidPoissonRatio);
                 }
@@ -165,6 +189,16 @@ impl PlaneMaterial {
             }
             #[cfg(test)]
             PlaneMaterial::Probe { .. } => {}
+            PlaneMaterial::CsfmConcrete(fields) => {
+                if !(fields.fck > 0.0 && fields.fck <= 50.0) || positive(fields.ecm).is_err() {
+                    return Err(PlaneMaterialError::InvalidFck);
+                }
+                if let Some(gamma) = fields.gamma {
+                    if !(gamma.is_finite() && gamma > 0.0 && gamma < 1.0) {
+                        return Err(PlaneMaterialError::InvalidRegularizationGamma);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -244,11 +278,22 @@ impl PlaneMaterial {
             }
             #[cfg(test)]
             PlaneMaterial::Probe { .. } => PlaneMatrix::identity(),
+            // Nonlinear and never called: `is_linear()` is false for
+            // `CsfmConcrete`, so the only caller of `d_matrix()`
+            // (`Quad4Formulation::Enhanced`) is rejected at `validate` time
+            // before this could run. `trial_stress_tangent` is overridden
+            // below and does not go through `d_matrix()`.
+            PlaneMaterial::CsfmConcrete(_) => {
+                unreachable!("d_matrix() is not defined for the nonlinear CsfmConcrete law")
+            }
         }
     }
 
     /// Stress and tangent at `strain`, always relative to the committed state.
     pub fn trial_stress_tangent(&self, strain: &PlaneVector) -> (PlaneVector, PlaneMatrix) {
+        if let PlaneMaterial::CsfmConcrete(fields) = self {
+            return csfm_concrete::evaluate(fields, strain);
+        }
         let d = self.d_matrix();
         #[cfg(test)]
         if let PlaneMaterial::Probe { last } = *self {
@@ -279,6 +324,7 @@ impl PlaneMaterial {
             | PlaneMaterial::PlaneStrain { .. } => true,
             #[cfg(test)]
             PlaneMaterial::Probe { .. } => false,
+            PlaneMaterial::CsfmConcrete(_) => false,
         }
     }
 }

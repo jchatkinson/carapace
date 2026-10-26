@@ -68,6 +68,8 @@ dependencies = [
  "arrayvec",
  "faer",
  "nalgebra",
+ "serde",
+ "serde_json",
  "slotmap",
 ]
 

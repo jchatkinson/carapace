@@ -27,7 +27,8 @@ pub use load_pattern::{
     ElementLoad, ElementLoad3, ElementLoadComponents, LoadPatternId, LoadSeries,
 };
 pub use materials::{
-    Material, Pinching4DmgCyc, Pinching4State, PlaneMaterial, PlaneMaterialError, PlaneMatrix,
+    CsfmConcreteFields, CsfmConcreteLaw, CsfmRebarFields, CsfmRebarRouting, Material,
+    MaterialError, Pinching4DmgCyc, Pinching4State, PlaneMaterial, PlaneMaterialError, PlaneMatrix,
     PlaneVector, ShellMatrix, ShellSection, ShellSectionError, ShellVector,
 };
 pub use node::{
