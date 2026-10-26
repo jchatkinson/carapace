@@ -230,8 +230,12 @@ impl SparseFactorization {
         DVector::from_fn(n, |i, _| x[i])
     }
 
-    #[cfg(test)]
-    fn is_cholesky(&self) -> bool {
+    /// Whether this factorization took the Cholesky path (`false` means LU) — the routing
+    /// `SparseSolver::factor` chose based on `is_symmetric`/positive-definiteness, exposed so a
+    /// caller that must prove a specific tangent took a specific path (plan `docs/csfm-plan.md`
+    /// §4 H: a nonsymmetric CSFM tangent must go to LU and not Cholesky) can assert it instead of
+    /// just trusting the solve happened to come out right.
+    pub fn is_cholesky(&self) -> bool {
         matches!(self.0, Factors::Cholesky(_))
     }
 }
@@ -428,5 +432,83 @@ mod tests {
         different.push((2, 4, 1.0));
         different.push((4, 2, 1.5));
         assert!(!is_symmetric(&matrix(5, &different)));
+    }
+
+    /// Plan `docs/csfm-plan.md` §4 H: the dumped cracked-CSFM tangent (`cracked-tangent.json`, a
+    /// genuinely nonsymmetric free-DOF stiffness from a converged, cracked `span-beam` state, kc2
+    /// coupling intact) goes to LU — never Cholesky, which would silently solve the wrong system —
+    /// and faer's LU solves it to relative residual < 1e-10. This lives here (an internal `solver`
+    /// test) rather than in `core/tests/csfm/` because `SparseMatrix` is `pub(crate)`: building one
+    /// from raw triplets is not part of the public API `core/tests/` consumes.
+    #[test]
+    fn the_cracked_csfm_tangent_fixture_is_nonsymmetric_and_lu_solves_it_accurately() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/csfm/fixtures/cracked-tangent.json"
+        );
+        let text = std::fs::read_to_string(path).expect("cracked-tangent.json fixture");
+        let fixture: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+
+        let n = fixture["n"].as_u64().unwrap() as usize;
+        let rows = fixture["stiffness"]["rows"].as_array().unwrap();
+        let cols = fixture["stiffness"]["cols"].as_array().unwrap();
+        let values = fixture["stiffness"]["values"].as_array().unwrap();
+        let triplets: Vec<Triplet<usize, usize, f64>> = rows
+            .iter()
+            .zip(cols)
+            .zip(values)
+            .map(|((r, c), v)| {
+                Triplet::new(
+                    r.as_u64().unwrap() as usize,
+                    c.as_u64().unwrap() as usize,
+                    v.as_f64().unwrap(),
+                )
+            })
+            .collect();
+        let k = SparseMatrix::try_new_from_triplets(n, n, &triplets).unwrap();
+        let max_asymmetry = fixture["maxAsymmetry"].as_f64().unwrap();
+        assert!(
+            max_asymmetry > 1.0,
+            "fixture should be genuinely nonsymmetric, got maxAsymmetry = {max_asymmetry}"
+        );
+        assert!(
+            !is_symmetric(&k),
+            "a kc2-coupled cracked tangent must fail the symmetry check"
+        );
+
+        let rhs = DVector::from_vec(
+            fixture["rhs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap())
+                .collect(),
+        );
+
+        let solver = SparseSolver::new();
+        let factor = solver
+            .factor(&k)
+            .expect("the fixture's tangent is nonsingular");
+        assert!(
+            !factor.is_cholesky(),
+            "a nonsymmetric matrix must route to LU, not Cholesky"
+        );
+        let x = factor.solve(&rhs);
+
+        // Relative residual against the *actual* (nonsymmetric) matrix — a Cholesky solve of the
+        // same values, reading only the lower triangle, would generally fail this on a matrix this
+        // asymmetric, so this also guards the routing even without `is_cholesky`.
+        let residual = k.as_ref() * faer::col::Col::from_fn(n, |i| x[i])
+            - faer::col::Col::from_fn(n, |i| rhs[i]);
+        let residual_norm: f64 = (0..n)
+            .map(|i| residual[i] * residual[i])
+            .sum::<f64>()
+            .sqrt();
+        let rhs_norm = rhs.norm();
+        assert!(
+            residual_norm / rhs_norm < 1e-10,
+            "relative residual {} exceeds 1e-10",
+            residual_norm / rhs_norm
+        );
     }
 }
