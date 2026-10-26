@@ -1,6 +1,8 @@
 # CSFM in Carapace: implementation and test plan
 
-Status: plan. Nothing in this document is implemented yet.
+Status: phase 0 in progress. The golden fixtures and their measured sensitivities are in
+[core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md). Still to do in phase 0: the tangent checker, the
+§4 C reference calculations, and the §4 G and H fixtures. Nothing in Carapace's code has changed yet.
 
 Goal: move the Compatible Stress Field Method (CSFM) analysis from CalcsApp (`../calcs.app/lib/fem`, TypeScript)
 into Carapace, so that Carapace becomes the solver CalcsApp ships. This plan covers only the CSFM procedure and its
