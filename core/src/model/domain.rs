@@ -442,6 +442,51 @@ where
         resistance.total - applied
     }
 
+    /// `reaction` for every node and DOF in one pass over the elements and patterns. The per-DOF
+    /// `reaction` sweeps every element on each call, so reading all of them with it is quadratic
+    /// in the model size.
+    pub fn reactions_all(&self, pseudo_time: f64) -> slotmap::SecondaryMap<NId, [f64; NDOF]> {
+        let view = self.node_view();
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        let mut totals = slotmap::SecondaryMap::new();
+        for node in self.nodes.keys() {
+            totals.insert(node, [0.0; NDOF]);
+        }
+
+        let mut resistance = AccumulateDofs {
+            totals: &mut totals,
+            sign: 1.0,
+        };
+        for (element_id, element) in self.elements.iter() {
+            let load = effective_element_load(&active, element_id);
+            element.assemble_tangent(&view, load.as_ref(), &mut resistance);
+        }
+
+        for (_, pattern) in self.load_patterns.iter() {
+            let factor = pattern.factor(pseudo_time);
+            if factor == 0.0 {
+                continue;
+            }
+            for node in self.nodes.keys() {
+                if let Some(nodal_load) = pattern.nodal_load(node) {
+                    for (total, load) in totals[node].iter_mut().zip(nodal_load) {
+                        *total -= factor * load;
+                    }
+                }
+            }
+            let mut applied = AccumulateDofs {
+                totals: &mut totals,
+                sign: -factor,
+            };
+            for (element_id, element) in self.elements.iter() {
+                if let Some(element_load) = pattern.element_load(element_id) {
+                    element.assemble_load(&view, Some(element_load), &mut applied);
+                }
+            }
+        }
+        totals
+    }
+
     /// Total lumped mass at a physical node/DOF, including attached elements.
     /// Unlike the reduced mass diagonal this also includes restrained DOFs.
     pub fn lumped_mass_at(&self, node: NId, dof: usize) -> f64 {
@@ -1578,6 +1623,38 @@ impl<NId> PickDof<NId> {
             node,
             dof: dof as u8,
             total: 0.0,
+        }
+    }
+}
+
+/// Adds every `(node, dof)` entry of an element's resistance or load vector into `totals`, scaled
+/// by `sign` — `Domain::reactions_all`'s single-pass counterpart of `PickDof`.
+struct AccumulateDofs<'a, NId: Key, const NDOF: usize> {
+    totals: &'a mut slotmap::SecondaryMap<NId, [f64; NDOF]>,
+    sign: f64,
+}
+
+impl<NId: Key, const NDOF: usize> TangentSink<NId> for AccumulateDofs<'_, NId, NDOF> {
+    fn add<const N: usize>(
+        &mut self,
+        dofs: &[DofRef<NId>; N],
+        _k: &SMatrix<f64, N, N>,
+        r: &SVector<f64, N>,
+    ) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if let Some(total) = self.totals.get_mut(node) {
+                total[slot as usize] += self.sign * r[a];
+            }
+        }
+    }
+}
+
+impl<NId: Key, const NDOF: usize> VectorSink<NId> for AccumulateDofs<'_, NId, NDOF> {
+    fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if let Some(total) = self.totals.get_mut(node) {
+                total[slot as usize] += self.sign * v[a];
+            }
         }
     }
 }
