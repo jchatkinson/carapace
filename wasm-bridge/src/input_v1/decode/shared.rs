@@ -15,8 +15,8 @@ use slotmap::Key;
 use super::stages::{compile_stages, load_series_of};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::model_output::ModelOutput;
-use crate::input_v1::sequence::{GaussQuantity, RecorderSpec};
-use crate::input_v1::session::{ModelSession, ResolvedRecorder};
+use crate::input_v1::sequence::{BulkQuantity, BulkTable, GaussQuantity, RecorderSpec};
+use crate::input_v1::session::{ModelSession, ResolvedBulk, ResolvedRecorder};
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, EqualDofTable, FiberTable, FrictionRow,
     IntegrationSpec, LinearConstraintTable, LoadPatternTable, NodeTable, OrientRow,
@@ -441,6 +441,17 @@ impl<EId: Copy> ElementIds<EId> {
         self.by_kind[kind as usize] = ids;
     }
 
+    /// Every element id of `kind`, in table order (`ElementKindNotInProfile` for a kind of the
+    /// other profile).
+    pub(super) fn all(&self, kind: ElementKind, ndm: u8) -> Result<&[EId], DecodeError> {
+        if !kind.in_profile(ndm) {
+            return Err(DecodeError::ElementKindNotInProfile {
+                table: kind.table(),
+            });
+        }
+        Ok(&self.by_kind[kind as usize])
+    }
+
     /// `ElementKindNotInProfile` for a kind of the other profile (`ndm`),
     /// `UnknownElementIndex` for a row past the end of the kind's table.
     pub(super) fn get(&self, kind: ElementKind, row: u32, ndm: u8) -> Result<EId, DecodeError> {
@@ -602,6 +613,7 @@ where
         element_loads_by_stage,
     )?;
 
+    let mut bulks = Vec::new();
     let recorders = input
         .sequence
         .recorders
@@ -721,6 +733,65 @@ where
                         component,
                     }
                 }
+                RecorderSpec::Bulk { table, quantity } => {
+                    let not_applicable = |reason| DecodeError::RecorderNotApplicable {
+                        recorder: index as u32,
+                        reason,
+                    };
+                    let kind = match table {
+                        BulkTable::Triangles => ElementKind::Tri3,
+                        BulkTable::Quads => ElementKind::Quad4,
+                        BulkTable::EmbeddedBars => ElementKind::EmbeddedBar,
+                    };
+                    let bars = table == BulkTable::EmbeddedBars;
+                    match quantity {
+                        BulkQuantity::AxialForce | BulkQuantity::Ruptured if !bars => {
+                            return Err(not_applicable(
+                                "axialForce and ruptured belong to the embeddedBars table",
+                            ))
+                        }
+                        BulkQuantity::PrincipalStrain
+                        | BulkQuantity::PrincipalStress
+                        | BulkQuantity::Kc2
+                            if bars =>
+                        {
+                            return Err(not_applicable(
+                                "principal values and kc2 belong to the triangles and quads tables",
+                            ))
+                        }
+                        _ => {}
+                    }
+                    let ids = elements.all(kind, ndm)?.to_vec();
+                    let Some(&first) = ids.first() else {
+                        return Err(not_applicable("the table is empty"));
+                    };
+                    let points = domain.element_gauss_point_count(first) as u32;
+                    if quantity == BulkQuantity::Kc2 {
+                        let csfm = ids.iter().all(|&id| {
+                            (0..points as usize).all(|p| domain.element_gauss_kc2(id, p).is_some())
+                        });
+                        if !csfm {
+                            return Err(not_applicable("kc2 needs a csfmConcrete element"));
+                        }
+                    }
+                    let components = if bars || quantity == BulkQuantity::Kc2 {
+                        1
+                    } else {
+                        3
+                    };
+                    bulks.push(ResolvedBulk {
+                        recorder_index: index,
+                        elements: ids,
+                        points,
+                        components,
+                        quantity,
+                        bars,
+                        emitted: 0,
+                    });
+                    ResolvedRecorder::Bulk {
+                        bulk: bulks.len() as u32 - 1,
+                    }
+                }
                 RecorderSpec::EmbeddedBar {
                     bar,
                     segment,
@@ -770,6 +841,7 @@ where
         node_ids,
         stages,
         recorders,
+        bulks,
         input.header.record_initial,
     ))
 }

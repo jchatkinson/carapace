@@ -110,6 +110,50 @@ where
     values.get(component as usize).copied()
 }
 
+/// Appends one frame of `bulk`'s values (element, then point, then component order). A value the
+/// model cannot produce (it never happens for a decoded recorder) is `NaN`, so frames keep their
+/// width.
+fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    bulk: &ResolvedBulk<E::Id>,
+    out: &mut Vec<f64>,
+) where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    use super::sequence::BulkQuantity;
+    for &element in &bulk.elements {
+        if bulk.bars {
+            let quantity = match bulk.quantity {
+                BulkQuantity::AxialForce => EmbeddedBarQuantity::AxialForce,
+                BulkQuantity::Strain => EmbeddedBarQuantity::Strain,
+                BulkQuantity::Stress => EmbeddedBarQuantity::Stress,
+                _ => EmbeddedBarQuantity::Ruptured,
+            };
+            out.push(embedded_bar_value(domain, element, quantity).unwrap_or(f64::NAN));
+        } else if bulk.quantity == BulkQuantity::Kc2 {
+            for point in 0..bulk.points as usize {
+                out.push(domain.element_gauss_kc2(element, point).unwrap_or(f64::NAN));
+            }
+        } else {
+            let responses = domain.element_gauss_responses(element);
+            for point in 0..bulk.points as usize {
+                let frame = responses
+                    .as_ref()
+                    .and_then(|r| r.get(point))
+                    .map(|response| match bulk.quantity {
+                        BulkQuantity::Stress => response.stress,
+                        BulkQuantity::PrincipalStrain => principal(response.strain, true),
+                        BulkQuantity::PrincipalStress => principal(response.stress, false),
+                        _ => response.strain,
+                    })
+                    .unwrap_or([f64::NAN; 3]);
+                out.extend_from_slice(&frame);
+            }
+        }
+    }
+}
+
 fn embedded_bar_value<const NDIM: usize, const NDOF: usize, NId, E>(
     domain: &Domain<NDIM, NDOF, NId, E>,
     element: E::Id,
@@ -404,6 +448,21 @@ pub enum ResolvedRecorder<NId, EId> {
         element: EId,
         quantity: super::sequence::EmbeddedBarQuantity,
     },
+    /// Index into `ModelSession::bulks`; contributes no scalar sample.
+    Bulk {
+        bulk: u32,
+    },
+}
+
+/// A decoded `RecorderSpec::Bulk`.
+pub(super) struct ResolvedBulk<EId> {
+    pub recorder_index: usize,
+    pub elements: Vec<EId>,
+    pub points: u32,
+    pub components: u32,
+    pub quantity: super::sequence::BulkQuantity,
+    pub bars: bool,
+    pub emitted: u32,
 }
 
 pub(super) struct CompiledStage<NId, EId, Load> {
@@ -503,6 +562,25 @@ pub struct StepOutcome {
     /// (`src/app/types/resultsStorage.ts`); the caller assigns `blockIndex` and packs `data`,
     /// since neither concept exists on this side of the wasm boundary.
     pub recorder_batches: Vec<RecorderBatch>,
+    /// This call's `bulk` recorder output, one entry per bulk recorder that recorded a step.
+    pub bulk_batches: Vec<BulkBatch>,
+}
+
+/// One bulk recorder's output over the accepted steps of one `advance` call. `values` holds
+/// `progress.len()` consecutive frames of `elements * points * components` numbers each, in
+/// element, then point, then component order (element = table row, or flat segment index for
+/// `embeddedBars`); `progress[i]` is frame `i`'s load factor or time.
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkBatch {
+    pub recorder_index: usize,
+    pub stage_index: usize,
+    pub first_sample: u32,
+    pub elements: u32,
+    pub points: u32,
+    pub components: u32,
+    pub progress: Vec<f64>,
+    pub values: Vec<f64>,
 }
 
 /// One computed mode of a finished `Modal` stage. `shape` is node-major over every node in the
@@ -634,6 +712,9 @@ where
     // without retaining the samples themselves.
     recorder_sample_counts: Vec<u32>,
     model_output: ModelOutput,
+    bulks: Vec<ResolvedBulk<E::Id>>,
+    // Per bulk recorder, per-advance only: (progress per frame, flat values).
+    current_bulk: Vec<(Vec<f64>, Vec<f64>)>,
 }
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> std::fmt::Debug
@@ -674,6 +755,7 @@ where
         node_ids: Vec<NId>,
         stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
         recorders: Vec<ResolvedRecorder<NId, E::Id>>,
+        bulks: Vec<ResolvedBulk<E::Id>>,
         record_initial: bool,
     ) -> Self {
         let pristine = stages
@@ -699,6 +781,8 @@ where
             current_batch,
             recorder_sample_counts,
             model_output: ModelOutput::default(),
+            current_bulk: vec![(Vec::new(), Vec::new()); bulks.len()],
+            bulks,
         }
     }
 
@@ -723,6 +807,10 @@ where
         for batch in &mut self.current_batch {
             batch.clear();
         }
+        for (progress, values) in &mut self.current_bulk {
+            progress.clear();
+            values.clear();
+        }
         self.continuation = None;
 
         if self.error.is_none() && self.runner.is_none() && self.current_stage < self.stages.len() {
@@ -737,6 +825,7 @@ where
                 error: self.error,
                 continuation: None,
                 recorder_batches: Vec::new(),
+                bulk_batches: Vec::new(),
             };
         }
 
@@ -791,6 +880,27 @@ where
             })
             .collect();
 
+        let bulk_batches = self
+            .bulks
+            .iter_mut()
+            .zip(&self.current_bulk)
+            .filter(|(_, (progress, _))| !progress.is_empty())
+            .map(|(bulk, (progress, values))| {
+                let first_sample = bulk.emitted;
+                bulk.emitted += progress.len() as u32;
+                BulkBatch {
+                    recorder_index: bulk.recorder_index,
+                    stage_index: stage_index_for_batch,
+                    first_sample,
+                    elements: bulk.elements.len() as u32,
+                    points: bulk.points,
+                    components: bulk.components,
+                    progress: progress.clone(),
+                    values: values.clone(),
+                }
+            })
+            .collect();
+
         StepOutcome {
             done: self.error.is_some() || self.current_stage >= self.stages.len(),
             stage_complete,
@@ -799,6 +909,7 @@ where
             error: self.error,
             continuation: self.continuation,
             recorder_batches,
+            bulk_batches,
         }
     }
 
@@ -1162,11 +1273,17 @@ where
                         }
                         ResolvedRecorder::NodeVel { .. }
                         | ResolvedRecorder::NodeAccel { .. }
-                        | ResolvedRecorder::ModeShape { .. } => None,
+                        | ResolvedRecorder::ModeShape { .. }
+                        | ResolvedRecorder::Bulk { .. } => None,
                     };
                     if let Some(value) = value {
                         batch.push((progress, value));
                     }
+                }
+                for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
+                {
+                    frames.push(progress);
+                    append_bulk_values(analysis.domain(), bulk, values);
                 }
             }
             StageRunner::Transient { analysis, .. } => {
@@ -1211,11 +1328,16 @@ where
                         ResolvedRecorder::EmbeddedBar { element, quantity } => {
                             embedded_bar_value(analysis.domain(), element, quantity)
                         }
-                        ResolvedRecorder::ModeShape { .. } => None,
+                        ResolvedRecorder::ModeShape { .. } | ResolvedRecorder::Bulk { .. } => None,
                     };
                     if let Some(value) = value {
                         batch.push((progress, value));
                     }
+                }
+                for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
+                {
+                    frames.push(progress);
+                    append_bulk_values(analysis.domain(), bulk, values);
                 }
             }
             StageRunner::Reset { .. } => {}

@@ -464,6 +464,32 @@ pub enum GaussQuantity {
     Kc2,
 }
 
+/// Which element table a [`RecorderSpec::Bulk`] records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum BulkTable {
+    Triangles,
+    Quads,
+    /// Every embedded-bar segment, in the flat order of `modelOutput`'s segment table.
+    EmbeddedBars,
+}
+
+/// What a [`RecorderSpec::Bulk`] reads. `strain`/`stress`/`principalStrain`/`principalStress`/`kc2`
+/// mean the same as [`GaussQuantity`] (on `triangles`/`quads`; `strain` and `stress` also on
+/// `embeddedBars`, one value per segment); `axialForce` and `ruptured` are
+/// [`EmbeddedBarQuantity`]'s and belong to `embeddedBars` only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum BulkQuantity {
+    Strain,
+    Stress,
+    PrincipalStrain,
+    PrincipalStress,
+    Kc2,
+    AxialForce,
+    Ruptured,
+}
+
 /// What a [`RecorderSpec::EmbeddedBar`] reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(rename_all = "camelCase")]
@@ -575,6 +601,18 @@ pub enum RecorderSpec {
         bar: u32,
         segment: u32,
         quantity: EmbeddedBarQuantity,
+    },
+    /// Every element (and Gauss point) of a table, every accepted step, as flat arrays: the
+    /// plotting form, since one scalar recorder per point would make batches enormous. Results
+    /// come back in `StepOutcome::bulkBatches`, not `recorderBatches`; this recorder's slot in
+    /// `recorderBatches` stays empty. Valid during `Static` and `Transient` stages. An empty
+    /// table, a quantity the table cannot produce (`axialForce`/`ruptured` on a continuum
+    /// table, principal values or `kc2` on `embeddedBars`), or `kc2` where a point is not
+    /// `csfmConcrete` is `DecodeError::RecorderNotApplicable`; a table of the other profile is
+    /// `ElementKindNotInProfile`.
+    Bulk {
+        table: BulkTable,
+        quantity: BulkQuantity,
     },
 }
 

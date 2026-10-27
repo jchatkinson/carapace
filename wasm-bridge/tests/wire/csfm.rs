@@ -907,3 +907,225 @@ fn new_recorder_decode_errors() {
         }
     );
 }
+
+// ---- bulk recorders ----
+
+use carapace_wasm::input_v1::sequence::{BulkQuantity, BulkTable};
+use carapace_wasm::input_v1::StepOutcome;
+
+fn bulk(table: BulkTable, quantity: BulkQuantity) -> RecorderSpec {
+    RecorderSpec::Bulk { table, quantity }
+}
+
+fn loaded_tie() -> CarapaceInputV1 {
+    let mut input = tie_model(
+        json!([bar(json!([0.0, 50.0, 200.0, 50.0]), json!({}))]),
+        "full",
+    );
+    input.nodal_loads.value = vec![40_000.0, 40_000.0];
+    input
+}
+
+/// Every accepted step's bulk values equal the per-point scalar recorders' samples, in
+/// element -> point -> component order.
+#[test]
+fn bulk_gauss_recorders_match_the_scalar_recorders_point_for_point() {
+    let mut input = loaded_tie();
+    let quantities = [
+        (BulkQuantity::Strain, GaussQuantity::Strain, 3),
+        (BulkQuantity::Stress, GaussQuantity::Stress, 3),
+        (
+            BulkQuantity::PrincipalStrain,
+            GaussQuantity::PrincipalStrain,
+            3,
+        ),
+        (
+            BulkQuantity::PrincipalStress,
+            GaussQuantity::PrincipalStress,
+            3,
+        ),
+        (BulkQuantity::Kc2, GaussQuantity::Kc2, 1),
+    ];
+    let mut recorders = Vec::new();
+    for &(bulk_quantity, _, _) in &quantities {
+        recorders.push(bulk(BulkTable::Quads, bulk_quantity));
+    }
+    let mut scalar_layout = Vec::new(); // (quantity index, first scalar recorder)
+    for (q, &(_, quantity, components)) in quantities.iter().enumerate() {
+        scalar_layout.push((q, recorders.len()));
+        for element_index in 0..2 {
+            for point in 0..4 {
+                for component in 0..components {
+                    recorders.push(RecorderSpec::GaussPoint {
+                        element_kind: ElementKind::Quad4,
+                        element_index,
+                        point,
+                        quantity,
+                        component,
+                    });
+                }
+            }
+        }
+    }
+    input.sequence.recorders = recorders;
+
+    let mut session = decode(input).unwrap();
+    let outcome = session.advance(100);
+    assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");
+    assert_eq!(outcome.bulk_batches.len(), quantities.len());
+    for &(q, first_scalar) in &scalar_layout {
+        let (_, _, components) = quantities[q];
+        let batch = &outcome.bulk_batches[q];
+        assert_eq!(batch.recorder_index, q);
+        assert_eq!(
+            (batch.elements, batch.points, batch.components),
+            (2, 4, components as u32)
+        );
+        assert_eq!(batch.first_sample, 0);
+        let steps = batch.progress.len();
+        assert_eq!(steps, 4);
+        let width = 2 * 4 * components as usize;
+        assert_eq!(batch.values.len(), steps * width);
+        for step in 0..steps {
+            for k in 0..width {
+                let scalar = outcome
+                    .recorder_batches
+                    .iter()
+                    .find(|b| b.recorder_index == first_scalar + k)
+                    .unwrap();
+                assert_eq!(
+                    batch.values[step * width + k],
+                    scalar.samples[step].1,
+                    "q{q} step {step} k{k}"
+                );
+                assert_eq!(batch.progress[step], scalar.samples[step].0);
+            }
+        }
+    }
+    // The scalar slots of bulk recorders stay empty.
+    assert!(outcome
+        .recorder_batches
+        .iter()
+        .all(|b| b.recorder_index >= quantities.len()));
+    // Principal tension passed the kc2 cap somewhere, so the kc2 array is not all ones.
+    assert!(outcome.bulk_batches[4].values.iter().any(|&k| k < 1.0));
+}
+
+#[test]
+fn bulk_embedded_bar_recorders_match_the_scalar_recorders() {
+    let mut input = loaded_tie();
+    let quantities = [
+        (BulkQuantity::AxialForce, EmbeddedBarQuantity::AxialForce),
+        (BulkQuantity::Strain, EmbeddedBarQuantity::Strain),
+        (BulkQuantity::Stress, EmbeddedBarQuantity::Stress),
+        (BulkQuantity::Ruptured, EmbeddedBarQuantity::Ruptured),
+    ];
+    let mut recorders: Vec<_> = quantities
+        .iter()
+        .map(|&(q, _)| bulk(BulkTable::EmbeddedBars, q))
+        .collect();
+    for &(_, quantity) in &quantities {
+        for segment in 0..2 {
+            recorders.push(RecorderSpec::EmbeddedBar {
+                bar: 0,
+                segment,
+                quantity,
+            });
+        }
+    }
+    input.sequence.recorders = recorders;
+    let mut session = decode(input).unwrap();
+    let outcome = session.advance(100);
+    assert!(outcome.done && outcome.error.is_none());
+    for (q, batch) in outcome.bulk_batches.iter().enumerate() {
+        assert_eq!((batch.elements, batch.points, batch.components), (2, 1, 1));
+        for step in 0..batch.progress.len() {
+            for segment in 0..2 {
+                let scalar = outcome
+                    .recorder_batches
+                    .iter()
+                    .find(|b| b.recorder_index == 4 + 2 * q + segment)
+                    .unwrap();
+                assert_eq!(batch.values[step * 2 + segment], scalar.samples[step].1);
+            }
+        }
+    }
+    assert!(outcome.bulk_batches[0].values.iter().any(|&f| f > 0.0));
+}
+
+/// A bulk recorder is paced like every other recorder: one entry per accepted step, with
+/// `firstSample` continuing across `advance` calls.
+#[test]
+fn bulk_batches_continue_across_advance_calls() {
+    let mut input = loaded_tie();
+    input.sequence.recorders = vec![bulk(BulkTable::Quads, BulkQuantity::Strain)];
+    let mut session = decode(input).unwrap();
+    let mut firsts = Vec::new();
+    let mut all_progress = Vec::<f64>::new();
+    loop {
+        let outcome: StepOutcome = session.advance(1);
+        for batch in &outcome.bulk_batches {
+            assert_eq!(batch.progress.len(), 1);
+            firsts.push(batch.first_sample);
+            all_progress.extend(&batch.progress);
+        }
+        if outcome.done {
+            break;
+        }
+    }
+    assert_eq!(firsts, vec![0, 1, 2, 3]);
+    assert_eq!(all_progress, vec![0.25, 0.5, 0.75, 1.0]);
+}
+
+#[test]
+fn bulk_recorder_decode_errors() {
+    let with = |input: CarapaceInputV1, recorder| {
+        let mut input = input;
+        input.sequence.recorders = vec![recorder];
+        decode_error(input)
+    };
+    let not_applicable = |reason| DecodeError::RecorderNotApplicable {
+        recorder: 0,
+        reason,
+    };
+    assert_eq!(
+        with(
+            loaded_tie(),
+            bulk(BulkTable::Quads, BulkQuantity::AxialForce)
+        ),
+        not_applicable("axialForce and ruptured belong to the embeddedBars table")
+    );
+    assert_eq!(
+        with(
+            loaded_tie(),
+            bulk(BulkTable::EmbeddedBars, BulkQuantity::PrincipalStrain)
+        ),
+        not_applicable("principal values and kc2 belong to the triangles and quads tables")
+    );
+    assert_eq!(
+        with(
+            loaded_tie(),
+            bulk(BulkTable::Triangles, BulkQuantity::Strain)
+        ),
+        not_applicable("the table is empty")
+    );
+    let mut plain = loaded_tie();
+    plain.plane_materials = vec![PlaneMaterialSpec::Isotropic {
+        e: 30_000.0,
+        nu: 0.2,
+        state: PlaneStateSpec::PlaneStress,
+    }];
+    assert_eq!(
+        with(plain, bulk(BulkTable::Quads, BulkQuantity::Kc2)),
+        not_applicable("kc2 needs a csfmConcrete element")
+    );
+    // No quads exist in a 3D model.
+    let mut input3 = serde_json::to_value(empty_input(3)).unwrap();
+    input3["nodes"] =
+        json!({ "coords": [0.0, 0.0, 0.0], "fixed": [0], "massNodeIndex": [], "mass": [] });
+    let input3: CarapaceInputV1 = serde_json::from_value(input3).unwrap();
+    assert_eq!(
+        with(input3, bulk(BulkTable::Quads, BulkQuantity::Strain)),
+        DecodeError::ElementKindNotInProfile { table: "quads" }
+    );
+}
