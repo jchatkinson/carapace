@@ -27,7 +27,7 @@ use slotmap::Key;
 
 use super::error::ModelErrorDetail;
 use super::model_output::ModelOutput;
-use super::sequence::{FiberResponseKind, GaussQuantity, ModalDampingAnchors};
+use super::sequence::{EmbeddedBarQuantity, FiberResponseKind, GaussQuantity, ModalDampingAnchors};
 
 /// Shared by `record_sample`'s `Static`/`Transient` arms: resolves a
 /// `ResolvedRecorder::Fiber` against whatever `element`'s current fiber
@@ -55,6 +55,21 @@ where
     })
 }
 
+/// Principal values `(v1, v2, theta)` of a plane tensor `[x, y, xy]`, `v1 >= v2`, with `theta` the
+/// counter-clockwise angle from global x to the `v1` direction. `shear_is_engineering` is true for
+/// strain, whose `xy` is `gamma = 2 * eps_xy`.
+fn principal(values: [f64; 3], shear_is_engineering: bool) -> [f64; 3] {
+    let half_shear = if shear_is_engineering {
+        values[2] / 2.0
+    } else {
+        values[2]
+    };
+    let average = (values[0] + values[1]) / 2.0;
+    let radius = ((values[0] - values[1]) / 2.0).hypot(half_shear);
+    let theta = 0.5 * (2.0 * half_shear).atan2(values[0] - values[1]);
+    [average + radius, average - radius, theta]
+}
+
 fn gauss_value<const NDIM: usize, const NDOF: usize, NId, E>(
     domain: &Domain<NDIM, NDOF, NId, E>,
     element: E::Id,
@@ -71,8 +86,16 @@ where
         let values = match quantity {
             GaussQuantity::Strain => response.strain,
             GaussQuantity::Stress => response.resultant,
+            GaussQuantity::PrincipalStrain
+            | GaussQuantity::PrincipalStress
+            | GaussQuantity::Kc2 => return None,
         };
         return values.get(component as usize).copied();
+    }
+    if quantity == GaussQuantity::Kc2 {
+        return (component == 0)
+            .then(|| domain.element_gauss_kc2(element, point as usize))
+            .flatten();
     }
     let response = *domain
         .element_gauss_responses(element)?
@@ -80,8 +103,29 @@ where
     let values = match quantity {
         GaussQuantity::Strain => response.strain,
         GaussQuantity::Stress => response.stress,
+        GaussQuantity::PrincipalStrain => principal(response.strain, true),
+        GaussQuantity::PrincipalStress => principal(response.stress, false),
+        GaussQuantity::Kc2 => unreachable!("handled above"),
     };
     values.get(component as usize).copied()
+}
+
+fn embedded_bar_value<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    element: E::Id,
+    quantity: EmbeddedBarQuantity,
+) -> Option<f64>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    let (force, strain, stress, ruptured) = domain.element_embedded_bar_response(element)?;
+    Some(match quantity {
+        EmbeddedBarQuantity::AxialForce => force,
+        EmbeddedBarQuantity::Strain => strain,
+        EmbeddedBarQuantity::Stress => stress,
+        EmbeddedBarQuantity::Ruptured => f64::from(ruptured),
+    })
 }
 
 /// `AnalysisError`'s fields, restated so `advance`'s result doesn't need to
@@ -353,6 +397,12 @@ pub enum ResolvedRecorder<NId, EId> {
         point: u32,
         quantity: super::sequence::GaussQuantity,
         component: u8,
+    },
+    /// Valid during `Static`/`Transient` (`RecorderSpec::EmbeddedBar`'s doc comment); `element`
+    /// is the segment's `EmbeddedBar` element.
+    EmbeddedBar {
+        element: EId,
+        quantity: super::sequence::EmbeddedBarQuantity,
     },
 }
 
@@ -1107,6 +1157,9 @@ where
                             quantity,
                             component,
                         } => gauss_value(analysis.domain(), element, point, quantity, component),
+                        ResolvedRecorder::EmbeddedBar { element, quantity } => {
+                            embedded_bar_value(analysis.domain(), element, quantity)
+                        }
                         ResolvedRecorder::NodeVel { .. }
                         | ResolvedRecorder::NodeAccel { .. }
                         | ResolvedRecorder::ModeShape { .. } => None,
@@ -1155,6 +1208,9 @@ where
                             quantity,
                             component,
                         } => gauss_value(analysis.domain(), element, point, quantity, component),
+                        ResolvedRecorder::EmbeddedBar { element, quantity } => {
+                            embedded_bar_value(analysis.domain(), element, quantity)
+                        }
                         ResolvedRecorder::ModeShape { .. } => None,
                     };
                     if let Some(value) = value {

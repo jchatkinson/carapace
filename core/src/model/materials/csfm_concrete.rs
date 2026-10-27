@@ -307,6 +307,12 @@ pub(super) fn evaluate(f: &CsfmConcreteFields, strain: &PlaneVector) -> (PlaneVe
 /// `softening`, ...) — both limits are either the plan §6 decision-5
 /// constant or a caller-supplied override — so this takes only the strain
 /// and the config, unlike [`evaluate`].  Utilizations are not clamped.
+/// Kaufmann's `kc2` at `strain`: `kc2_of` of the principal tension strain.
+pub(super) fn kc2(strain: &PlaneVector, softening: bool) -> f64 {
+    let (eps1, _, _) = principal(strain);
+    kc2_of(eps1, softening)
+}
+
 pub(super) fn limit_utilization(
     strain: &PlaneVector,
     config: &LimitStateConfig,

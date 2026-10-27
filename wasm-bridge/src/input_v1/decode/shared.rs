@@ -14,7 +14,8 @@ use slotmap::Key;
 
 use super::stages::{compile_stages, load_series_of};
 use crate::input_v1::error::DecodeError;
-use crate::input_v1::sequence::RecorderSpec;
+use crate::input_v1::model_output::ModelOutput;
+use crate::input_v1::sequence::{GaussQuantity, RecorderSpec};
 use crate::input_v1::session::{ModelSession, ResolvedRecorder};
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, EqualDofTable, FiberTable, FrictionRow,
@@ -479,6 +480,7 @@ pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     input: &CarapaceInputV1,
     node_ids: Vec<NId>,
     elements: ElementIds<E::Id>,
+    model_output: &ModelOutput,
     make_load: impl Fn(&ElementLoadSpec) -> Option<E::Load>,
 ) -> Result<ModelSession<NDIM, NDOF, NId, E>, DecodeError>
 where
@@ -701,12 +703,55 @@ where
                             count: count as u32,
                         });
                     }
-                    component_within(component, domain.element_gauss_component_count(element))?;
+                    if quantity == GaussQuantity::Kc2 {
+                        component_within(component, 1)?;
+                        if domain.element_gauss_kc2(element, point as usize).is_none() {
+                            return Err(DecodeError::RecorderNotApplicable {
+                                recorder: index as u32,
+                                reason: "kc2 needs a csfmConcrete element",
+                            });
+                        }
+                    } else {
+                        component_within(component, domain.element_gauss_component_count(element))?;
+                    }
                     ResolvedRecorder::GaussPoint {
                         element,
                         point,
                         quantity,
                         component,
+                    }
+                }
+                RecorderSpec::EmbeddedBar {
+                    bar,
+                    segment,
+                    quantity,
+                } => {
+                    if ndm == 3 {
+                        return Err(DecodeError::ElementKindNotInProfile {
+                            table: ElementKind::EmbeddedBar.table(),
+                        });
+                    }
+                    let group = model_output.embedded_bars.get(bar as usize).ok_or(
+                        DecodeError::UnknownElementIndex {
+                            table: ElementKind::EmbeddedBar.table(),
+                            row: bar,
+                        },
+                    )?;
+                    if segment as usize >= group.segments.len() {
+                        return Err(DecodeError::InvalidEmbeddedBarSegment {
+                            recorder: index as u32,
+                            bar,
+                            segment,
+                            count: group.segments.len() as u32,
+                        });
+                    }
+                    ResolvedRecorder::EmbeddedBar {
+                        element: elements.get(
+                            ElementKind::EmbeddedBar,
+                            group.first_segment + segment,
+                            ndm,
+                        )?,
+                        quantity,
                     }
                 }
             })

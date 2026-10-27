@@ -452,6 +452,29 @@ pub enum FiberResponseKind {
 pub enum GaussQuantity {
     Strain,
     Stress,
+    /// Principal strains of a plane point: components `0`, `1`, `2` are `eps_1 >= eps_2` and the
+    /// angle `theta` (radians, counter-clockwise from global x to the `eps_1` direction). Records
+    /// nothing for a shell.
+    PrincipalStrain,
+    /// Principal stresses `sigma_1 >= sigma_2` and `theta`, as `PrincipalStrain`.
+    PrincipalStress,
+    /// Kaufmann's compression-softening coefficient `kc2` of a `csfmConcrete` point (component `0`
+    /// only; `1` with softening off or without principal tension). Any other point is
+    /// `DecodeError::RecorderNotApplicable`.
+    Kc2,
+}
+
+/// What a [`RecorderSpec::EmbeddedBar`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum EmbeddedBarQuantity {
+    /// `stress * area` (N, tension positive).
+    AxialForce,
+    Strain,
+    Stress,
+    /// `1` when a `csfmRebar` segment is past its rupture strain, else `0` (always `0` for any other
+    /// material).
+    Ruptured,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
@@ -543,6 +566,15 @@ pub enum RecorderSpec {
         point: u32,
         quantity: GaussQuantity,
         component: u8,
+    },
+    /// One quantity of one embedded-bar segment (`bar` is an `embeddedBars` row, `segment` its
+    /// piece in `modelOutput`'s segment table). Valid during `Static` and `Transient` stages.
+    /// A `bar` past the table is `UnknownElementIndex`, a `segment` past the bar's piece count
+    /// `InvalidEmbeddedBarSegment`, and the recorder in a 3D model `ElementKindNotInProfile`.
+    EmbeddedBar {
+        bar: u32,
+        segment: u32,
+        quantity: EmbeddedBarQuantity,
     },
 }
 

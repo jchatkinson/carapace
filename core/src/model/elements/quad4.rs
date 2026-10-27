@@ -359,6 +359,14 @@ impl Quad4 {
             .collect()
     }
 
+    /// `kc2` at Gauss point `point` (`None` out of range or for a non-`CsfmConcrete` material).
+    pub(super) fn gauss_kc2(&self, view: &PlaneView<'_>, point: usize) -> Option<f64> {
+        let material = self.materials.get(point)?;
+        let u = plane_displacement::<4, 8>(&self.nodes, view);
+        let strains = self.strains(&self.cache_or_compute(view), &u);
+        material.csfm_concrete_kc2(&strains[point])
+    }
+
     /// The worst `CsfmConcrete` limit utilization among the four Gauss
     /// points (`None` if no point holds a `CsfmConcrete` material, or for
     /// `Enhanced`'s internal-mode strain — this reads the same `strains`

@@ -315,6 +315,17 @@ impl PlaneMaterial {
         self.clone()
     }
 
+    /// `CsfmConcrete`-only: Kaufmann's compression-softening coefficient `kc2` at `strain`
+    /// (`1` with softening off or without principal tension; `None` for any other material).
+    pub fn csfm_concrete_kc2(&self, strain: &PlaneVector) -> Option<f64> {
+        match self {
+            PlaneMaterial::CsfmConcrete(fields) => {
+                Some(csfm_concrete::kc2(strain, fields.softening))
+            }
+            _ => None,
+        }
+    }
+
     /// `CsfmConcrete`-only: `(utilization, LimitKind)` at `strain` (plan
     /// §2.5 point 3) — crushing always, and the tensile-strain criterion
     /// instead when `config.concrete_tensile_limit` is usable and higher.

@@ -400,3 +400,62 @@ fn domain_reports_the_controlling_element_and_kind() {
         "rebar should be stressed but nowhere near its own limit: {rebar_utilization}"
     );
 }
+
+/// `Domain::element_embedded_bar_response` is the embedded-bar recorder's source: axial force
+/// (`stress * area`), strain, stress and the rupture flag; `element_gauss_kc2` is the `kc2` recorder's.
+/// A bar along a Tri3 edge is stretched past `CsfmRebar`'s rupture strain, then not.
+#[test]
+fn embedded_bar_response_and_gauss_kc2_report_the_recorder_quantities() {
+    use carapace_core::model::{CsfmConcreteLaw, PlaneMaterial, Tri3};
+
+    let rebar = Material::csfm_rebar(
+        200_000.0, 500.0, 540.0, 0.05, 2.9, 32000.0, 16.0, 0.02, 0.67, false,
+    )
+    .unwrap();
+    let eps_u = 0.05;
+    let area = 2.0;
+    let concrete =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, true, None)
+            .unwrap();
+    for (ux, ruptured) in [(0.9 * eps_u * 100.0, false), (1.1 * eps_u * 100.0, true)] {
+        let mut domain: Domain = Domain::new();
+        let coords = [[0.0, 0.0], [100.0, 0.0], [0.0, 100.0]];
+        let ids: [NodeId; 3] = std::array::from_fn(|i| {
+            let mut node = Node::new(coords[i]);
+            if i == 1 {
+                node.displacement = [ux, 0.0, 0.0];
+            }
+            domain.add_node(node)
+        });
+        let tri = domain.add_element(Element::Tri3(Tri3::new(
+            ids[0],
+            ids[1],
+            ids[2],
+            1.0,
+            concrete.clone(),
+        )));
+        let bar = domain.add_element(Element::EmbeddedBar(EmbeddedBar::in_tri3(
+            ids,
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0],
+            100.0,
+            area,
+            rebar.clone(),
+        )));
+        let (force, strain, stress, flag) = domain.element_embedded_bar_response(bar).unwrap();
+        let gauss = domain.element_gauss_responses(bar).unwrap()[0];
+        assert_eq!((strain, stress), (gauss.strain[0], gauss.stress[0]));
+        assert!((strain - ux / 100.0).abs() < 1e-14);
+        assert_eq!(force, stress * area);
+        assert_eq!(flag, ruptured, "ux {ux}");
+        // The concrete point sees principal tension 0.04 here, so softening is active.
+        let kc2 = domain.element_gauss_kc2(tri, 0).unwrap();
+        let eps1 = ux / 100.0;
+        assert!((kc2 - (1.0 / (0.8 + 140.0 * eps1)).min(1.0)).abs() < 1e-14);
+        // Only a CsfmConcrete point has kc2; a bar, an unknown point and a plain tri do not.
+        assert_eq!(domain.element_gauss_kc2(bar, 0), None);
+        assert_eq!(domain.element_gauss_kc2(tri, 1), None);
+        assert_eq!(domain.element_embedded_bar_response(tri), None);
+    }
+}

@@ -642,3 +642,38 @@ fn tensile_strain_utilization_is_opt_in_and_can_control() {
     assert!((at_limit - 1.0).abs() < 1e-9, "{at_limit}");
     assert!(above > 1.0, "{above}");
 }
+
+/// `csfm_concrete_kc2` reports Kaufmann's compression-softening coefficient at a strain state:
+/// `min(1, 1 / (0.8 + 140 * eps_1))` with `eps_1 = max(0, principal eps_1)`, and `1` when softening
+/// is off. `None` for any other plane material.
+#[test]
+fn kc2_follows_the_principal_tension_strain() {
+    let on =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, true, None)
+            .unwrap();
+    let off =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap();
+    // Principal tension 0.005 (uniaxial: x only), well past the cap's 0.2 / 140.
+    let tension = PlaneVector::new(0.005, 0.0, 0.0);
+    assert!((on.csfm_concrete_kc2(&tension).unwrap() - 1.0 / 1.5).abs() < 1e-14);
+    assert_eq!(off.csfm_concrete_kc2(&tension), Some(1.0));
+    // Below the cap and in compression kc2 is exactly 1.
+    assert_eq!(
+        on.csfm_concrete_kc2(&PlaneVector::new(0.001, 0.0, 0.0)),
+        Some(1.0)
+    );
+    assert_eq!(
+        on.csfm_concrete_kc2(&PlaneVector::new(-0.002, -0.001, 0.0)),
+        Some(1.0)
+    );
+    // Rotated: pure shear gamma = 0.01 has principal strains +-0.005.
+    let shear = PlaneVector::new(0.0, 0.0, 0.01);
+    assert!((on.csfm_concrete_kc2(&shear).unwrap() - 1.0 / 1.5).abs() < 1e-14);
+    assert_eq!(
+        PlaneMaterial::plane_stress(30_000.0, 0.2)
+            .unwrap()
+            .csfm_concrete_kc2(&tension),
+        None
+    );
+}

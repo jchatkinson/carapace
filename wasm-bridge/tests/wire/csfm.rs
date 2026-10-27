@@ -4,6 +4,7 @@
 use crate::common::empty_input;
 use carapace_core::model::{CsfmConcreteLaw, Material, PlaneMaterial};
 use carapace_wasm::input_v1::materials::resolve_materials;
+use carapace_wasm::input_v1::tables::{ElementKind, PlaneMaterialSpec, PlaneStateSpec};
 use carapace_wasm::input_v1::{decode, CarapaceInputV1, DecodeError};
 use serde_json::json;
 
@@ -703,4 +704,206 @@ fn invalid_material_limits_are_decode_errors() {
             }
         );
     }
+}
+
+// ---- recorders: principal values, kc2, embedded bars ----
+
+use carapace_wasm::input_v1::sequence::{EmbeddedBarQuantity, GaussQuantity};
+
+fn last_value(outcome: &carapace_wasm::input_v1::StepOutcome, recorder: usize) -> f64 {
+    crate::common::last_sample(outcome, recorder)
+        .unwrap_or_else(|| panic!("recorder {recorder} recorded nothing"))
+        .1
+}
+
+/// The tie model pulled hard enough (400 kN) that quad 0's principal tension passes the `kc2`
+/// cap (`0.2 / 140`), with one recorder of every new kind.
+#[test]
+fn principal_kc2_and_embedded_bar_recorders_report_consistent_values() {
+    let mut input = tie_model(
+        json!([bar(json!([0.0, 50.0, 200.0, 50.0]), json!({}))]),
+        "full",
+    );
+    input.nodal_loads.value = vec![40_000.0, 40_000.0];
+    let gauss = |quantity, component| RecorderSpec::GaussPoint {
+        element_kind: ElementKind::Quad4,
+        element_index: 0,
+        point: 0,
+        quantity,
+        component,
+    };
+    let mut recorders = Vec::new();
+    for quantity in [
+        GaussQuantity::Strain,
+        GaussQuantity::Stress,
+        GaussQuantity::PrincipalStrain,
+        GaussQuantity::PrincipalStress,
+    ] {
+        for component in 0..3 {
+            recorders.push(gauss(quantity, component));
+        }
+    }
+    recorders.push(gauss(GaussQuantity::Kc2, 0)); // 12
+    for quantity in [
+        EmbeddedBarQuantity::AxialForce,
+        EmbeddedBarQuantity::Strain,
+        EmbeddedBarQuantity::Stress,
+        EmbeddedBarQuantity::Ruptured,
+    ] {
+        recorders.push(RecorderSpec::EmbeddedBar {
+            bar: 0,
+            segment: 0,
+            quantity,
+        });
+    } // 13..=16
+    for quantity in [GaussQuantity::Strain, GaussQuantity::Stress] {
+        recorders.push(RecorderSpec::GaussPoint {
+            element_kind: ElementKind::EmbeddedBar,
+            element_index: 0,
+            point: 0,
+            quantity,
+            component: 0,
+        });
+    } // 17, 18
+    input.sequence.recorders = recorders;
+
+    let mut session = decode(input).expect("decodes");
+    let outcome = session.advance(10);
+    assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");
+    let v = |k: usize| last_value(&outcome, k);
+
+    // Principal strain: Mohr's invariants and the eigen-equation M n = e1 n.
+    let (ex, ey, gamma) = (v(0), v(1), v(2));
+    let (e1, e2, theta) = (v(6), v(7), v(8));
+    assert!(
+        e1 > 0.2 / 140.0,
+        "the model must pass the kc2 cap: eps1 = {e1}"
+    );
+    assert!(e1 >= e2);
+    assert!((e1 + e2 - (ex + ey)).abs() < 1e-14);
+    assert!((e1 * e2 - (ex * ey - gamma * gamma / 4.0)).abs() < 1e-14);
+    let n = [theta.cos(), theta.sin()];
+    assert!((ex * n[0] + gamma / 2.0 * n[1] - e1 * n[0]).abs() < 1e-14);
+    assert!((gamma / 2.0 * n[0] + ey * n[1] - e1 * n[1]).abs() < 1e-14);
+
+    // Principal stress: the stress tensor (true shear) has the same eigen-structure.
+    let (sx, sy, txy) = (v(3), v(4), v(5));
+    let (s1, s2, phi) = (v(9), v(10), v(11));
+    assert!(s1 >= s2);
+    assert!((s1 + s2 - (sx + sy)).abs() < 1e-9);
+    assert!((s1 * s2 - (sx * sy - txy * txy)).abs() < 1e-6);
+    let m = [phi.cos(), phi.sin()];
+    assert!((sx * m[0] + txy * m[1] - s1 * m[0]).abs() < 1e-9);
+    assert!((txy * m[0] + sy * m[1] - s1 * m[1]).abs() < 1e-9);
+
+    // kc2 from the recorded principal tension, softening on.
+    assert!((v(12) - 1.0 / (0.8 + 140.0 * e1)).abs() < 1e-14);
+    assert!(v(12) < 1.0);
+
+    // Embedded bar: stress * area, and the same strain/stress as the generic Gauss recorder.
+    assert_eq!(v(13), v(15) * 201.0);
+    assert!(v(14) > 0.0 && v(15) > 0.0);
+    assert_eq!(v(16), 0.0);
+    assert_eq!((v(14), v(15)), (v(17), v(18)));
+}
+
+#[test]
+fn new_recorder_decode_errors() {
+    let model = || {
+        tie_model(
+            json!([bar(json!([0.0, 50.0, 200.0, 50.0]), json!({}))]),
+            "full",
+        )
+    };
+    let with = |recorder: RecorderSpec| {
+        let mut input = model();
+        input.sequence.recorders = vec![recorder];
+        decode_error(input)
+    };
+    let kc2 = |component| RecorderSpec::GaussPoint {
+        element_kind: ElementKind::Quad4,
+        element_index: 0,
+        point: 0,
+        quantity: GaussQuantity::Kc2,
+        component,
+    };
+    // kc2 has one component.
+    assert_eq!(
+        with(kc2(1)),
+        DecodeError::InvalidRecorderComponent {
+            recorder: 0,
+            component: 1,
+            width: 1
+        }
+    );
+    // kc2 of a bar, which has no concrete law.
+    assert_eq!(
+        with(RecorderSpec::GaussPoint {
+            element_kind: ElementKind::EmbeddedBar,
+            element_index: 0,
+            point: 0,
+            quantity: GaussQuantity::Kc2,
+            component: 0,
+        }),
+        DecodeError::RecorderNotApplicable {
+            recorder: 0,
+            reason: "kc2 needs a csfmConcrete element",
+        }
+    );
+    // Bar / segment out of range.
+    assert_eq!(
+        with(RecorderSpec::EmbeddedBar {
+            bar: 3,
+            segment: 0,
+            quantity: EmbeddedBarQuantity::Strain
+        }),
+        DecodeError::UnknownElementIndex {
+            table: "embedded_bars",
+            row: 3
+        }
+    );
+    assert_eq!(
+        with(RecorderSpec::EmbeddedBar {
+            bar: 0,
+            segment: 2,
+            quantity: EmbeddedBarQuantity::Strain
+        }),
+        DecodeError::InvalidEmbeddedBarSegment {
+            recorder: 0,
+            bar: 0,
+            segment: 2,
+            count: 2
+        }
+    );
+    // kc2 on a plain elastic plane material.
+    let mut plain = model();
+    plain.plane_materials = vec![PlaneMaterialSpec::Isotropic {
+        e: 30_000.0,
+        nu: 0.2,
+        state: PlaneStateSpec::PlaneStress,
+    }];
+    plain.sequence.recorders = vec![kc2(0)];
+    assert_eq!(
+        decode_error(plain),
+        DecodeError::RecorderNotApplicable {
+            recorder: 0,
+            reason: "kc2 needs a csfmConcrete element",
+        }
+    );
+    // embeddedBar recorders do not exist in a 3D model.
+    let mut input3 = serde_json::to_value(empty_input(3)).unwrap();
+    input3["nodes"] =
+        json!({ "coords": [0.0, 0.0, 0.0], "fixed": [0], "massNodeIndex": [], "mass": [] });
+    let mut input3: CarapaceInputV1 = serde_json::from_value(input3).unwrap();
+    input3.sequence.recorders = vec![RecorderSpec::EmbeddedBar {
+        bar: 0,
+        segment: 0,
+        quantity: EmbeddedBarQuantity::Strain,
+    }];
+    assert_eq!(
+        decode_error(input3),
+        DecodeError::ElementKindNotInProfile {
+            table: "embedded_bars"
+        }
+    );
 }

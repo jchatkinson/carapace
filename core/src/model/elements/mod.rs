@@ -306,6 +306,28 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         }
     }
 
+    fn gauss_kc2(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        point: usize,
+    ) -> Option<f64> {
+        match self {
+            Element::Tri3(t) => t.gauss_kc2(nodes, point),
+            Element::Quad4(q) => q.gauss_kc2(nodes, point),
+            _ => None,
+        }
+    }
+
+    fn embedded_bar_response(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> Option<(f64, f64, f64, bool)> {
+        match self {
+            Element::EmbeddedBar(bar) => Some(bar.local_response(nodes)),
+            _ => None,
+        }
+    }
+
     fn gauss_responses(
         &self,
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,

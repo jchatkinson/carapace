@@ -180,7 +180,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
     )?;
 
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    let mut session = finish(domain, &input, node_ids, elements, |spec| {
+    let mut session = finish(domain, &input, node_ids, elements, &model_output, |spec| {
         Some(match *spec {
             ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
             ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),

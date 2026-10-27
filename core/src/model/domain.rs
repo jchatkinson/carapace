@@ -333,6 +333,17 @@ where
         self.elements[id].gauss_point_count()
     }
 
+    /// Kaufmann's `kc2` at Gauss point `point` of `id` (`CsfmConcrete` points only, else `None`).
+    pub fn element_gauss_kc2(&self, id: E::Id, point: usize) -> Option<f64> {
+        self.elements[id].gauss_kc2(&self.node_view(), point)
+    }
+
+    /// `(axial force, strain, stress, ruptured)` of the embedded bar `id` (`None` for any other
+    /// element kind).
+    pub fn element_embedded_bar_response(&self, id: E::Id) -> Option<(f64, f64, f64, bool)> {
+        self.elements[id].embedded_bar_response(&self.node_view())
+    }
+
     /// Components per Gauss-point strain/stress vector of `id` (3 for plane elements, 8 for shells).
     pub fn element_gauss_component_count(&self, id: E::Id) -> usize {
         self.elements[id].gauss_component_count()

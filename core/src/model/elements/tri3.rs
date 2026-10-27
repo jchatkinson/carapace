@@ -152,6 +152,15 @@ impl Tri3 {
         }]
     }
 
+    /// `kc2` at the one Gauss point (`None` for `point != 0` or a non-`CsfmConcrete` material).
+    pub(super) fn gauss_kc2(&self, view: &PlaneView<'_>, point: usize) -> Option<f64> {
+        if point != 0 {
+            return None;
+        }
+        let g = self.geometry(view);
+        self.material.csfm_concrete_kc2(&self.strain(&g, view))
+    }
+
     /// The `CsfmConcrete` limit utilization at the one Gauss point (`None`
     /// if the material isn't `CsfmConcrete`).
     pub(super) fn limit_utilization(

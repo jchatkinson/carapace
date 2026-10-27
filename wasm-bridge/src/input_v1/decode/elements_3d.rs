@@ -14,6 +14,7 @@ use super::shared::{
 };
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
+use crate::input_v1::model_output::ModelOutput;
 use crate::input_v1::session::Session3;
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, Shell3Table, Shell4Table, ShellSectionSpec,
@@ -179,14 +180,21 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
     );
 
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    finish(domain, &input, node_ids, elements, |spec| match *spec {
-        ElementLoadSpec::Uniform { wx, wy, wz } => {
-            Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.0)))
-        }
-        ElementLoadSpec::ShellPressure { pressure } => Some(ElementLoad3::pressure(pressure)),
-        ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
-        _ => None,
-    })
+    finish(
+        domain,
+        &input,
+        node_ids,
+        elements,
+        &ModelOutput::default(),
+        |spec| match *spec {
+            ElementLoadSpec::Uniform { wx, wy, wz } => {
+                Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.0)))
+            }
+            ElementLoadSpec::ShellPressure { pressure } => Some(ElementLoad3::pressure(pressure)),
+            ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
+            _ => None,
+        },
+    )
 }
 
 fn resolve_shell_sections(specs: &[ShellSectionSpec]) -> Result<Vec<ShellSection>, DecodeError> {

@@ -51,6 +51,20 @@ pub enum DecodeError {
         point: u32,
         count: u32,
     },
+    /// An `embeddedBar` recorder names a segment the bar does not have (`count` is the bar's
+    /// number of pieces).
+    InvalidEmbeddedBarSegment {
+        recorder: u32,
+        bar: u32,
+        segment: u32,
+        count: u32,
+    },
+    /// A recorder asks for a quantity its target cannot produce (today: `kc2` on a point that is
+    /// not `csfmConcrete`).
+    RecorderNotApplicable {
+        recorder: u32,
+        reason: &'static str,
+    },
     /// A plane material's constants are unusable.
     InvalidPlaneMaterial {
         index: u32,

@@ -286,6 +286,20 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         0
     }
 
+    /// Kaufmann's `kc2` at Gauss point `point`, for a `CsfmConcrete` point only (`None` for every
+    /// other element, material or out-of-range point).
+    fn gauss_kc2(&self, _nodes: &NodeView<'_, NDIM, NDOF, NId>, _point: usize) -> Option<f64> {
+        None
+    }
+
+    /// An embedded bar's `(axial force, strain, stress, ruptured)` (`None` for every other element).
+    fn embedded_bar_response(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+    ) -> Option<(f64, f64, f64, bool)> {
+        None
+    }
+
     /// Components per Gauss-point strain or stress vector (3 for plane elements, 8 for shells);
     /// the bound a Gauss-point recorder's `component` is checked against.
     fn gauss_component_count(&self) -> usize {
