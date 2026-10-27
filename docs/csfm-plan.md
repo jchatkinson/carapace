@@ -1,6 +1,6 @@
 # CSFM in Carapace: implementation and test plan
 
-Status: phases 0-2 mostly complete. The golden fixtures and their measured sensitivities are in
+Status: phases 0-5 complete (phase 5 closed with one open finding, below); phase 6 (benchmarks) is next. The golden fixtures and their measured sensitivities are in
 [core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md), including the §4 G and H fixtures. The generic
 tangent-vs-finite-difference checker is in `core/src/testkit.rs`, exercised against existing materials and elements
 in `core/tests/materials/tangent_fd.rs` and `core/tests/elements/tangent_fd.rs`. The §4 C independent reference
@@ -84,6 +84,41 @@ No TS or Carapace defects were found during phase 4. One fixture-schema note, no
 The parity test borrows `models/deep-beam.json`'s `loads` array instead, after confirming the two
 fixtures' `model` objects are otherwise identical field for field (both are calcs.app's `deepBeam()`),
 rather than widening the export script for a field TS's own bisection never uses.
+
+Phase 5 (wire and results) is complete: §4 I passes. The wire carries `csfmConcrete` and `csfmRebar` (with
+`DecodeError::InvalidMaterial`), the `embeddedBars` table (`hosts` is `"all"` or `[{kind, index}]`), the separate
+`loadControlCutbacks` integrator (a stage's `steps` counts nominal increments; `advance(budget)` counts accepted
+substeps), `stop.materialLimit` on arc-length stages, the `gaussPoint` quantities `principalStrain`/`principalStress`/`kc2`,
+the `embeddedBar` recorder, the `bulk` recorder (flat per-step arrays in `StepOutcome.bulkBatches`), the per-step
+controlling material-limit report (`StepOutcome.limitHistory`, element-level), and the segment table in
+`session.modelOutput()`. Principal values on shells record nothing. `docs/input-format.md` documents all of it.
+`wasm-bridge/tests/wire/span_beam.rs` runs the span beam natively and through the wire, bit-identical at every
+increment including recorders and sliced `advance` budgets. `comparison/wasm_span_beam.mjs` replays the same wire input
+through the built `pkg/` under Node and agrees with native to a worst relative difference of 1.5e-10 (the Newton
+`relative_tol` is 1e-10, so the two converge to slightly different points inside the same band; not bit-identical, but
+the wire layer is, so the difference is in the wasm compile). The controlling-limit element swaps between two
+mirror-symmetric quads whose utilizations tie to about 1e-15, so the harness requires the limit kind and utilization to
+match and allows the element to differ only on such a tie. `boundary-smoke.ts` has a CSFM case. The PySees type mirror
+and bundle were updated outside this repository.
+
+Findings during phase 5:
+
+- **Core defect, fixed (`0dc9626`).** `retake_until` in the arc-length integrator lands on a stop target by false position
+  over a bracket. Plain false position stalls when one end of the bracket is retained repeatedly, which a kink (a yield
+  point) inside the bracket does, so such a bracket never landed exactly. It now uses the Illinois modification (halve the
+  other end's weight when the same end is kept twice in a row), with a regression test in
+  `core/tests/csfm/material_limits.rs`.
+- **Fixture change.** The cutback test fixture had to change: a bilinear spring under `max_iter` 1 can never cross yield,
+  so no cutback depth could make it converge. `wasm-bridge/tests/wire/cutbacks.rs` now uses a truss in parallel with
+  two elastic-perfectly-plastic springs and `max_iter` 2, where a step crossing one kink converges and a step crossing
+  both is halved until it crosses at most one.
+- **Open: a non-finite trial strain reaches a material and panics.** A single `csfmConcrete` Q4 with softening on and
+  no `tensileRegularization`, a `csfmRebar` bar and a tensile load does not converge, and the second Newton iteration
+  hands the bar a NaN strain. `solve_quadratic_branch` (`csfm_rebar.rs`) then panics (`debug_assert` in a dev build,
+  `partial_cmp(NaN).unwrap()` in release), which is `RuntimeError: unreachable` in wasm and leaves the session
+  unusable, instead of a `failedToConverge` outcome. Commit `6350b20` guards a non-finite Newton correction but not a
+  non-finite trial strain. The origin of the NaN is not yet found. No test covers an unregularized `csfmConcrete` with an
+  embedded bar through `advance`; the smoke test uses `tensileRegularization: 0.01`.
 
 Goal: move the Compatible Stress Field Method (CSFM) analysis from CalcsApp (`../calcs.app/lib/fem`, TypeScript)
 into Carapace, so that Carapace becomes the solver CalcsApp ships. This plan covers only the CSFM procedure and its
