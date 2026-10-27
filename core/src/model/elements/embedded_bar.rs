@@ -45,6 +45,7 @@ pub struct EmbeddedBar {
     length: f64,
     area: f64,
     material: Material,
+    ends: Option<[[f64; 2]; 2]>,
 }
 
 impl EmbeddedBar {
@@ -70,6 +71,7 @@ impl EmbeddedBar {
             length,
             area,
             material,
+            ends: None,
         }
     }
 
@@ -92,7 +94,23 @@ impl EmbeddedBar {
             length,
             area,
             material,
+            ends: None,
         }
+    }
+
+    /// Records the segment's undeformed end points `[start, end]` (mm), for reporting and
+    /// drawing. `embed_polyline` sets them; a hand-built bar has none.
+    pub fn with_end_points(mut self, start: [f64; 2], end: [f64; 2]) -> Self {
+        self.ends = Some([start, end]);
+        self
+    }
+
+    pub fn end_points(&self) -> Option<[[f64; 2]; 2]> {
+        self.ends
+    }
+
+    pub fn length(&self) -> f64 {
+        self.length
     }
 
     pub fn host(&self) -> &EmbeddedBarHost {

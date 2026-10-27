@@ -38,6 +38,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
             input.force_beam_columns_2d.node_i.is_empty(),
         ),
         ("plane_materials", input.plane_materials.is_empty()),
+        ("embedded_bars", input.embedded_bars.is_empty()),
         (
             "triangles",
             input.triangles.thickness.is_empty() && input.triangles.node_ids.is_empty(),

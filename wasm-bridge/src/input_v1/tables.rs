@@ -363,6 +363,42 @@ pub enum PlaneStateSpec {
     PlaneStrain,
 }
 
+/// One embedded rebar (2D models only): a polyline `[x0, y0, x1, y1, ...]` (mm) discretized
+/// against the `triangles`/`quads` it runs through, one `embeddedBar` element per piece. `area`
+/// is the bar's cross-section (mm^2) and `material` indexes `materials` (a `csfmRebar` for CSFM).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBarSpec {
+    pub polyline: Vec<f64>,
+    pub area: f64,
+    pub material: u32,
+    /// The continuum elements the bar may embed in; omitted is `"all"`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub hosts: Option<EmbeddedBarHostsSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(untagged)]
+pub enum EmbeddedBarHostsSpec {
+    All(AllHosts),
+    List(Vec<HostElementSpec>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum AllHosts {
+    All,
+}
+
+/// A host element: `kind` is `tri3` or `quad4`, `index` its row in that kind's table.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct HostElementSpec {
+    pub kind: ElementKind,
+    pub index: u32,
+}
+
 /// 3-node constant-strain triangles (2D models only). `nodeIds` has stride 3
 /// (counter-clockwise); `material` indexes `planeMaterials`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, tsify::Tsify)]
@@ -444,10 +480,11 @@ pub enum ElementKind {
     Quad4,
     Shell3,
     Shell4,
+    EmbeddedBar,
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 13] = [
+    pub const ALL: [ElementKind; 14] = [
         ElementKind::Truss,
         ElementKind::ElasticBeamColumn2d,
         ElementKind::ElasticBeamColumn3d,
@@ -461,6 +498,7 @@ impl ElementKind {
         ElementKind::Quad4,
         ElementKind::Shell3,
         ElementKind::Shell4,
+        ElementKind::EmbeddedBar,
     ];
 
     /// The kind's table name as `DecodeError`s report it (snake_case).
@@ -479,6 +517,7 @@ impl ElementKind {
             ElementKind::Quad4 => "quads",
             ElementKind::Shell3 => "shell3s",
             ElementKind::Shell4 => "shell4s",
+            ElementKind::EmbeddedBar => "embedded_bars",
         }
     }
 
@@ -491,7 +530,8 @@ impl ElementKind {
             | ElementKind::DispBeamColumn2d
             | ElementKind::ForceBeamColumn2d
             | ElementKind::Tri3
-            | ElementKind::Quad4 => Some(2),
+            | ElementKind::Quad4
+            | ElementKind::EmbeddedBar => Some(2),
             ElementKind::ElasticBeamColumn3d
             | ElementKind::DispBeamColumn3d
             | ElementKind::ForceBeamColumn3d

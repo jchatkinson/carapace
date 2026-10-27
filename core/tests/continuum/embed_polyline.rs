@@ -4,7 +4,7 @@
 //! span beam), zero-length vertices dropped, an outside-mesh error, and
 //! an ambiguous-host error on deliberately overlapping elements.
 
-use carapace_core::model::continuum::embed_polyline;
+use carapace_core::model::continuum::{embed_polyline, embed_polyline_in};
 use carapace_core::model::{
     Domain, Element, Material, ModelError, Node, NodeId, PlaneMaterial, Quad4, Tri3,
 };
@@ -224,4 +224,91 @@ fn overlapping_hosts_are_an_ambiguous_host_error() {
         result,
         Err(ModelError::EmbeddedBarAmbiguousHost { .. })
     ));
+}
+
+/// Two adjacent unit-height quads; returns the domain and both element ids.
+fn two_quads() -> (Domain, [carapace_core::model::ElementId; 2]) {
+    let mut domain: Domain = Domain::new();
+    let material = PlaneMaterial::plane_stress(30_000.0, 0.2).unwrap();
+    let n: Vec<NodeId> = [
+        [0.0, 0.0],
+        [1.0, 0.0],
+        [2.0, 0.0],
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [2.0, 1.0],
+    ]
+    .iter()
+    .map(|&c| domain.add_node(Node::new(c)))
+    .collect();
+    let q0 = domain.add_element(Element::Quad4(Quad4::new(
+        [n[0], n[1], n[4], n[3]],
+        1.0,
+        material.clone(),
+    )));
+    let q1 = domain.add_element(Element::Quad4(Quad4::new(
+        [n[1], n[2], n[5], n[4]],
+        1.0,
+        material,
+    )));
+    (domain, [q0, q1])
+}
+
+/// `hosts` restricts both the edge-crossing split and the host search: a path that runs into the
+/// excluded element is outside the mesh, and one confined to the allowed element embeds in it.
+#[test]
+fn restricting_hosts_excludes_elements_from_the_search() {
+    let (domain, [q0, q1]) = two_quads();
+    let path = [[0.2, 0.5], [1.8, 0.5]];
+
+    let all = embed_polyline_in(&domain, &path, 1.0, &dummy_material(), None).unwrap();
+    assert_eq!(all.len(), 2, "split at the shared edge");
+
+    let only_q0 = embed_polyline_in(&domain, &path, 1.0, &dummy_material(), Some(&[q0]));
+    assert!(matches!(
+        only_q0,
+        Err(ModelError::EmbeddedBarOutsideMesh { .. })
+    ));
+
+    let inside_q1 = embed_polyline_in(
+        &domain,
+        &[[1.2, 0.5], [1.8, 0.5]],
+        1.0,
+        &dummy_material(),
+        Some(&[q1]),
+    )
+    .unwrap();
+    assert_eq!(inside_q1.len(), 1);
+}
+
+/// Overlapping elements are ambiguous unless `hosts` names only one of them.
+#[test]
+fn restricting_hosts_resolves_an_ambiguous_overlap() {
+    let mut domain: Domain = Domain::new();
+    let material = PlaneMaterial::plane_stress(30_000.0, 0.2).unwrap();
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let n: Vec<NodeId> = [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+            .iter()
+            .map(|&c| domain.add_node(Node::new(c)))
+            .collect();
+        ids.push(domain.add_element(Element::Quad4(Quad4::new(
+            [n[0], n[1], n[2], n[3]],
+            1.0,
+            material.clone(),
+        ))));
+    }
+    let path = [[0.2, 0.2], [1.8, 1.8]];
+    assert!(embed_polyline_in(&domain, &path, 1.0, &dummy_material(), None).is_err());
+    let bars = embed_polyline_in(&domain, &path, 1.0, &dummy_material(), Some(&[ids[1]])).unwrap();
+    assert_eq!(bars.len(), 1);
+}
+
+/// Segments remember their end points, in drawing order, for the wire's segment table.
+#[test]
+fn segments_report_their_end_points() {
+    let (domain, _) = two_quads();
+    let bars = embed_polyline(&domain, &[[0.2, 0.5], [1.8, 0.5]], 1.0, &dummy_material()).unwrap();
+    assert_eq!(bars[0].end_points(), Some([[0.2, 0.5], [1.0, 0.5]]));
+    assert_eq!(bars[1].end_points(), Some([[1.0, 0.5], [1.8, 0.5]]));
 }

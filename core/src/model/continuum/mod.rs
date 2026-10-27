@@ -12,7 +12,7 @@ pub mod quadrature;
 pub mod shape;
 pub mod validate;
 
-pub use embed::embed_polyline;
+pub use embed::{embed_polyline, embed_polyline_in};
 pub use jacobian::{physical_derivatives, Jacobian};
 pub use natural_coords::{
     quad4_contains, quad4_natural_coords, tri3_contains, tri3_natural_coords,

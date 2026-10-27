@@ -12,6 +12,7 @@
 
 pub mod error;
 pub mod materials;
+pub mod model_output;
 pub mod sequence;
 pub mod tables;
 
@@ -21,6 +22,7 @@ mod session;
 pub use decode::decode;
 pub use error::DecodeError;
 pub use materials::MaterialSpec;
+pub use model_output::{EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting};
 pub use session::{
     AnalysisErrorDetail, ArcFailureDetail, ContinuationDetail, ContinuationStopDetail,
     ModalResultsReport, ModalStageResult, ModeResult, RecorderBatch, Session, Session2, Session3,
@@ -30,11 +32,11 @@ pub use session::{
 use sequence::SequenceSpec;
 use serde::{Deserialize, Serialize};
 use tables::{
-    ElasticBeamColumn2dTable, ElasticBeamColumn3dTable, ElementLoadTable, EqualDofTable,
-    FiberBeamColumn2dTable, FiberBeamColumn3dTable, FiberTable, LinearConstraintTable,
-    LoadPatternTable, NodalLoadTable, NodeTable, PlaneMaterialSpec, QuadTable, RigidDiaphragmTable,
-    RigidLinkTable, Shell3Table, Shell4Table, ShellSectionSpec, TriangleTable, TrussTable,
-    ZeroLengthSectionTable, ZeroLengthTable,
+    ElasticBeamColumn2dTable, ElasticBeamColumn3dTable, ElementLoadTable, EmbeddedBarSpec,
+    EqualDofTable, FiberBeamColumn2dTable, FiberBeamColumn3dTable, FiberTable,
+    LinearConstraintTable, LoadPatternTable, NodalLoadTable, NodeTable, PlaneMaterialSpec,
+    QuadTable, RigidDiaphragmTable, RigidLinkTable, Shell3Table, Shell4Table, ShellSectionSpec,
+    TriangleTable, TrussTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 
 /// Small structured-clone header fields — everything else in
@@ -118,6 +120,11 @@ pub struct CarapaceInputV1 {
     #[serde(default)]
     #[tsify(optional)]
     pub quads: QuadTable,
+    /// Rebar polylines embedded in the `triangles`/`quads` continuum (2D models only), one row
+    /// per bar. Each is discretized into `embeddedBar` segments; see `ModelOutput`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub embedded_bars: Vec<EmbeddedBarSpec>,
     /// Arena of shell sections for `shell4s` (3D models only).
     #[serde(default)]
     #[tsify(optional)]

@@ -65,6 +65,18 @@ impl WasmSession {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    /// What decoding resolved: the embedded-bar segment table and each bar group's TCM/POM
+    /// routing and crack spacing (`{ embeddedBars: EmbeddedBarGroup[] }`). Available right after
+    /// `decodeInput`; empty when the model has no `embeddedBars`.
+    #[wasm_bindgen(js_name = modelOutput)]
+    pub fn model_output(&self) -> Result<Ts<input_v1::ModelOutput>, JsValue> {
+        self.0
+            .model_output()
+            .clone()
+            .into_ts()
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     /// The `AnalysisSequence` stage id `advance` is currently in (or, once
     /// done, whichever stage stopped it) — `undefined` once every stage has
     /// completed.

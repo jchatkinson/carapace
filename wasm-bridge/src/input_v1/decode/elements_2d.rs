@@ -4,10 +4,12 @@
 //! strategy as `elements_3d.rs`; only the element constructors and table
 //! shapes differ (see `tables.rs`).
 
+use carapace_core::model::continuum::embed_polyline_in;
 use carapace_core::model::{
-    CsfmConcreteLaw, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
-    Fiber, FiberSection, ForceBeamColumn, Friction, GeomTransf, Material, NodeId, PlaneMaterial,
-    Quad4, Quad4Formulation, Tri3, Truss, ZeroLength, ZeroLengthSection,
+    CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain, ElasticBeamColumn, Element,
+    ElementId, ElementLoad, EmbeddedBarHost, Fiber, FiberSection, ForceBeamColumn, Friction,
+    GeomTransf, Material, NodeId, PlaneMaterial, Quad4, Quad4Formulation, Tri3, Truss, ZeroLength,
+    ZeroLengthSection,
 };
 
 use super::shared::{
@@ -17,11 +19,14 @@ use super::shared::{
 };
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
+use crate::input_v1::model_output::{
+    EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting,
+};
 use crate::input_v1::session::Session2;
 use crate::input_v1::tables::{
-    CsfmConcreteLawSpec, ElementKind, ElementLoadSpec, PlaneMaterialSpec, PlaneStateSpec,
-    Quad4FormulationSpec, QuadTable, TransformSpec, TriangleTable, ZeroLengthSectionTable,
-    ZeroLengthTable,
+    CsfmConcreteLawSpec, ElementKind, ElementLoadSpec, EmbeddedBarHostsSpec, EmbeddedBarSpec,
+    PlaneMaterialSpec, PlaneStateSpec, Quad4FormulationSpec, QuadTable, TransformSpec,
+    TriangleTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -166,8 +171,16 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         add_quads(&mut domain, &input.quads, &node_at, &plane_materials)?,
     );
 
+    let model_output = add_embedded_bars(
+        &mut domain,
+        &input.embedded_bars,
+        &materials,
+        &mut elements,
+        &node_ids,
+    )?;
+
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    finish(domain, &input, node_ids, elements, |spec| {
+    let mut session = finish(domain, &input, node_ids, elements, |spec| {
         Some(match *spec {
             ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
             ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),
@@ -181,6 +194,114 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
                 return None
             }
         })
+    })?;
+    session.set_model_output(model_output);
+    Ok(session)
+}
+
+/// Discretizes each `embeddedBars` row through `embed_polyline_in` and registers its segments
+/// as `EmbeddedBar` elements, in row order (segment indices are flat across bars).
+fn add_embedded_bars(
+    domain: &mut Domain,
+    table: &[EmbeddedBarSpec],
+    materials: &[Material],
+    elements: &mut ElementIds<ElementId>,
+    node_ids: &[NodeId],
+) -> Result<ModelOutput, DecodeError> {
+    const TABLE: &str = "embedded_bars";
+    let invalid = |row: usize, reason: &'static str| DecodeError::InvalidRow {
+        table: TABLE,
+        row: row as u32,
+        reason,
+    };
+    let node_row = |id: NodeId| node_ids.iter().position(|&n| n == id).unwrap_or(0) as u32;
+    let mut all_segments = Vec::new();
+    let mut groups = Vec::with_capacity(table.len());
+    for (row, bar) in table.iter().enumerate() {
+        if bar.polyline.len() < 4 || bar.polyline.len() % 2 != 0 {
+            return Err(invalid(
+                row,
+                "polyline must hold at least two (x, y) vertices",
+            ));
+        }
+        if !(bar.area.is_finite() && bar.area > 0.0) || bar.polyline.iter().any(|v| !v.is_finite())
+        {
+            return Err(invalid(
+                row,
+                "area must be finite and positive, and the polyline finite",
+            ));
+        }
+        let material =
+            materials
+                .get(bar.material as usize)
+                .ok_or(DecodeError::UnknownMaterialIndex {
+                    table: TABLE,
+                    row: bar.material,
+                })?;
+        let allowed = match &bar.hosts {
+            None | Some(EmbeddedBarHostsSpec::All(_)) => None,
+            Some(EmbeddedBarHostsSpec::List(list)) => Some(
+                list.iter()
+                    .map(|host| {
+                        if !matches!(host.kind, ElementKind::Tri3 | ElementKind::Quad4) {
+                            return Err(invalid(row, "a host must be a tri3 or quad4 element"));
+                        }
+                        elements.get(host.kind, host.index, NDM)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        };
+        let polyline: Vec<[f64; 2]> = bar.polyline.chunks(2).map(|v| [v[0], v[1]]).collect();
+        let segments = embed_polyline_in(domain, &polyline, bar.area, material, allowed.as_deref())
+            .map_err(|error| DecodeError::InvalidModel {
+                error: error.into(),
+            })?;
+
+        let first_segment = all_segments.len() as u32;
+        let mut reported = Vec::with_capacity(segments.len());
+        for segment in segments {
+            let [start, end] = segment
+                .end_points()
+                .expect("embed_polyline sets end points");
+            let (host_kind, host_nodes) = match segment.host() {
+                EmbeddedBarHost::Tri3 { nodes, .. } => (
+                    ElementKind::Tri3,
+                    nodes.iter().map(|&n| node_row(n)).collect(),
+                ),
+                EmbeddedBarHost::Quad4 { nodes, .. } => (
+                    ElementKind::Quad4,
+                    nodes.iter().map(|&n| node_row(n)).collect(),
+                ),
+            };
+            reported.push(EmbeddedBarSegment {
+                start,
+                end,
+                length: segment.length(),
+                host_kind,
+                host_nodes,
+            });
+            all_segments.push(domain.add_element(Element::EmbeddedBar(segment)));
+        }
+        let (routing, sr) = match material {
+            Material::CsfmRebar(fields) => (
+                Some(match fields.routing {
+                    CsfmRebarRouting::Tcm => RebarRouting::Tcm,
+                    CsfmRebarRouting::Pom => RebarRouting::Pom,
+                }),
+                Some(fields.sr),
+            ),
+            _ => (None, None),
+        };
+        groups.push(EmbeddedBarGroup {
+            first_segment,
+            segments: reported,
+            routing,
+            sr,
+        });
+    }
+    elements.set(ElementKind::EmbeddedBar, all_segments);
+    Ok(ModelOutput {
+        embedded_bars: groups,
     })
 }
 

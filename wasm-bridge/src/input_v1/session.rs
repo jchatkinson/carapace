@@ -26,6 +26,7 @@ use serde::Serialize;
 use slotmap::Key;
 
 use super::error::ModelErrorDetail;
+use super::model_output::ModelOutput;
 use super::sequence::{FiberResponseKind, GaussQuantity, ModalDampingAnchors};
 
 /// Shared by `record_sample`'s `Static`/`Transient` arms: resolves a
@@ -523,6 +524,14 @@ impl Session {
         }
     }
 
+    /// What decoding resolved about the model (embedded-bar segment table and routing).
+    pub fn model_output(&self) -> &ModelOutput {
+        match self {
+            Session::D2(session) => session.model_output(),
+            Session::D3(session) => session.model_output(),
+        }
+    }
+
     /// Every `Modal` stage finished so far (see `ModalStageResult`).
     pub fn modal_results(&self) -> ModalResultsReport {
         match self {
@@ -577,6 +586,7 @@ where
     // Total samples emitted so far per recorder, so the next batch's `first_sample` is correct
     // without retaining the samples themselves.
     recorder_sample_counts: Vec<u32>,
+    model_output: ModelOutput,
 }
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> std::fmt::Debug
@@ -604,6 +614,14 @@ where
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
+    pub fn model_output(&self) -> &ModelOutput {
+        &self.model_output
+    }
+
+    pub(super) fn set_model_output(&mut self, model_output: ModelOutput) {
+        self.model_output = model_output;
+    }
+
     pub(super) fn new(
         domain: Domain<NDIM, NDOF, NId, E>,
         node_ids: Vec<NId>,
@@ -633,6 +651,7 @@ where
             continuation: None,
             current_batch,
             recorder_sample_counts,
+            model_output: ModelOutput::default(),
         }
     }
 

@@ -15,7 +15,7 @@
 //! end that sits exactly on a shared edge).
 
 use super::{quad4_contains, quad4_natural_coords, tri3_contains, tri3_natural_coords};
-use crate::model::{Domain, Element, EmbeddedBar, Material, ModelError};
+use crate::model::{Domain, Element, ElementId, EmbeddedBar, Material, ModelError};
 
 const EPSILON: f64 = 1e-9;
 /// Fixed tolerance for the natural-coordinate "is this point inside the
@@ -59,9 +59,12 @@ fn segment_crossing(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Optio
 /// particular order and with duplicates for a shared edge (harmless here:
 /// `unique_parameters` below already deduplicates the crossing parameters
 /// those duplicates would produce).
-fn host_edges(domain: &Domain) -> Vec<([f64; 2], [f64; 2])> {
+fn host_edges(domain: &Domain, allowed: Option<&[ElementId]>) -> Vec<([f64; 2], [f64; 2])> {
     let mut edges = Vec::new();
-    for (_, element) in domain.elements() {
+    for (id, element) in domain.elements() {
+        if allowed.is_some_and(|allowed| !allowed.contains(&id)) {
+            continue;
+        }
         let coords: Vec<[f64; 2]> = match element {
             Element::Tri3(t) => t.nodes.iter().map(|&id| domain.node(id).coords).collect(),
             Element::Quad4(q) => q.nodes.iter().map(|&id| domain.node(id).coords).collect(),
@@ -228,9 +231,12 @@ impl Host {
     }
 }
 
-fn hosts(domain: &Domain) -> Vec<Host> {
+fn hosts(domain: &Domain, allowed: Option<&[ElementId]>) -> Vec<Host> {
     let mut found = Vec::new();
-    for (_, element) in domain.elements() {
+    for (id, element) in domain.elements() {
+        if allowed.is_some_and(|allowed| !allowed.contains(&id)) {
+            continue;
+        }
         match element {
             Element::Tri3(t) => found.push(Host::Tri3 {
                 nodes: t.nodes,
@@ -283,9 +289,23 @@ pub fn embed_polyline(
     area: f64,
     material: &Material,
 ) -> Result<Vec<EmbeddedBar>, ModelError> {
-    let edges = host_edges(domain);
+    embed_polyline_in(domain, polyline, area, material, None)
+}
+
+/// [`embed_polyline`] restricted to the continuum elements in `allowed` (`None` = every one).
+/// Excluded elements take no part in the edge-crossing split or the host search, so a path that
+/// leaves the allowed set is [`ModelError::EmbeddedBarOutsideMesh`], and overlapping elements are
+/// unambiguous when only one is allowed. Ids in `allowed` that are not `Tri3`/`Quad4` are ignored.
+pub fn embed_polyline_in(
+    domain: &Domain,
+    polyline: &[[f64; 2]],
+    area: f64,
+    material: &Material,
+    allowed: Option<&[ElementId]>,
+) -> Result<Vec<EmbeddedBar>, ModelError> {
+    let edges = host_edges(domain, allowed);
     let points = discretize_polyline(&edges, polyline)?;
-    let hosts = hosts(domain);
+    let hosts = hosts(domain, allowed);
 
     let mut bars = Vec::with_capacity(points.len() - 1);
     for segment in 0..points.len() - 1 {
@@ -320,7 +340,7 @@ pub fn embed_polyline(
         let length = (b[0] - a[0]).hypot(b[1] - a[1]);
         let direction = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
 
-        bars.push(match host {
+        let bar = match host {
             Host::Tri3 { nodes, .. } => EmbeddedBar::in_tri3(
                 *nodes,
                 std::array::from_fn(|i| n_a[i]),
@@ -339,7 +359,8 @@ pub fn embed_polyline(
                 area,
                 material.clone(),
             ),
-        });
+        };
+        bars.push(bar.with_end_points(a, b));
     }
     Ok(bars)
 }
