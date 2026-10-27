@@ -1,6 +1,6 @@
 # CSFM in Carapace: implementation and test plan
 
-Status: phases 0-5 complete (phase 5 closed with one open finding, below); phase 6 (benchmarks) is next. The golden fixtures and their measured sensitivities are in
+Status: phases 0-5 complete (phase 5 closed); phase 6 (benchmarks) is next. The golden fixtures and their measured sensitivities are in
 [core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md), including the §4 G and H fixtures. The generic
 tangent-vs-finite-difference checker is in `core/src/testkit.rs`, exercised against existing materials and elements
 in `core/tests/materials/tangent_fd.rs` and `core/tests/elements/tangent_fd.rs`. The §4 C independent reference
@@ -112,13 +112,14 @@ Findings during phase 5:
   so no cutback depth could make it converge. `wasm-bridge/tests/wire/cutbacks.rs` now uses a truss in parallel with
   two elastic-perfectly-plastic springs and `max_iter` 2, where a step crossing one kink converges and a step crossing
   both is halved until it crosses at most one.
-- **Open: a non-finite trial strain reaches a material and panics.** A single `csfmConcrete` Q4 with softening on and
-  no `tensileRegularization`, a `csfmRebar` bar and a tensile load does not converge, and the second Newton iteration
-  hands the bar a NaN strain. `solve_quadratic_branch` (`csfm_rebar.rs`) then panics (`debug_assert` in a dev build,
-  `partial_cmp(NaN).unwrap()` in release), which is `RuntimeError: unreachable` in wasm and leaves the session
-  unusable, instead of a `failedToConverge` outcome. Commit `6350b20` guards a non-finite Newton correction but not a
-  non-finite trial strain. The origin of the NaN is not yet found. No test covers an unregularized `csfmConcrete` with an
-  embedded bar through `advance`; the smoke test uses `tensileRegularization: 0.01`.
+- **Core defect, fixed: a non-finite correction reached the material laws.** A single `csfmConcrete` Q4 with softening on
+  and no `tensileRegularization`, a `csfmRebar` bar and a tensile load does not converge. Its tangent is singular
+  enough that the solve returns NaN instead of an error, and `iterate_to_equilibrium` applied that correction and
+  reassembled before `ConvergenceTest::check` (which does reject non-finite values) ever saw it. The bar then got a
+  NaN strain and `solve_quadratic_branch` (`csfm_rebar.rs`) panicked: `RuntimeError: unreachable` in wasm, leaving the
+  session unusable. A non-finite `du` or load-factor correction is now `FailedToConverge` before it is applied
+  (`newton_loop.rs`), with a regression test in `wasm-bridge/tests/wire/csfm.rs`. The smoke test still uses
+  `tensileRegularization: 0.01`, since that is the model that converges.
 
 Goal: move the Compatible Stress Field Method (CSFM) analysis from CalcsApp (`../calcs.app/lib/fem`, TypeScript)
 into Carapace, so that Carapace becomes the solver CalcsApp ships. This plan covers only the CSFM procedure and its

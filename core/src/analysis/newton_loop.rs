@@ -165,6 +165,12 @@ where
             scalar,
             iteration,
         )?;
+        // A singular or near-singular tangent can factor "successfully" yet solve to NaN/inf. Applying that
+        // would hand a non-finite strain to the material laws (which assume a finite one), so it is a
+        // failed step here, before the state is touched, and `test.check` never gets to see it.
+        if !delta_scalar.is_finite() || !du.iter().all(|value| value.is_finite()) {
+            return Err(AnalysisError::FailedToConverge { step });
+        }
         scalar += delta_scalar;
         let residual_before = residual;
 

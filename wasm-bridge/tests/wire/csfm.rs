@@ -1203,3 +1203,50 @@ fn models_without_limit_states_report_no_limit_history() {
     assert!(outcome.done);
     assert!(outcome.limit_history.is_empty());
 }
+
+// ---- non-converging models ----
+
+/// One 200 x 100 mm quad with a bar through the middle, `csfmConcrete` softening unregularized,
+/// pulled in x. Its second Newton iteration used to hand the bar a NaN strain.
+fn unregularized_single_quad() -> CarapaceInputV1 {
+    let mut input = tie_model(
+        json!([bar(
+            json!([0.0, 50.0, 200.0, 50.0]),
+            json!({ "area": 400.0 })
+        )]),
+        "full",
+    );
+    let mut value = serde_json::to_value(&input).unwrap();
+    value["nodes"] = json!({
+        "coords": [0.0, 0.0, 200.0, 0.0, 200.0, 100.0, 0.0, 100.0],
+        "fixed": [3, 0, 0, 3], "massNodeIndex": [], "mass": [],
+    });
+    value["planeMaterials"] = json!([concrete(json!({}))]);
+    value["materials"] = json!([rebar(json!({ "lambda": 1.0, "fctm": 2.9, "ecm": 32800.0 }))]);
+    value["quads"] = json!({
+        "nodeIds": [0, 1, 2, 3], "thickness": [100.0], "material": [0], "density": [0.0],
+        "formulation": ["full"],
+    });
+    value["nodalLoads"] = json!({
+        "pattern": [0, 0], "node": [1, 2], "dof": [0, 0], "value": [20000.0, 20000.0],
+        "stage": [0, 0],
+    });
+    input = serde_json::from_value(value).unwrap();
+    input.sequence.recorders = vec![RecorderSpec::NodeDisp { node: 1, dof: 0 }];
+    input
+}
+
+/// Unregularized softening does not converge on this model. That is a reported analysis error,
+/// never a panic: a non-finite trial state must not reach a material law.
+#[test]
+fn an_unregularized_softening_quad_reports_failure_instead_of_panicking() {
+    let mut session = decode(unregularized_single_quad()).unwrap();
+    let outcome = session.advance(100);
+    assert!(
+        matches!(
+            outcome.error,
+            Some(carapace_wasm::input_v1::AnalysisErrorDetail::FailedToConverge { .. })
+        ),
+        "{outcome:?}"
+    );
+}
