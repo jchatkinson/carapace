@@ -244,7 +244,9 @@ pub(super) fn evaluate(f: &CsfmConcreteFields, strain: &PlaneVector) -> (PlaneVe
             0.0,
             f.e0 / 2.0,
         );
-        return (PlaneVector::zeros(), d);
+        // `D * strain`, not zero: the resistance must match the tangent it is balanced with. It is
+        // zero at the exact origin and at most `E0 * 1e-9` elsewhere in the zone.
+        return (d * strain, d);
     }
 
     let (eps1, eps2, theta) = principal(strain);

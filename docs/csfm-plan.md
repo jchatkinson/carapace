@@ -112,6 +112,15 @@ Findings during phase 5:
   so no cutback depth could make it converge. `wasm-bridge/tests/wire/cutbacks.rs` now uses a truss in parallel with
   two elastic-perfectly-plastic springs and `max_iter` 2, where a step crossing one kink converges and a step crossing
   both is halved until it crosses at most one.
+- **Core defect, fixed (phase 6): the origin seed returned zero stress against an `E0` tangent.** For every Gauss point with
+  all strain components under 1e-9, `CsfmConcrete` returned stress 0 and tangent `diag(E0, E0, E0/2)` (the TS policy).
+  The resistance then differs from `D * strain` by up to `E0 * 1e-9` per point, so Newton cannot balance a model that has
+  such points. The refined 48 x 24 deep beam fails at its first 0.05 increment with it (far Gauss points sit in the
+  zone), as does every model at a load increment of 0.0005, even with a loose `NormUnbalance` tolerance; TS converges
+  because its energy test is insensitive to a residual of that size. The stress in the zone is now `D * strain`, which
+  is zero at the exact origin, so the §4 A origin test is unchanged. Regression tests:
+  `origin_seed_stress_is_consistent_with_the_seeded_tangent` (`core/tests/materials/csfm_concrete.rs`) and
+  `a_tiny_load_increment_converges_with_gauss_points_in_the_origin_seed_zone` (`core/tests/csfm/nonlinear.rs`).
 - **Core defect, fixed: a non-finite correction reached the material laws.** A single `csfmConcrete` Q4 with softening on
   and no `tensileRegularization`, a `csfmRebar` bar and a tensile load does not converge. Its tangent is singular
   enough that the solve returns NaN instead of an error, and `iterate_to_equilibrium` applied that correction and
@@ -164,7 +173,9 @@ The CalcsApp procedure, which is the parity target:
      depended on the arbitrary principal direction. It was unused by the worker and has been **removed**: passing
      it is now an error (§6). Both principal directions now use one scalar law.
    - At the exact origin (all strains < 1e-9) the tangent is seeded as isotropic
-     `diag(E0, E0, E0/2)`, where `E0` is the compression origin tangent.
+     `diag(E0, E0, E0/2)`, where `E0` is the compression origin tangent. The stress there is
+     `D * strain` (zero at the exact origin). TS returns zero stress in the whole zone, which leaves the resistance
+     inconsistent with the tangent (phase 6 finding below).
    - The Cartesian tangent in TS is a regime-aware finite difference. It is not rotated secants (phase 7a §2).
 3. **Rebar** (`resolveModel`, `makeRodLaw`, `makeBareRodLaw`). This is stateless and depends on the path.
    - In compression, or for every strain when tension stiffening is off: bilinear bare steel (`Es`, `fy`, `ft`,

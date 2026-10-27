@@ -210,6 +210,33 @@ fn origin_is_seeded_isotropically_and_not_checked_against_a_finite_difference() 
     }
 }
 
+/// Inside the origin-seed zone (every strain component under 1e-9) the stress must be the seeded
+/// tangent times the strain, so the resistance a Newton iteration balances is consistent with
+/// the tangent it factors. A zero stress there with the `E0` tangent makes a fine mesh under a
+/// small load, where far Gauss points sit in the zone, stall at a residual of the order of
+/// `E0 * 1e-9 * volume` per point (found by the phase 6 refined deep beam).
+#[test]
+fn origin_seed_stress_is_consistent_with_the_seeded_tangent() {
+    for law in [
+        CsfmConcreteLaw::ParabolaRectangle,
+        CsfmConcreteLaw::ElasticIdeallyPlastic,
+    ] {
+        let material = PlaneMaterial::csfm_concrete(30.0, None, law, true, Some(0.01)).unwrap();
+        let strain = PlaneVector::new(4e-10, -3e-10, 2e-10);
+        let (stress, d) = material.trial_stress_tangent(&strain);
+        let expected = d * strain;
+        for i in 0..3 {
+            assert!(
+                (stress[i] - expected[i]).abs() <= 1e-12 * expected.amax(),
+                "component {i}: stress {} vs D * strain {}",
+                stress[i],
+                expected[i]
+            );
+        }
+        assert!(stress.amax() > 0.0, "nonzero strain gives nonzero stress");
+    }
+}
+
 /// Closed form: parabola-rectangle peaks at `-eta_fc * fck` exactly at
 /// `eps_c2`, and stays flat (the "rectangle") from there to `eps_cu2`.
 #[test]

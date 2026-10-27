@@ -205,3 +205,33 @@ fn every_model_fixture_matches_ts_increment_by_increment() {
         failures.join("\n\n")
     );
 }
+
+/// A load increment far smaller than the schedule's puts most Gauss points inside the origin-seed
+/// zone (strains under 1e-9). Newton must still converge there: the seeded stress used to be zero
+/// against an `E0` tangent, so the residual could not fall below `E0 * 1e-9 * volume` per point.
+#[test]
+fn a_tiny_load_increment_converges_with_gauss_points_in_the_origin_seed_zone() {
+    let fixture = fixture("deep-beam.json");
+    let BuiltModel { domain, nodes, .. } = build(&fixture["model"]);
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::LoadControl { increment: 0.0005 })
+        .algorithm(Algorithm::Newton {
+            tangent: carapace_core::analysis::TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-3,
+            max_iter: 60,
+        })
+        .try_build(domain)
+        .unwrap();
+    let result = analysis.step().expect("a tiny increment converges");
+    assert!((result.load_factor - 0.0005).abs() < 1e-15);
+    assert!(
+        nodes
+            .iter()
+            .any(|&node| analysis.domain().node(node).displacement[1] != 0.0),
+        "the beam deflected"
+    );
+}
