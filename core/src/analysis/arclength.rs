@@ -19,7 +19,7 @@
 use nalgebra::DVector;
 use slotmap::Key;
 
-use crate::model::{Domain, ElementOps, NodeId, SparseMatrix};
+use crate::model::{Domain, ElementOps, LimitStateConfig, NodeId, SparseMatrix};
 
 use super::bordered::{Border, BorderedFactorization, BorderedSolver};
 use super::convergence::ForceTolerance;
@@ -140,6 +140,13 @@ pub struct ArcStopCriteria<NId = NodeId> {
     pub load_factor_zero_crossing: bool,
     pub max_chord_length: Option<f64>,
     pub max_steps: Option<usize>,
+    /// Stop when `Domain::controlling_limit_utilization` reaches `1`
+    /// (`docs/csfm-plan.md` §2.5 point 3) — the CSFM material-limit
+    /// criterion. `exact` as for `DisplacementTarget`/`LoadFactorTarget`.
+    /// Boxed (`MaterialLimitTarget` carries a `LimitStateConfig`, three
+    /// `Option<f64>`s) so this one rarely-used field doesn't widen every
+    /// `Integrator::ArcLength` by itself (`clippy::large_enum_variant`).
+    pub material_limit: Option<Box<MaterialLimitTarget>>,
 }
 
 /// Stop when `node`'s `dof` reaches `value` (in either direction). With
@@ -158,6 +165,21 @@ pub struct DisplacementTarget<NId = NodeId> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LoadFactorTarget {
     pub value: f64,
+    pub exact: bool,
+}
+
+/// Stop when `Domain::controlling_limit_utilization` (under `limits`)
+/// reaches `1`, in either direction. Unlike `DisplacementTarget`/
+/// `LoadFactorTarget` there is no separate `value` field — the target is
+/// always utilization `1` ("landed on the limit", plan §2.5 point 3), not
+/// a caller-chosen number. With `exact`, the bracketing step is retaken
+/// with an interpolated radius exactly as for the other two targets
+/// (`docs/arclength.md` §7): the utilization is a scalar exactly like
+/// `DisplacementTarget`'s own bracketed value, just read off the
+/// controlling element/point instead of one node/dof.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MaterialLimitTarget {
+    pub limits: LimitStateConfig,
     pub exact: bool,
 }
 
@@ -212,6 +234,7 @@ pub enum StopReason {
     LoadFactorZeroCrossing,
     ChordLength,
     StepCount,
+    MaterialLimit,
 }
 
 impl<NId> ArcLength<NId> {
@@ -247,6 +270,7 @@ impl<NId> ArcLength<NId> {
                 load_factor_zero_crossing: false,
                 max_chord_length: None,
                 max_steps: None,
+                material_limit: None,
             },
         }
     }
@@ -358,6 +382,16 @@ impl<NId> ArcLength<NId> {
         }
         if stop.max_steps == Some(0) {
             return invalid("integrator.stop.maxSteps");
+        }
+        if let Some(target) = &stop.material_limit {
+            let bad = |v: Option<f64>| v.is_some_and(|v| !(v.is_finite() && v > 0.0));
+            let l = &target.limits;
+            if bad(l.concrete_crushing_limit)
+                || bad(l.concrete_tensile_limit)
+                || bad(l.rebar_strain_limit)
+            {
+                return invalid("integrator.stop.materialLimit");
+            }
         }
         Ok(())
     }
@@ -698,6 +732,39 @@ where
                 overshoot: self.load_factor,
             });
         }
+        if stop.is_none() {
+            if let Some(target) = &stop_criteria.material_limit {
+                let limits = target.limits;
+                let value_of = move |domain: &Domain<NDIM, NDOF, NId, E>, _lambda: f64| {
+                    domain
+                        .controlling_limit_utilization(&limits)
+                        .map_or(0.0, |(_, utilization, _)| utilization)
+                };
+                let before = value_of(&start, lambda_n);
+                let after = value_of(&self.domain, self.load_factor);
+                if brackets(before, after, 1.0) {
+                    let landed = target.exact
+                        && self.retake_until(
+                            &start,
+                            &state,
+                            config,
+                            &context,
+                            &mut accepted,
+                            &mut radius_used,
+                            &mut factorizations,
+                            before,
+                            after,
+                            1.0,
+                            &value_of,
+                        );
+                    stop = Some(ArcStop {
+                        reason: StopReason::MaterialLimit,
+                        landed_exactly: landed,
+                        overshoot: value_of(&self.domain, self.load_factor) - 1.0,
+                    });
+                }
+            }
+        }
 
         // Commit continuation history for the accepted increment.
         let norm = state.metric_norm(&accepted.increment);
@@ -773,6 +840,10 @@ where
             rotation_scale: state.rotation_scale,
             stop,
         };
+        let material_limit = self
+            .domain
+            .controlling_limit_utilization(&LimitStateConfig::default())
+            .map(|(_, utilization, kind)| (utilization, kind));
         Ok(StepResult {
             step,
             load_factor: self.load_factor,
@@ -780,6 +851,7 @@ where
             factorizations,
             arc: Some(info),
             cutbacks: None,
+            material_limit,
         })
     }
 

@@ -21,6 +21,17 @@ use super::{AnalysisError, ArcLength, SparseFactorization, SparseSolver};
 /// generic parameters instead of `Integrator`'s, since an integrator's
 /// identity only depends on which node/DOF it controls, not which `Domain`
 /// it's later used with.
+///
+/// `ArcLength`'s payload (configuration built once per analysis, not
+/// touched in any per-step/per-element hot loop — unlike `Element`'s own
+/// `#[derive]`-driven size concern) is considerably larger than
+/// `LoadControl`'s, which trips `clippy::large_enum_variant`'s generic
+/// byte-count heuristic. Boxing it would mean every `Integrator::ArcLength`
+/// construction site across the workspace takes on an extra allocation and
+/// `Box::new`/deref for no runtime benefit (this enum is never assembled at
+/// scale the way `Element` is), so the lint is suppressed here deliberately
+/// rather than restructured around.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Integrator<NId = NodeId> {
     LoadControl {

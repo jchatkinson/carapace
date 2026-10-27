@@ -20,7 +20,8 @@ mod transient;
 pub use algorithm::Algorithm;
 pub use arclength::{
     ArcDirection, ArcLength, ArcPredictor, ArcScales, ArcSeed, ArcStepInfo, ArcStop,
-    ArcStopCriteria, Backtracking, DisplacementTarget, LoadFactorTarget, StopReason,
+    ArcStopCriteria, Backtracking, DisplacementTarget, LoadFactorTarget, MaterialLimitTarget,
+    StopReason,
 };
 pub use builder::AnalysisBuilder;
 pub use constraint::ConstraintHandler;

@@ -1,8 +1,8 @@
 use slotmap::Key;
 
 use crate::model::{
-    Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_NDF,
-    SPATIAL_NDIM,
+    Domain, Element, Element3, ElementOps, LimitKind, LimitStateConfig, Node3Id, NodeId, NDF,
+    PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 use super::arclength::{integrator_change_invalidates, ArcState};
@@ -88,6 +88,16 @@ pub struct StepResult {
     /// Adaptive-substepping diagnostics, for `Integrator::LoadControlCutbacks`
     /// steps only.
     pub cutbacks: Option<CutbackInfo>,
+    /// `Domain::controlling_limit_utilization` at this accepted step's
+    /// state, under `LimitStateConfig::default()` (the always-on crushing/
+    /// rupture criteria; `None` when no element in the model reports a
+    /// limit state, e.g. no CSFM materials). Reported after **every**
+    /// accepted step, not just `Integrator::ArcLength`'s own
+    /// `ArcStopCriteria::material_limit` — this is the "equivalent check
+    /// after each accepted load-control step" `docs/csfm-plan.md` §2.5
+    /// point 3 asks for: load control has no bordered corrector to land on
+    /// it exactly, so this is detection only, never exact landing.
+    pub material_limit: Option<(f64, LimitKind)>,
 }
 
 /// One `Integrator::LoadControlCutbacks` call's substepping outcome —
@@ -325,6 +335,10 @@ where
             }
         };
 
+        let material_limit = self
+            .domain
+            .controlling_limit_utilization(&LimitStateConfig::default())
+            .map(|(_, utilization, kind)| (utilization, kind));
         Ok(StepResult {
             step: self.step_count,
             load_factor: self.load_factor,
@@ -332,6 +346,7 @@ where
             factorizations,
             arc: None,
             cutbacks: None,
+            material_limit,
         })
     }
 
