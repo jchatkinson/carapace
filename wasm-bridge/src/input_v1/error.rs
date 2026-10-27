@@ -56,6 +56,12 @@ pub enum DecodeError {
         index: u32,
         reason: &'static str,
     },
+    /// An entry of the `materials` arena has unusable constants (today, a `csfmRebar` whose
+    /// steel, reinforcement ratio, bond inputs or TCM startup bridge is invalid).
+    InvalidMaterial {
+        index: u32,
+        reason: &'static str,
+    },
     /// A shell section's constants are unusable.
     InvalidShellSection {
         index: u32,

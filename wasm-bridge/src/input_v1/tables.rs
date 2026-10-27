@@ -332,6 +332,28 @@ pub enum PlaneMaterialSpec {
     /// A symmetric positive-definite `D`, packed upper triangle row by row:
     /// `[d11, d12, d13, d22, d23, d33]`.
     ElasticMatrix { d: [f64; 6] },
+    /// The CSFM rotating principal-strain concrete (units N, mm, MPa; `nu = 0`). `fck` must
+    /// satisfy `0 < fck <= 50`; `ecm` overrides the derived `Ecm`; `tensile_regularization` is
+    /// the numerical regularization factor `gamma` (`0 < gamma < 1`), not a material property.
+    CsfmConcrete {
+        fck: f64,
+        #[serde(default)]
+        #[tsify(optional)]
+        ecm: Option<f64>,
+        law: CsfmConcreteLawSpec,
+        softening: bool,
+        #[serde(default)]
+        #[tsify(optional)]
+        tensile_regularization: Option<f64>,
+    },
+}
+
+/// Compression envelope of a `csfmConcrete` plane material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum CsfmConcreteLawSpec {
+    ParabolaRectangle,
+    ElasticIdeallyPlastic,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]

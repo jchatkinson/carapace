@@ -5,9 +5,9 @@
 //! shapes differ (see `tables.rs`).
 
 use carapace_core::model::{
-    DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad, Fiber,
-    FiberSection, ForceBeamColumn, Friction, GeomTransf, Material, NodeId, PlaneMaterial, Quad4,
-    Quad4Formulation, Tri3, Truss, ZeroLength, ZeroLengthSection,
+    CsfmConcreteLaw, DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad,
+    Fiber, FiberSection, ForceBeamColumn, Friction, GeomTransf, Material, NodeId, PlaneMaterial,
+    Quad4, Quad4Formulation, Tri3, Truss, ZeroLength, ZeroLengthSection,
 };
 
 use super::shared::{
@@ -19,8 +19,9 @@ use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::session::Session2;
 use crate::input_v1::tables::{
-    ElementKind, ElementLoadSpec, PlaneMaterialSpec, PlaneStateSpec, Quad4FormulationSpec,
-    QuadTable, TransformSpec, TriangleTable, ZeroLengthSectionTable, ZeroLengthTable,
+    CsfmConcreteLawSpec, ElementKind, ElementLoadSpec, PlaneMaterialSpec, PlaneStateSpec,
+    Quad4FormulationSpec, QuadTable, TransformSpec, TriangleTable, ZeroLengthSectionTable,
+    ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -207,6 +208,26 @@ fn resolve_plane_materials(specs: &[PlaneMaterialSpec]) -> Result<Vec<PlaneMater
                     angle,
                 } => PlaneMaterial::orthotropic(ex, ey, nu_xy, g_xy, angle),
                 PlaneMaterialSpec::ElasticMatrix { d } => PlaneMaterial::elastic_matrix(d),
+                PlaneMaterialSpec::CsfmConcrete {
+                    fck,
+                    ecm,
+                    law,
+                    softening,
+                    tensile_regularization,
+                } => PlaneMaterial::csfm_concrete(
+                    fck,
+                    ecm,
+                    match law {
+                        CsfmConcreteLawSpec::ParabolaRectangle => {
+                            CsfmConcreteLaw::ParabolaRectangle
+                        }
+                        CsfmConcreteLawSpec::ElasticIdeallyPlastic => {
+                            CsfmConcreteLaw::ElasticIdeallyPlastic
+                        }
+                    },
+                    softening,
+                    tensile_regularization,
+                ),
             }
             .map_err(|error| DecodeError::InvalidPlaneMaterial {
                 index: index as u32,
