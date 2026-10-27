@@ -1,4 +1,5 @@
 mod arclength;
+mod critical_load;
 mod independent_reference;
 mod limit_state;
 mod linear_sanity;
