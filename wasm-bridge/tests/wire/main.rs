@@ -11,4 +11,5 @@ mod modal;
 mod profiles;
 mod recorders;
 mod shells;
+mod span_beam;
 mod stages;
