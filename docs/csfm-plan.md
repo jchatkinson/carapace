@@ -1,6 +1,6 @@
 # CSFM in Carapace: implementation and test plan
 
-Status: phases 0-5 complete (phase 5 closed); phase 6 (benchmarks) is closed without a published TS comparison (see §4). The golden fixtures and their measured sensitivities are in
+Status: phases 0-5 complete (phase 5 closed); phase 6 (benchmarks) is closed without a published TS comparison (see §4). Phase 7 (CalcsApp cutover) is done for both analysis modes: CalcsApp runs its CSFM and linear-elastic membranes through the wasm, with the TS solver kept only as a test reference. Its needs reshaped the wire output (a `nodes` bulk table, `stepDiagnostics`, `Float64Array` bulk frames; see `input-format.md`). Open: an arc-length run with `stop.materialLimit` for capacity, and a core report of the cutback attempts of a failed step. The golden fixtures and their measured sensitivities are in
 [core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md), including the §4 G and H fixtures. The generic
 tangent-vs-finite-difference checker is in `core/src/testkit.rs`, exercised against existing materials and elements
 in `core/tests/materials/tangent_fd.rs` and `core/tests/elements/tangent_fd.rs`. The §4 C independent reference
