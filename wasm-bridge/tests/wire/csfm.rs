@@ -481,3 +481,226 @@ fn csfm_concrete_with_the_enhanced_quad_is_a_model_error() {
         "{error:?}"
     );
 }
+
+// ---- stop.materialLimit ----
+
+use carapace_core::analysis::{
+    ArcDirection, ArcLength, ArcScales, ArcStopCriteria, MaterialLimitTarget,
+};
+use carapace_core::model::{LimitStateConfig, Tri3};
+use carapace_wasm::input_v1::sequence::{
+    ArcLengthSpec, ArcScalesSpec, ArcStopSpec, MaterialLimitSpec,
+};
+use carapace_wasm::input_v1::StopReasonDetail;
+
+const LEG: f64 = 100.0;
+
+/// The one-DOF bare-steel tie of `core/tests/csfm/material_limits.rs`: a `Tri3` with legs along
+/// x and y, one bar along the x leg, only node 1's `ux` free, unit reference load. The bar
+/// carries `stress = lambda`, so the rupture limit is reached at `lambda = ft = 540`.
+fn tie_input(limit: Option<MaterialLimitSpec>) -> CarapaceInputV1 {
+    let mut input = serde_json::to_value(empty_input(2)).unwrap();
+    input["nodes"] = json!({
+        "coords": [0.0, 0.0, LEG, 0.0, 0.0, LEG], "fixed": [3, 2, 3], "massNodeIndex": [], "mass": [],
+    });
+    input["planeMaterials"] = json!([concrete(json!({ "softening": false }))]);
+    input["materials"] = json!([rebar(json!({
+        "ft": 540.0, "fctm": 2.9, "ecm": 32000.0, "lambda": 0.67, "tensionStiffening": false,
+    }))]);
+    input["triangles"] = json!({
+        "nodeIds": [0, 1, 2], "thickness": [1.0], "material": [0], "density": [0.0],
+    });
+    input["embeddedBars"] =
+        json!([{ "polyline": [0.0, 0.0, LEG, 0.0], "area": 1.0, "material": 0 }]);
+    input["loadPatterns"] =
+        json!({ "series": [{ "kind": "linear", "slope": 1.0 }], "scaleFactor": [1.0] });
+    input["nodalLoads"] = json!({
+        "pattern": [0], "node": [1], "dof": [0], "value": [1.0], "stage": [0],
+    });
+    let mut input: CarapaceInputV1 = serde_json::from_value(input).unwrap();
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Static {
+            id: "to-limit".to_string(),
+            steps: 200,
+            integrator: IntegratorSpec::ArcLength(ArcLengthSpec {
+                initial_radius: 0.1,
+                min_radius: Some(0.01),
+                max_radius: Some(0.5),
+                target_iterations: None,
+                max_retries: None,
+                direction: Default::default(),
+                scales: ArcScalesSpec::Explicit {
+                    displacement: 0.05 * LEG,
+                    rotation: None,
+                    load: 540.0,
+                },
+                predictor: Default::default(),
+                seed: None,
+                arc_tolerance: None,
+                correction_tolerance: None,
+                backtracking: None,
+                stop: Some(ArcStopSpec {
+                    material_limit: limit,
+                    ..Default::default()
+                }),
+            }),
+            algorithm: AlgorithmSpec::Newton {
+                tangent: Default::default(),
+                line_search: None,
+            },
+            convergence: None,
+            hold_patterns_after: vec![],
+        }],
+        recorders: vec![],
+    };
+    input
+}
+
+/// Runs a session to its end and returns the last continuation detail and load factor.
+fn run_to_stop(input: CarapaceInputV1) -> (carapace_wasm::input_v1::ContinuationDetail, f64) {
+    let mut session = decode(input).unwrap();
+    let mut last = None;
+    loop {
+        let outcome = session.advance(25);
+        assert!(outcome.error.is_none(), "{:?}", outcome.error);
+        last = outcome.continuation.or(last);
+        if outcome.done {
+            return (last.expect("took a step"), outcome.load_factor);
+        }
+    }
+}
+
+fn native_landing(limits: LimitStateConfig) -> f64 {
+    let mut domain: Domain = Domain::new();
+    let ids: Vec<_> = [[0.0, 0.0], [LEG, 0.0], [0.0, LEG]]
+        .iter()
+        .zip([(0, 1), (1, 1), (0, 1)])
+        .enumerate()
+        .map(|(k, (&c, _))| {
+            let node = Node::new(c);
+            domain.add_node(match k {
+                1 => node.fix(1),
+                _ => node.fix(0).fix(1),
+            })
+        })
+        .collect();
+    let concrete =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap();
+    domain.add_element(Element::Tri3(Tri3::new(
+        ids[0], ids[1], ids[2], 1.0, concrete,
+    )));
+    let steel = Material::csfm_rebar(
+        200000.0, 500.0, 540.0, 0.05, 2.9, 32000.0, 16.0, 0.02, 0.67, false,
+    )
+    .unwrap();
+    for bar in embed_polyline(&domain, &[[0.0, 0.0], [LEG, 0.0]], 1.0, &steel).unwrap() {
+        domain.add_element(Element::EmbeddedBar(bar));
+    }
+    domain.load_node(ids[1], 0, 1.0);
+    let mut arc = ArcLength::adaptive(
+        0.1,
+        0.01,
+        0.5,
+        ArcScales::Explicit {
+            displacement: 0.05 * LEG,
+            rotation: None,
+            load: 540.0,
+        },
+    );
+    arc.direction = ArcDirection::Increasing;
+    arc.stop = ArcStopCriteria {
+        material_limit: Some(Box::new(MaterialLimitTarget {
+            limits,
+            exact: true,
+        })),
+        ..Default::default()
+    };
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::ArcLength(arc))
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::Combined {
+            force_tol: 1e-8,
+            moment_tol: 1e-8,
+            relative_tol: 1e-9,
+            displacement_tol: None,
+            max_iter: 30,
+        })
+        .build(domain);
+    for _ in 0..200 {
+        let result = analysis.step().unwrap();
+        if result.arc.unwrap().stop.is_some() {
+            return result.load_factor;
+        }
+    }
+    panic!("native run did not land");
+}
+
+#[test]
+fn material_limit_lands_on_rupture_over_the_wire() {
+    let (detail, load_factor) = run_to_stop(tie_input(Some(MaterialLimitSpec {
+        exact: true,
+        ..Default::default()
+    })));
+    let stop = detail.stop.expect("stopped on the limit");
+    assert_eq!(stop.reason, StopReasonDetail::MaterialLimit);
+    assert!(stop.landed_exactly);
+    assert!((load_factor - 540.0).abs() < 1.0, "{load_factor}");
+    let native = native_landing(LimitStateConfig::default());
+    assert!(
+        (load_factor - native).abs() <= 1e-6 * native,
+        "wire {load_factor} vs native {native}"
+    );
+}
+
+#[test]
+fn material_limit_overrides_reach_the_limit_config() {
+    // Bare steel: sigma = 500 + (540 - 500) / (0.05 - 0.0025) * (0.01 - 0.0025) at eps = 0.01.
+    let expected = 500.0 + 40.0 / 0.0475 * 0.0075;
+    let (detail, load_factor) = run_to_stop(tie_input(Some(MaterialLimitSpec {
+        exact: true,
+        rebar_strain_limit: Some(0.01),
+        ..Default::default()
+    })));
+    assert_eq!(detail.stop.unwrap().reason, StopReasonDetail::MaterialLimit);
+    assert!(detail.stop.unwrap().landed_exactly);
+    assert!(
+        (load_factor - expected).abs() < 1e-3 * expected,
+        "{load_factor} vs {expected}"
+    );
+    let native = native_landing(LimitStateConfig {
+        rebar_strain_limit: Some(0.01),
+        ..Default::default()
+    });
+    assert!((load_factor - native).abs() <= 1e-6 * native);
+}
+
+#[test]
+fn invalid_material_limits_are_decode_errors() {
+    for limit in [
+        MaterialLimitSpec {
+            concrete_crushing_limit: Some(-0.0035),
+            ..Default::default()
+        },
+        MaterialLimitSpec {
+            concrete_tensile_limit: Some(0.0),
+            ..Default::default()
+        },
+        MaterialLimitSpec {
+            rebar_strain_limit: Some(f64::NAN),
+            ..Default::default()
+        },
+    ] {
+        assert_eq!(
+            decode_error(tie_input(Some(limit))),
+            DecodeError::InvalidAnalysisOption {
+                stage: "to-limit".to_string(),
+                field: "integrator.stop.materialLimit",
+            }
+        );
+    }
+}

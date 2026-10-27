@@ -178,6 +178,34 @@ pub struct ArcStopSpec {
     pub load_factor_zero_crossing: bool,
     #[tsify(optional)]
     pub max_chord_length: Option<f64>,
+    /// Stop when the controlling material-limit utilization reaches `1` (CSFM crushing or rebar
+    /// rupture, optionally tightened by user strain limits).
+    #[tsify(optional)]
+    pub material_limit: Option<MaterialLimitSpec>,
+}
+
+/// Wire form of `core::MaterialLimitTarget`. The target is always utilization `1`. With
+/// `exact` the bracketing step is retaken so the stage ends on it. The optional strain limits
+/// (positive, finite) are `core::LimitStateConfig`'s: without them only the always-on limits
+/// are checked, i.e. concrete crushing at `|eps_cu2| = 0.0035` and rebar rupture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialLimitSpec {
+    #[serde(default)]
+    #[tsify(optional)]
+    pub exact: bool,
+    /// Replaces the default crushing strain limit `0.0035`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub concrete_crushing_limit: Option<f64>,
+    /// Enables the concrete tensile-strain limit (`eps_1 / limit`).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub concrete_tensile_limit: Option<f64>,
+    /// Enables a user rebar strain limit (`|eps| / limit`).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub rebar_strain_limit: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]

@@ -7,9 +7,9 @@
 use carapace_core::analysis::{
     Algorithm, AnalysisError, ArcDirection, ArcLength, ArcPredictor, ArcScales, ArcSeed,
     Backtracking, ConvergenceTest, DisplacementTarget, GroundMotion, Integrator, LineSearch,
-    LoadFactorTarget, RayleighDamping, TangentStrategy,
+    LoadFactorTarget, MaterialLimitTarget, RayleighDamping, TangentStrategy,
 };
-use carapace_core::model::{LoadPatternId, LoadSeries};
+use carapace_core::model::{LimitStateConfig, LoadPatternId, LoadSeries};
 
 use super::shared::check_dof_within;
 use crate::input_v1::error::DecodeError;
@@ -410,6 +410,16 @@ fn arc_length_of<NId: Copy>(
         });
         config.stop.load_factor_zero_crossing = stop.load_factor_zero_crossing;
         config.stop.max_chord_length = stop.max_chord_length;
+        config.stop.material_limit = stop.material_limit.map(|target| {
+            Box::new(MaterialLimitTarget {
+                limits: LimitStateConfig {
+                    concrete_crushing_limit: target.concrete_crushing_limit,
+                    concrete_tensile_limit: target.concrete_tensile_limit,
+                    rebar_strain_limit: target.rebar_strain_limit,
+                },
+                exact: target.exact,
+            })
+        });
     }
     Ok(config)
 }
