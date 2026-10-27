@@ -438,7 +438,7 @@ fn run_wire(fx: &Value, budget: u32) -> (Vec<Frame>, f64) {
     let mut displacements: Vec<Vec<f64>> = Vec::new();
     let mut limits = Vec::new();
     let mut disp_samples: Vec<Vec<f64>> = vec![Vec::new(); 256];
-    let mut load_factor = 0.0;
+    let load_factor;
     loop {
         let outcome = session.advance(budget);
         assert!(outcome.error.is_none(), "{:?}", outcome.error);
@@ -453,8 +453,8 @@ fn run_wire(fx: &Value, budget: u32) -> (Vec<Frame>, f64) {
                 .extend(batch.samples.iter().map(|&(_, value)| value));
         }
         limits.extend(outcome.limit_history.clone());
-        load_factor = outcome.load_factor;
         if outcome.done {
+            load_factor = outcome.load_factor;
             break;
         }
     }
