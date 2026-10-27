@@ -338,6 +338,8 @@ csfm.sequence = {
     { response: "nodeDisp", node: 1, dof: 0 },
     { response: "nodeDisp", node: 2, dof: 0 },
     { response: "embeddedBar", bar: 0, segment: 0, quantity: "strain" },
+    { response: "bulk", table: "nodes", quantity: "displacement" },
+    { response: "bulk", table: "nodes", quantity: "reaction" },
   ],
 };
 {
@@ -369,6 +371,30 @@ csfm.sequence = {
     }
     assert(bulk.values[3] > bulk.values[0] && bulk.values[3] > 0, "bar picks up force as the load grows");
     assert(p1[3] > 0, "the host is in tension");
+
+    // Bulk output arrives as typed arrays on their own buffers, so a worker can transfer them.
+    assert(bulk.values instanceof Float64Array && bulk.progress instanceof Float64Array, "bulk arrays are Float64Array");
+    // Nodes table: every node in input order, one point, ndf components, per step.
+    const nodeDisp: BulkBatch = outcome.bulkBatches.find((batch) => batch.recorderIndex === 7)!;
+    const nodeReaction: BulkBatch = outcome.bulkBatches.find((batch) => batch.recorderIndex === 8)!;
+    for (const table of [nodeDisp, nodeReaction]) {
+      assert(table.elements === 4 && table.points === 1 && table.components === 3 && table.progress.length === 4, "nodes bulk shape");
+      assert(table.values.length === 4 * 4 * 3, "nodes bulk values");
+    }
+    const frame = (table: BulkBatch, step: number, node: number, dof: number) => table.values[(step * 4 + node) * 3 + dof];
+    for (let k = 0; k < 4; k++) {
+      assert(frame(nodeDisp, k, 1, 0) === ux1[k] && frame(nodeDisp, k, 2, 0) === ux2[k], "nodes displacement matches the scalar recorders");
+      assert(frame(nodeDisp, k, 0, 0) === 0 && Math.abs(frame(nodeReaction, k, 1, 0)) < 1e-2, "supported displacement is zero and a free DOF carries only the convergence residual");
+    }
+    const rx = frame(nodeReaction, 3, 0, 0) + frame(nodeReaction, 3, 3, 0);
+    assert(Math.abs(rx + 40000) < 1e-3, `x reactions balance the applied load: ${rx}`);
+    const detached = bulk.values.buffer as ArrayBuffer;
+    structuredClone(detached, { transfer: [detached] });
+    assert(detached.byteLength === 0, "bulk buffers are transferable");
+
+    // Per-step solver work, aligned with the bulk frames.
+    assert(outcome.stepDiagnostics.length === 4, "one step diagnostic per step");
+    assert(outcome.stepDiagnostics.every((d, k) => d.iterations >= 1 && d.factorizations >= 1 && d.cutback === undefined && Math.abs(d.progress - bulk.progress[k]) < 1e-12), "step diagnostics");
 
     // Controlling material-limit report: one entry per accepted step, located by table row.
     const limits: LimitSample[] = outcome.limitHistory;

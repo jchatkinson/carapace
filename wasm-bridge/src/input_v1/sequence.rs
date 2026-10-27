@@ -468,6 +468,8 @@ pub enum BulkTable {
     Quads,
     /// Every embedded-bar segment, in the flat order of `modelOutput`'s segment table.
     EmbeddedBars,
+    /// Every node, in input node-table order; one point per node and one component per DOF.
+    Nodes,
 }
 
 /// What a [`RecorderSpec::Bulk`] reads. `strain`/`stress`/`principalStrain`/`principalStress`/`kc2`
@@ -484,6 +486,11 @@ pub enum BulkQuantity {
     Kc2,
     AxialForce,
     Ruptured,
+    /// `nodes` only: the node's displacement, `ndf` components (the fixed DOFs report their
+    /// prescribed value, `0` for a support).
+    Displacement,
+    /// `nodes` only: the support reaction, `ndf` components (`0` on a free DOF).
+    Reaction,
 }
 
 /// What a [`RecorderSpec::EmbeddedBar`] reads.

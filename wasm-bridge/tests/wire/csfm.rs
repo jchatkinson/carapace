@@ -1077,6 +1077,69 @@ fn bulk_batches_continue_across_advance_calls() {
     assert_eq!(all_progress, vec![0.25, 0.5, 0.75, 1.0]);
 }
 
+/// The `nodes` table records every node in input order, `ndf` components per node, and its
+/// values equal the scalar `nodeDisp` and `reaction` recorders' samples. The tie's applied load
+/// is carried by the fixed end, so the x reactions sum to minus the applied load.
+#[test]
+fn bulk_nodes_match_the_scalar_displacement_and_reaction_recorders() {
+    let mut input = loaded_tie();
+    let nodes = input.nodes.coords.len() / 2;
+    let mut recorders = vec![
+        bulk(BulkTable::Nodes, BulkQuantity::Displacement),
+        bulk(BulkTable::Nodes, BulkQuantity::Reaction),
+    ];
+    for node in 0..nodes as u32 {
+        for dof in 0..3 {
+            recorders.push(RecorderSpec::NodeDisp { node, dof });
+        }
+    }
+    for node in 0..nodes as u32 {
+        for dof in 0..3 {
+            recorders.push(RecorderSpec::Reaction { node, dof });
+        }
+    }
+    input.sequence.recorders = recorders;
+
+    let mut session = decode(input).unwrap();
+    let outcome = session.advance(100);
+    assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");
+    assert_eq!(outcome.bulk_batches.len(), 2);
+    let width = nodes * 3;
+    for (table, first_scalar) in [(0, 2), (1, 2 + width)] {
+        let batch = &outcome.bulk_batches[table];
+        assert_eq!(batch.recorder_index, table);
+        assert_eq!(
+            (batch.elements, batch.points, batch.components),
+            (nodes as u32, 1, 3)
+        );
+        assert_eq!(batch.progress.len(), 4);
+        assert_eq!(batch.values.len(), 4 * width);
+        for step in 0..4 {
+            for k in 0..width {
+                let scalar = outcome
+                    .recorder_batches
+                    .iter()
+                    .find(|b| b.recorder_index == first_scalar + k)
+                    .unwrap();
+                let (want, got) = (scalar.samples[step].1, batch.values[step * width + k]);
+                assert!(
+                    (got - want).abs() <= 1e-9 * want.abs().max(1.0),
+                    "table {table} step {step} k {k}: {got} vs {want}"
+                );
+            }
+        }
+    }
+    let applied: f64 = 80_000.0;
+    let reactions = &outcome.bulk_batches[1].values;
+    let last = &reactions[3 * width..];
+    let sum_x: f64 = (0..nodes).map(|node| last[node * 3]).sum();
+    assert!(
+        (sum_x + applied).abs() < 1e-3 * applied,
+        "x reactions {sum_x} vs applied {applied}"
+    );
+    assert!(outcome.bulk_batches[0].values.iter().any(|&u| u != 0.0));
+}
+
 #[test]
 fn bulk_recorder_decode_errors() {
     let with = |input: CarapaceInputV1, recorder| {
@@ -1118,6 +1181,17 @@ fn bulk_recorder_decode_errors() {
     assert_eq!(
         with(plain, bulk(BulkTable::Quads, BulkQuantity::Kc2)),
         not_applicable("kc2 needs a csfmConcrete element")
+    );
+    assert_eq!(
+        with(loaded_tie(), bulk(BulkTable::Nodes, BulkQuantity::Stress)),
+        not_applicable("the nodes table records displacement or reaction")
+    );
+    assert_eq!(
+        with(
+            loaded_tie(),
+            bulk(BulkTable::Quads, BulkQuantity::Displacement)
+        ),
+        not_applicable("displacement and reaction belong to the nodes table")
     );
     // No quads exist in a 3D model.
     let mut input3 = serde_json::to_value(empty_input(3)).unwrap();

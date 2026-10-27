@@ -44,8 +44,9 @@ example payload.
   `elementKindNotInProfile`. The decoder picks the profile once from `ndm`.
 - **Every table is optional.** An omitted table is an empty one, so a model
   lists only what it uses.
-- **Plain JS values.** The boundary accepts ordinary objects and arrays. A
-  transferable typed-array format is planned but not implemented.
+- **Plain JS values in, typed arrays for bulk out.** The boundary accepts ordinary objects and arrays
+  as input (a typed-array input format is not implemented). The large per-step output, the `bulk`
+  recorders' `progress` and `values`, comes back as transferable `Float64Array`s.
 
 ## Entry points
 
@@ -452,7 +453,7 @@ the load (3D: `wx, wy, wz`; 2D: 16 components, `[wx, wy, bx, by, t0x, t0y, p0, .
 | `fiber` | `elementKind`, `elementIndex`, `point`, `fiber`, `quantity: "strain" \| "stress"` |
 | `gaussPoint` | `elementKind` (`tri3`/`quad4`), `elementIndex`, `point` (`tri3`: 0; `quad4`: 0..4 in node order of the 2x2 rule), `quantity: "strain" \| "stress" \| "principalStrain" \| "principalStress" \| "kc2"`, `component` (0..3 = x, y, xy; engineering shear for strain). The enhanced quad reports the recovered values including the internal modes. Static and transient stages only. For `principalStrain`/`principalStress`, components `0, 1, 2` are `eps_1 >= eps_2` (`sigma_1 >= sigma_2`) and `theta`, the counter-clockwise angle in radians from global x to the first principal direction; a shell records nothing for them. `kc2` has one component (`0`) and needs a `csfmConcrete` point (`recorderNotApplicable` otherwise). `elementKind: "embeddedBar"` addresses a segment by its flat index and reports axial strain/stress in component 0. |
 | `embeddedBar` | `bar`, `segment`, `quantity: "axialForce" \| "strain" \| "stress" \| "ruptured"` (`axialForce = stress * area`, tension positive; `ruptured` is 1 past the rupture strain, else 0). Static and transient stages only. |
-| `bulk` | `table: "triangles" \| "quads" \| "embeddedBars"`, `quantity: "strain" \| "stress" \| "principalStrain" \| "principalStress" \| "kc2" \| "axialForce" \| "ruptured"`. Records every element and Gauss point of the table at every accepted step as flat arrays, in `StepOutcome.bulkBatches` instead of `recorderBatches` (this recorder's slot in `recorderBatches` stays empty). `axialForce`/`ruptured` belong to `embeddedBars` (`strain`/`stress` work on all three, one value per segment); principal values and `kc2` belong to the continuum tables, and `kc2` needs every point to be `csfmConcrete`. Static and transient stages only. |
+| `bulk` | `table: "triangles" \| "quads" \| "embeddedBars" \| "nodes"`, `quantity: "strain" \| "stress" \| "principalStrain" \| "principalStress" \| "kc2" \| "axialForce" \| "ruptured" \| "displacement" \| "reaction"`. Records every element and Gauss point of the table at every accepted step as flat arrays, in `StepOutcome.bulkBatches` instead of `recorderBatches` (this recorder's slot in `recorderBatches` stays empty). `axialForce`/`ruptured` belong to `embeddedBars` (`strain`/`stress` work on all three element tables, one value per segment); principal values and `kc2` belong to the continuum tables, and `kc2` needs every point to be `csfmConcrete`. `nodes` takes `displacement` or `reaction` only (and they take only `nodes`): every node in input node-table order, one point, `ndf` components (`ux, uy, rz` in 2D; the six DOFs in 3D), a fixed DOF reporting its prescribed displacement (`0` at a support), and a free DOF's reaction being only the convergence residual. A reaction frame costs one pass over the model, not one per DOF; in a `transient` stage it includes the ground-motion inertial load, as the scalar `reaction` recorder does, and costs a sweep per DOF. Static and transient stages only. |
 
 ## Results: `StepOutcome`
 
@@ -468,6 +469,7 @@ Returned by `advance`:
 | `continuation` | Arc-length diagnostics for the last accepted step, or `undefined`. |
 | `recorderBatches` | `RecorderBatch[]`: only the samples produced by this call. |
 | `bulkBatches` | `BulkBatch[]`: this call's `bulk` recorder output. |
+| `stepDiagnostics` | `StepDiagnostic[]`: the solver work of each `static` step this call took (see below). |
 | `limitHistory` | `LimitSample[]`: the controlling CSFM material-limit utilization at each sample (see below). |
 
 `RecorderBatch`: `{ recorderIndex, stageIndex, firstSample, samples: [pseudoTime, value][] }`.
@@ -477,11 +479,12 @@ decrease and repeat, so order samples by sample index, never by load factor.
 The caller accumulates batches; there is no "history so far" accessor.
 
 `BulkBatch`: `{ recorderIndex, stageIndex, firstSample, elements, points, components, progress, values }`.
-`values` holds `progress.length` consecutive frames of `elements * points * components` numbers,
+`progress` and `values` are `Float64Array`s, not `number[]`: each is a fresh buffer of its own (not a view of
+wasm memory), so a worker can list `values.buffer` in `postMessage`'s transfer list and hand the frames to the
+main thread without a copy. `values` holds `progress.length` consecutive frames of `elements * points * components` numbers,
 in element, then point, then component order (element = table row, or the flat segment index for
 `embeddedBars`); `progress[i]` is frame `i`'s load factor or time. `firstSample` continues across
-`advance` calls like `RecorderBatch`'s. Values are plain arrays; a typed-array form is not
-implemented.
+`advance` calls like `RecorderBatch`'s.
 
 `LimitSample`: `{ progress, utilization, kind, elementKind, elementIndex }` for each sample a
 `static` stage recorded in the call (every accepted step, plus the initial state with
@@ -492,6 +495,16 @@ report checks crushing at `|eps_cu2| = 0.0035` and rupture only; the other two a
 `elementKind` (the flat segment index for `embeddedBar`, mapped to `(bar, segment)` by
 `modelOutput()`). The list is empty for a model with no `csfmConcrete` or `csfmRebar`, and for
 `transient` and `modal` stages.
+
+`StepDiagnostic`: `{ progress, iterations, factorizations, cutback? }` for each step a `static` stage took in
+the call, in order, so entry `k` belongs with frame `k` of every `bulkBatches` entry and with `limitHistory[k]`
+(`header.recordInitial`'s initial sample has a frame and a limit entry but no step, so it shifts them by one).
+`progress` is the load factor the step ended at; `iterations` the Newton iterations (corrector solves under arc
+length) of the accepted attempt; `factorizations` the tangent factorizations over the step, failed attempts
+included. Under `loadControlCutbacks`, `cutback` is `{ nominalIncrement, acceptedIncrement, retries }`: the step
+asked for `nominalIncrement`, halved `retries` times, and landed `acceptedIncrement`, the rest being asked again
+by the next step. `cutback` is absent for any other integrator. The list is empty for `transient` and `modal`
+stages.
 
 `ContinuationDetail`: `radius, `nextRadius`, `retries`, `correctorSolves`,
 `factorizations`, `forceMeasure`, `arcError`, `chordLength`, `detSign`,

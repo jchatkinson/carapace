@@ -42,16 +42,44 @@ pub fn decode_input(value: Ts<CarapaceInputV1>) -> Result<WasmSession, JsValue> 
 #[wasm_bindgen]
 impl WasmSession {
     /// See `input_v1::Session::advance`. Returns a `{ done, stageComplete, stepsTaken,
-    /// loadFactor, error, recorderBatches }` object — `recorderBatches` holds only the samples
+    /// loadFactor, error, recorderBatches, bulkBatches, ... }` object. `recorderBatches` holds only the samples
     /// this call produced (results-storage-indexeddb.md's `recorderBatch`, one entry per
     /// recorder that recorded this call), not the whole run's history. There is no separate
     /// "samples so far" accessor: a caller that needs the full history accumulates these
-    /// batches itself, same as the planned results-storage worker will.
+    /// batches itself, same as the planned results-storage worker will. `bulkBatches` carry their
+    /// `progress` and `values` as `Float64Array`s, each on its own buffer, so a worker can
+    /// transfer them to the main thread without a copy.
     pub fn advance(&mut self, step_budget: u32) -> Result<Ts<input_v1::StepOutcome>, JsValue> {
-        let outcome = self.0.advance(step_budget);
-        outcome
-            .into_ts()
-            .map_err(|error| JsValue::from_str(&error.to_string()))
+        let mut outcome = self.0.advance(step_budget);
+        // Bulk frames are the one large payload: leave them out of the serde pass and attach them
+        // as `Float64Array`s, each a fresh buffer the caller can transfer.
+        let bulk_batches = std::mem::take(&mut outcome.bulk_batches);
+        let js: JsValue = Tsify::into_js(&outcome)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?
+            .into();
+        let batches = js_sys::Array::new();
+        for batch in &bulk_batches {
+            let object = js_sys::Object::new();
+            let numbers = [
+                ("recorderIndex", batch.recorder_index as f64),
+                ("stageIndex", batch.stage_index as f64),
+                ("firstSample", f64::from(batch.first_sample)),
+                ("elements", f64::from(batch.elements)),
+                ("points", f64::from(batch.points)),
+                ("components", f64::from(batch.components)),
+            ];
+            for (key, value) in numbers {
+                js_sys::Reflect::set(&object, &key.into(), &value.into())?;
+            }
+            let arrays = [("progress", &batch.progress), ("values", &batch.values)];
+            for (key, data) in arrays {
+                let array = js_sys::Float64Array::from(data.as_slice());
+                js_sys::Reflect::set(&object, &key.into(), &array)?;
+            }
+            batches.push(&object);
+        }
+        js_sys::Reflect::set(&js, &"bulkBatches".into(), &batches)?;
+        Ok(Ts::new_unchecked(js))
     }
 
     /// Frequencies, mode shapes and participation of every `Modal` stage finished so far

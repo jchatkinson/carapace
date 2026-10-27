@@ -142,6 +142,34 @@ fn a_cutback_stage_reaches_its_target_and_records_every_accepted_substep() {
     }
 }
 
+/// `stepDiagnostics` has one entry per accepted substep, ending where the recorders do, and its
+/// `cutback` block carries the native `CutbackInfo`: some substeps are cut back (`retries > 0`),
+/// every one asked for at most the nominal increment, and the accepted increments cover
+/// `STEPS * INCREMENT`.
+#[test]
+fn step_diagnostics_report_each_substeps_cutbacks() {
+    let expected = native_substeps();
+    let mut session = decode(input(INCREMENT, MIN_INCREMENT)).unwrap();
+    let outcome = session.advance(1000);
+    let diagnostics = &outcome.step_diagnostics;
+    assert_eq!(diagnostics.len(), expected.len());
+    for (diagnostic, &(load_factor, _)) in diagnostics.iter().zip(&expected) {
+        assert_eq!(diagnostic.progress, load_factor);
+        assert!(diagnostic.iterations >= 1 && diagnostic.factorizations >= 1);
+    }
+    let cutbacks: Vec<_> = diagnostics.iter().map(|d| d.cutback.unwrap()).collect();
+    assert!(cutbacks.iter().any(|c| c.retries > 0), "{cutbacks:?}");
+    assert!(cutbacks
+        .iter()
+        .all(|c| c.accepted_increment <= c.nominal_increment + 1e-15
+            && c.nominal_increment <= INCREMENT + 1e-15));
+    let covered: f64 = cutbacks.iter().map(|c| c.accepted_increment).sum();
+    assert!(
+        (covered - STEPS as f64 * INCREMENT).abs() < 1e-12,
+        "{covered}"
+    );
+}
+
 #[test]
 fn advance_budget_counts_accepted_substeps() {
     let expected = native_substeps();

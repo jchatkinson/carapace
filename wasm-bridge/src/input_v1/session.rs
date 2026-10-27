@@ -117,13 +117,24 @@ where
 /// width.
 fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
     domain: &Domain<NDIM, NDOF, NId, E>,
-    bulk: &ResolvedBulk<E::Id>,
+    bulk: &ResolvedBulk<NId, E::Id>,
+    reactions: &dyn Fn(&[NId]) -> Vec<f64>,
     out: &mut Vec<f64>,
 ) where
     NId: Key,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     use super::sequence::BulkQuantity;
+    if !bulk.nodes.is_empty() {
+        if bulk.quantity == BulkQuantity::Reaction {
+            out.extend(reactions(&bulk.nodes));
+        } else {
+            for &node in &bulk.nodes {
+                out.extend_from_slice(&domain.node(node).displacement);
+            }
+        }
+        return;
+    }
     for &element in &bulk.elements {
         if bulk.bars {
             let quantity = match bulk.quantity {
@@ -468,14 +479,23 @@ impl From<LimitKind> for LimitKindDetail {
 }
 
 /// A decoded `RecorderSpec::Bulk`.
-pub(super) struct ResolvedBulk<EId> {
+pub(super) struct ResolvedBulk<NId, EId> {
     pub recorder_index: usize,
     pub elements: Vec<EId>,
+    /// The `nodes` table's rows (empty for an element table).
+    pub nodes: Vec<NId>,
     pub points: u32,
     pub components: u32,
     pub quantity: super::sequence::BulkQuantity,
     pub bars: bool,
     pub emitted: u32,
+}
+
+impl<NId, EId> ResolvedBulk<NId, EId> {
+    /// Rows per frame: the nodes of a `nodes` table, else the elements.
+    pub fn count(&self) -> usize {
+        self.nodes.len().max(self.elements.len())
+    }
 }
 
 pub(super) struct CompiledStage<NId, EId, Load> {
@@ -582,6 +602,36 @@ pub struct StepOutcome {
     /// state with `header.recordInitial`), naming the controlling material-limit utilization and
     /// where it is. Always empty for a model with no limit state or for other stage kinds.
     pub limit_history: Vec<LimitSample>,
+    /// For a `Static` stage: one entry per step this call took, in order, with the solver work it
+    /// cost. They line up with the frames of `bulkBatches` and the entries of `limitHistory`,
+    /// except that the initial sample `header.recordInitial` adds has no step. Empty for other
+    /// stage kinds.
+    pub step_diagnostics: Vec<StepDiagnostic>,
+}
+
+/// What one accepted `Static` step cost.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct StepDiagnostic {
+    /// The load factor (or arc-length continuation parameter) the step ended at.
+    pub progress: f64,
+    /// Newton iterations of the accepted attempt (corrector solves under arc length).
+    pub iterations: u32,
+    /// Tangent factorizations over the step, failed attempts included.
+    pub factorizations: u32,
+    /// Present under `loadControlCutbacks` only.
+    pub cutback: Option<CutbackDetail>,
+}
+
+/// `loadControlCutbacks` substepping of one step: it asked for `nominalIncrement` and halved
+/// `retries` times to land on `acceptedIncrement`; the uncovered remainder is requested again by
+/// the next step.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct CutbackDetail {
+    pub nominal_increment: f64,
+    pub accepted_increment: f64,
+    pub retries: u32,
 }
 
 /// Which material limit controls (`core::LimitKind`).
@@ -622,7 +672,12 @@ pub struct BulkBatch {
     pub elements: u32,
     pub points: u32,
     pub components: u32,
+    /// A `Float64Array` across the wasm boundary (the `advance` binding moves it, not a
+    /// `number[]`), so a worker can transfer its buffer.
+    #[tsify(type = "Float64Array")]
     pub progress: Vec<f64>,
+    /// A `Float64Array` across the wasm boundary, like `progress`.
+    #[tsify(type = "Float64Array")]
     pub values: Vec<f64>,
 }
 
@@ -755,9 +810,11 @@ where
     // without retaining the samples themselves.
     recorder_sample_counts: Vec<u32>,
     model_output: ModelOutput,
-    bulks: Vec<ResolvedBulk<E::Id>>,
+    bulks: Vec<ResolvedBulk<NId, E::Id>>,
     // Per bulk recorder, per-advance only: (progress per frame, flat values).
     current_bulk: Vec<(Vec<f64>, Vec<f64>)>,
+    // Per-advance only: one entry per `Static` step taken.
+    current_steps: Vec<StepDiagnostic>,
     locations: HashMap<E::Id, (ElementKind, u32)>,
     // Per-advance only, like `current_batch`.
     current_limits: Vec<LimitSample>,
@@ -801,7 +858,7 @@ where
         node_ids: Vec<NId>,
         stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
         recorders: Vec<ResolvedRecorder<NId, E::Id>>,
-        bulks: Vec<ResolvedBulk<E::Id>>,
+        bulks: Vec<ResolvedBulk<NId, E::Id>>,
         locations: HashMap<E::Id, (ElementKind, u32)>,
         record_initial: bool,
     ) -> Self {
@@ -832,6 +889,7 @@ where
             bulks,
             locations,
             current_limits: Vec::new(),
+            current_steps: Vec::new(),
         }
     }
 
@@ -861,6 +919,7 @@ where
             values.clear();
         }
         self.current_limits.clear();
+        self.current_steps.clear();
         self.continuation = None;
 
         if self.error.is_none() && self.runner.is_none() && self.current_stage < self.stages.len() {
@@ -877,6 +936,7 @@ where
                 recorder_batches: Vec::new(),
                 bulk_batches: Vec::new(),
                 limit_history: Vec::new(),
+                step_diagnostics: Vec::new(),
             };
         }
 
@@ -943,7 +1003,7 @@ where
                     recorder_index: bulk.recorder_index,
                     stage_index: stage_index_for_batch,
                     first_sample,
-                    elements: bulk.elements.len() as u32,
+                    elements: bulk.count() as u32,
                     points: bulk.points,
                     components: bulk.components,
                     progress: progress.clone(),
@@ -962,6 +1022,7 @@ where
             recorder_batches,
             bulk_batches,
             limit_history: self.current_limits.clone(),
+            step_diagnostics: self.current_steps.clone(),
         }
     }
 
@@ -1137,6 +1198,16 @@ where
             } => {
                 let result = analysis.step()?;
                 self.load_factor = result.load_factor;
+                self.current_steps.push(StepDiagnostic {
+                    progress: result.load_factor,
+                    iterations: result.iterations as u32,
+                    factorizations: result.factorizations as u32,
+                    cutback: result.cutbacks.map(|info| CutbackDetail {
+                        nominal_increment: info.nominal_increment,
+                        accepted_increment: info.accepted_increment,
+                        retries: info.retries,
+                    }),
+                });
                 // Under `loadControlCutbacks` a call accepts one substep; the nominal increment
                 // only counts as done once its uncovered remainder has been taken too.
                 let nominal_done = result
@@ -1335,7 +1406,13 @@ where
                 for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
                 {
                     frames.push(progress);
-                    append_bulk_values(analysis.domain(), bulk, values);
+                    let domain = analysis.domain();
+                    // One pass over the model, not a sweep per DOF.
+                    let reactions = |nodes: &[NId]| {
+                        let all = domain.reactions_all(progress);
+                        nodes.iter().flat_map(|&node| all[node]).collect()
+                    };
+                    append_bulk_values(domain, bulk, &reactions, values);
                 }
                 if let Some((element, utilization, kind)) = analysis
                     .domain()
@@ -1403,7 +1480,14 @@ where
                 for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
                 {
                     frames.push(progress);
-                    append_bulk_values(analysis.domain(), bulk, values);
+                    let reactions = |nodes: &[NId]| {
+                        nodes
+                            .iter()
+                            .flat_map(|&node| (0..NDOF).map(move |dof| (node, dof)))
+                            .map(|(node, dof)| analysis.reaction(node, dof))
+                            .collect()
+                    };
+                    append_bulk_values(analysis.domain(), bulk, &reactions, values);
                 }
             }
             StageRunner::Reset { .. } => {}

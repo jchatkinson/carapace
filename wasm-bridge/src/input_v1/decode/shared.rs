@@ -754,10 +754,44 @@ where
                         recorder: index as u32,
                         reason,
                     };
+                    if table == BulkTable::Nodes {
+                        if !matches!(
+                            quantity,
+                            BulkQuantity::Displacement | BulkQuantity::Reaction
+                        ) {
+                            return Err(not_applicable(
+                                "the nodes table records displacement or reaction",
+                            ));
+                        }
+                        if node_ids.is_empty() {
+                            return Err(not_applicable("the table is empty"));
+                        }
+                        bulks.push(ResolvedBulk {
+                            recorder_index: index,
+                            elements: Vec::new(),
+                            nodes: node_ids.to_vec(),
+                            points: 1,
+                            components: ndof as u32,
+                            quantity,
+                            bars: false,
+                            emitted: 0,
+                        });
+                        return Ok(ResolvedRecorder::Bulk {
+                            bulk: bulks.len() as u32 - 1,
+                        });
+                    }
+                    if matches!(
+                        quantity,
+                        BulkQuantity::Displacement | BulkQuantity::Reaction
+                    ) {
+                        return Err(not_applicable(
+                            "displacement and reaction belong to the nodes table",
+                        ));
+                    }
                     let kind = match table {
                         BulkTable::Triangles => ElementKind::Tri3,
                         BulkTable::Quads => ElementKind::Quad4,
-                        BulkTable::EmbeddedBars => ElementKind::EmbeddedBar,
+                        _ => ElementKind::EmbeddedBar,
                     };
                     let bars = table == BulkTable::EmbeddedBars;
                     match quantity {
@@ -798,6 +832,7 @@ where
                     bulks.push(ResolvedBulk {
                         recorder_index: index,
                         elements: ids,
+                        nodes: Vec::new(),
                         points,
                         components,
                         quantity,
