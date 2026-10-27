@@ -526,3 +526,41 @@ fn span_beam_through_the_wire_equals_the_native_run_including_recorders() {
     let (sliced, _) = run_wire(&fx, 3);
     assert_identical(&native, &sliced);
 }
+
+/// Writes the span-beam wire input and the native run to `comparison/out/` for
+/// `comparison/wasm_span_beam.mjs`, which replays the input through the built `pkg/` under Node.
+/// Run: `cargo test -p carapace-wasm --test wire export_span_beam -- --ignored`.
+#[test]
+#[ignore = "writes comparison/out/; run on demand for comparison/wasm_span_beam.mjs"]
+fn export_span_beam_for_the_wasm_comparison() {
+    let fx = fixture();
+    let out = format!("{}/../comparison/out", env!("CARGO_MANIFEST_DIR"));
+    std::fs::create_dir_all(&out).unwrap();
+    let frames: Vec<Value> = run_native(&fx)
+        .iter()
+        .map(|frame| {
+            json!({
+                "displacements": frame.displacements, "strain": frame.strain,
+                "stress": frame.stress, "kc2": frame.kc2, "barForce": frame.bar_force,
+                "barStrain": frame.bar_strain, "barStress": frame.bar_stress,
+                "barRuptured": frame.bar_ruptured,
+                "limit": frame.limit.map(|(utilization, kind, element_kind, element_index)| json!({
+                    "utilization": utilization, "kind": kind, "elementKind": element_kind,
+                    "elementIndex": element_index,
+                })),
+            })
+        })
+        .collect();
+    let write = |name: &str, value: &Value| {
+        std::fs::write(
+            format!("{out}/{name}"),
+            serde_json::to_string(value).unwrap(),
+        )
+        .unwrap();
+    };
+    write(
+        "span_beam_wire.json",
+        &serde_json::to_value(wire_input(&fx)).unwrap(),
+    );
+    write("span_beam_native.json", &Value::Array(frames));
+}
