@@ -20,6 +20,18 @@ pub enum IntegratorSpec {
     LoadControl {
         increment: f64,
     },
+    /// `loadControl` with adaptive substepping (`core::Integrator::LoadControlCutbacks`): a step
+    /// that fails to converge is reverted and retried at half its size, down to `minIncrement`
+    /// (`0 < minIncrement <= increment`), after which the stage fails with
+    /// `loadControlExhausted`. The stage's `steps` counts **nominal** increments: it ends once
+    /// `steps * increment` of load factor has been accepted, however many substeps that took. Each
+    /// accepted substep counts against an `advance` budget and records one sample of every
+    /// recorder; the uncovered remainder of a cut-back step is requested again by the next
+    /// substep.
+    LoadControlCutbacks {
+        increment: f64,
+        min_increment: f64,
+    },
     /// `node`/`dof` index into `NodeTable`; the compiler is responsible for
     /// having registered a reference load with nonzero sensitivity on that
     /// DOF — decode does not re-derive that check.

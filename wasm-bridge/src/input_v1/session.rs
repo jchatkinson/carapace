@@ -927,7 +927,14 @@ where
             } => {
                 let result = analysis.step()?;
                 self.load_factor = result.load_factor;
-                *steps_remaining -= 1;
+                // Under `loadControlCutbacks` a call accepts one substep; the nominal increment
+                // only counts as done once its uncovered remainder has been taken too.
+                let nominal_done = result
+                    .cutbacks
+                    .is_none_or(|info| info.accepted_increment >= info.nominal_increment);
+                if nominal_done {
+                    *steps_remaining -= 1;
+                }
                 if let Some(info) = result.arc {
                     self.continuation = Some(info.into());
                     // A met stop criterion ends the stage early.

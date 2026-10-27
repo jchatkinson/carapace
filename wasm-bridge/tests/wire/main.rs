@@ -3,6 +3,7 @@ mod common;
 mod constraints;
 mod continuum;
 mod csfm;
+mod cutbacks;
 mod element_loads;
 mod elements;
 mod material_probe;

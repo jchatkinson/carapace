@@ -78,6 +78,24 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                         IntegratorSpec::LoadControl { increment } => Integrator::LoadControl {
                             increment: *increment,
                         },
+                        IntegratorSpec::LoadControlCutbacks {
+                            increment,
+                            min_increment,
+                        } => {
+                            if !(increment.is_finite() && *increment > 0.0) {
+                                return Err(invalid_option(stage.id(), "integrator.increment"));
+                            }
+                            if !(min_increment.is_finite()
+                                && *min_increment > 0.0
+                                && min_increment <= increment)
+                            {
+                                return Err(invalid_option(stage.id(), "integrator.minIncrement"));
+                            }
+                            Integrator::LoadControlCutbacks {
+                                increment: *increment,
+                                min_increment: *min_increment,
+                            }
+                        }
                         IntegratorSpec::DisplacementControl {
                             node,
                             dof,
