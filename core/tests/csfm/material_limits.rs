@@ -210,6 +210,77 @@ fn lightly_reinforced_tie_lands_on_rebar_rupture() {
     assert!(just_above > 1.0, "{just_above}");
 }
 
+/// **A landing bracket that spans a kink.** The same bare-steel tie with a user rebar strain
+/// limit of 0.01, which sits well past the yield strain (0.0025). At the radius cap one arc-length
+/// step crosses the yield kink *and* the limit, so the bracketing response `utilization(s)` is
+/// piecewise linear with its kink inside the bracket. Plain false position keeps one end fixed on
+/// such a function and does not reach the landing tolerance in `MAX_LANDING_RETAKES` (the stage
+/// then stops with `landed_exactly == false`, ~1.6 mm past the limit); the Illinois modification
+/// does. Closed form: `sigma = fy + esh * (0.01 - fy/Es)` at `lambda = sigma` (area 1).
+#[test]
+fn a_landing_bracket_spanning_the_yield_kink_still_lands_exactly() {
+    let rebar = Material::csfm_rebar(
+        200_000.0, 500.0, 540.0, 0.05, 2.9, 32000.0, 16.0, 0.02, 0.67, false,
+    )
+    .unwrap();
+    let eps_u = rebar_fields(&rebar).eps_u;
+    let concrete =
+        PlaneMaterial::csfm_concrete(30.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap();
+    let (domain, _concrete_id, bar_id) = one_dof_tie_or_strut(concrete, rebar, 1.0);
+
+    let limits = LimitStateConfig {
+        rebar_strain_limit: Some(0.01),
+        ..Default::default()
+    };
+    let mut arc = ArcLength::adaptive(
+        0.1,
+        0.01,
+        0.5,
+        ArcScales::Explicit {
+            displacement: eps_u * LEG_LENGTH,
+            rotation: None,
+            load: 540.0,
+        },
+    );
+    arc.direction = ArcDirection::Increasing;
+    arc.stop = ArcStopCriteria {
+        material_limit: Some(Box::new(MaterialLimitTarget {
+            limits,
+            exact: true,
+        })),
+        ..Default::default()
+    };
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::ArcLength(arc))
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(combined())
+        .try_build(domain)
+        .unwrap();
+    for _ in 0..200 {
+        let result = analysis.step().unwrap();
+        let Some(stop) = result.arc.unwrap().stop else {
+            continue;
+        };
+        assert_eq!(stop.reason, StopReason::MaterialLimit);
+        assert!(stop.landed_exactly, "overshoot {}", stop.overshoot);
+        let expected = 500.0 + (540.0 - 500.0) / (eps_u - 500.0 / 200_000.0) * (0.01 - 0.0025);
+        assert!(
+            (result.load_factor - expected).abs() < 1e-6 * expected,
+            "lambda {} vs {expected}",
+            result.load_factor
+        );
+        let strain = analysis.domain().element_gauss_responses(bar_id).unwrap()[0].strain[0];
+        assert!((strain - 0.01).abs() < 1e-6 * 0.01, "strain {strain}");
+        return;
+    }
+    panic!("did not stop");
+}
+
 /// **The bare-steel case** (`tension_stiffening: false`): the same tie
 /// geometry, pulled in tension until `|eps| = eps_u` — the bilinear bare
 /// branch rather than TCM/POM. Same closed form as the tie (concrete

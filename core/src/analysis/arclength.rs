@@ -1094,6 +1094,9 @@ where
         // f(s) = value(s) - target, bracketed on [0, s_used].
         let (mut s_lo, mut f_lo) = (0.0, before - target);
         let (mut s_hi, mut f_hi) = (*radius_used, after - target);
+        // Illinois: when the same end is retained twice in a row, halve the other end's weight so a
+        // kinked response (e.g. a yield point inside the bracket) cannot stall false position.
+        let mut last_side: Option<bool> = None;
         for _ in 0..MAX_LANDING_RETAKES {
             let s = s_lo + (s_hi - s_lo) * (-f_lo) / (f_hi - f_lo);
             if !(s.is_finite() && s > 0.0) {
@@ -1126,9 +1129,17 @@ where
             if f.signum() == f_lo.signum() {
                 s_lo = s;
                 f_lo = f;
+                if last_side == Some(true) {
+                    f_hi *= 0.5;
+                }
+                last_side = Some(true);
             } else {
                 s_hi = s;
                 f_hi = f;
+                if last_side == Some(false) {
+                    f_lo *= 0.5;
+                }
+                last_side = Some(false);
             }
         }
         self.domain = bracket_domain;
