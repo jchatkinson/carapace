@@ -1,7 +1,7 @@
 // Run with Node 22.18+ after scripts/build-wasm.sh (tests the shipped build); also type-check against generated .d.ts.
 import { loadCarapace } from "../../comparison/load_wasm.mjs";
 import type {
-  AlgorithmSpec, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, SequenceSpec, StepOutcome,
+  AlgorithmSpec, BulkBatch, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, LimitSample, ModelOutput, SequenceSpec, StepOutcome,
 } from "../../pkg/carapace_wasm.js";
 
 const { decodeInput } = await loadCarapace();
@@ -311,4 +311,77 @@ shell.sequence = {
 const shellError = expectThrow(() => decodeInput({ ...shell, shellSections: [{ kind: "elasticMembranePlate", e: 1000, nu: 0.3, h: 0, rho: 0 }] })) as DecodeError;
 assert(shellError.kind === "invalidShellSection", "shell section validation");
 
-console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, shells, configurable static/transient solvers, arc length, defaults, errors.");
+// CSFM: one cracking Q4 (csfmConcrete) with a bonded csfmRebar bar (embeddedBars), pulled in tension (mm, N, MPa).
+// The bar spans the quad at mid-height, so its strain is the mean of the right-edge displacements over the length.
+const csfm = emptyInput(2);
+csfm.nodes = { coords: [0, 0, 200, 0, 200, 100, 0, 100], fixed: [3, 0, 0, 3], massNodeIndex: [], mass: [] };
+// A tensile regularization is needed for a single cracking element to converge (the unregularized softening diverges).
+csfm.planeMaterials = [{ kind: "csfmConcrete", fck: 30, law: "parabolaRectangle", softening: true, tensileRegularization: 0.01 }];
+csfm.quads = { nodeIds: [0, 1, 2, 3], thickness: [100], material: [0], density: [0], formulation: ["full"] };
+csfm.materials = [{
+  kind: "csfmRebar", es: 200000, fy: 500, ft: 540, epsU: 0.05, fctm: 2.9, ecm: 32800,
+  diameter: 16, rhoEff: 0.02, lambda: 1, tensionStiffening: true,
+}];
+csfm.embeddedBars = [{ polyline: [0, 50, 200, 50], area: 400, material: 0 }];
+csfm.loadPatterns = { series: [{ kind: "linear", slope: 1 }], scaleFactor: [1] };
+csfm.nodalLoads = { pattern: [0, 0], node: [1, 2], dof: [0, 0], value: [20000, 20000], stage: [0, 0] };
+csfm.sequence = {
+  stages: [{
+    kind: "static", id: "pull", steps: 4, integrator: { kind: "loadControl", increment: 0.25 },
+    algorithm: { kind: "newton" }, convergence: { kind: "normUnbalance", tol: 1e-3, maxIter: 50 }, holdPatternsAfter: [],
+  }],
+  recorders: [
+    { response: "bulk", table: "embeddedBars", quantity: "axialForce" },
+    { response: "embeddedBar", bar: 0, segment: 0, quantity: "stress" },
+    { response: "gaussPoint", elementKind: "quad4", elementIndex: 0, point: 0, quantity: "principalStress", component: 0 },
+    { response: "gaussPoint", elementKind: "quad4", elementIndex: 0, point: 0, quantity: "principalStress", component: 1 },
+    { response: "nodeDisp", node: 1, dof: 0 },
+    { response: "nodeDisp", node: 2, dof: 0 },
+    { response: "embeddedBar", bar: 0, segment: 0, quantity: "strain" },
+  ],
+};
+{
+  const session = decodeInput(csfm);
+  try {
+    const model: ModelOutput = session.modelOutput();
+    assert(model.embeddedBars.length === 1 && model.embeddedBars[0].firstSegment === 0, "model output groups");
+    const group = model.embeddedBars[0];
+    assert(group.segments.length === 1 && Math.abs(group.segments[0].length - 200) < 1e-9, "model output segment");
+    assert(group.segments[0].hostKind === "quad4", "model output host");
+    assert(group.routing === "tcm" || group.routing === "pom", "model output routing");
+    assert(group.sr !== undefined && group.sr >= 0, "model output crack spacing");
+
+    const outcome: StepOutcome = session.advance(100);
+    assert(outcome.done && outcome.error === undefined, `csfm run: ${JSON.stringify(outcome.error)}`);
+    assert(Math.abs(outcome.loadFactor - 1) < 1e-12, "csfm load factor");
+    const series = (index: number) => outcome.recorderBatches.find((batch) => batch.recorderIndex === index)!.samples.map(([, v]) => v);
+    const [stress, p1, p2, ux1, ux2, strain] = [1, 2, 3, 4, 5, 6].map(series);
+    assert(stress.length === 4 && strain.length === 4, "bar recorder samples");
+
+    // Bulk recorder: one frame of [axialForce] per accepted step, one segment, one point.
+    const bulk: BulkBatch = outcome.bulkBatches.find((batch) => batch.recorderIndex === 0)!;
+    assert(bulk.elements === 1 && bulk.points === 1 && bulk.components === 1 && bulk.progress.length === 4, "bulk batch shape");
+    assert(bulk.values.length === 4, "bulk batch values");
+    for (let k = 0; k < 4; k++) {
+      assert(Math.abs(bulk.values[k] - stress[k] * 400) <= 1e-9 * Math.abs(bulk.values[k]) + 1e-9, "bulk bar force = stress x area");
+      assert(Math.abs(strain[k] - (ux1[k] + ux2[k]) / 2 / 200) <= 1e-9 * Math.abs(strain[k]), "bar strain follows the host displacements");
+      assert(p1[k] >= p2[k], "principal stresses are ordered");
+    }
+    assert(bulk.values[3] > bulk.values[0] && bulk.values[3] > 0, "bar picks up force as the load grows");
+    assert(p1[3] > 0, "the host is in tension");
+
+    // Controlling material-limit report: one entry per accepted step, located by table row.
+    const limits: LimitSample[] = outcome.limitHistory;
+    assert(limits.length === 4 && limits.every((l) => l.utilization >= 0 && l.utilization < 1), "limit history");
+    assert(limits.every((l) => l.elementKind === "quad4" || l.elementKind === "embeddedBar"), "limit location kinds");
+  } finally { session.free(); }
+}
+// Bad CSFM constants are structured errors naming the arena row; a bar outside the mesh names its segment.
+const badRebar = expectThrow(() => decodeInput({
+  ...csfm, materials: [{ kind: "csfmRebar", es: 200000, fy: 500, ft: 540, epsU: 0.05, fctm: 2.9, ecm: 32800, diameter: 16, rhoEff: 0, lambda: 1, tensionStiffening: true }],
+})) as DecodeError;
+assert(badRebar.kind === "invalidMaterial" && badRebar.index === 0, "csfmRebar validation");
+const outsideBar = expectThrow(() => decodeInput({ ...csfm, embeddedBars: [{ polyline: [0, 500, 200, 500], area: 400, material: 0 }] })) as DecodeError;
+assert(outsideBar.kind === "invalidModel" && outsideBar.error.kind === "embeddedBarOutsideMesh", "bar outside the mesh");
+
+console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, shells, CSFM concrete/rebar/embedded bars, configurable static/transient solvers, arc length, defaults, errors.");
