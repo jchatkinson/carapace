@@ -37,7 +37,53 @@ Session-scheduling support for `LoadControlCutbacks` over the wire (`wasm-bridge
 `steps_remaining` accounting still assumes one call = one full nominal increment) is deferred to phase 5, which needs
 it anyway for the wire format.
 
-Phase 4 (limit states and arc-length) has not started.
+Phase 4 (limit states and arc-length) is complete: §4 G passes. `LimitKind`/`LimitStateConfig` (§2.5
+point 3) are in `core/src/model/materials/limit_state.rs`; `CsfmConcreteFields`'s and `CsfmRebarFields`'s
+`limit_utilization` free functions (`csfm_concrete.rs`, `csfm_rebar.rs`, exposed as
+`PlaneMaterial::csfm_concrete_limit_utilization`/`Material::csfm_rebar_limit_utilization`) add the
+`EPS_CU2 = -0.0035` default crushing limit (§6 decision 5, for both compression laws) and the optional
+caller-supplied overrides, with unit tests in `core/tests/materials/csfm_concrete.rs` and `csfm_rebar.rs`.
+`ElementOps::limit_utilization` (default `None`) is implemented for `Quad4`/`Tri3` (the worst `CsfmConcrete`
+Gauss point) and `EmbeddedBar` (`CsfmRebar`), dispatched through `Element`; `Domain::controlling_limit_utilization`
+reduces over every element to the controlling `(element, utilization, kind)`, tested in
+`core/tests/continuum/embedded_bar.rs`.
+
+`ArcStopCriteria` gains `material_limit: Option<Box<MaterialLimitTarget>>` (boxed to keep `Integrator`'s
+`large_enum_variant` size gap where it was; `Integrator` itself carries a documented `#[allow]` rather than
+boxing the whole `ArcLength` payload), wired into `try_arc_step`'s existing bracket-and-retake machinery
+(`arclength.rs`) the same way as `DisplacementTarget`/`LoadFactorTarget`. `StepResult` gains
+`material_limit: Option<(f64, LimitKind)>`, reported after every accepted step of every integrator (plain
+`LoadControl`, `LoadControlCutbacks` and `ArcLength` alike) under `LimitStateConfig::default()` - this is
+the "equivalent check after each accepted load-control step" §2.5 point 3 asks for: detection only, since
+load control has no bordered corrector to land on the limit exactly. Mechanism tests (a minimal one-DOF
+rupture model, exercised under both integrators) are in `core/tests/csfm/limit_state.rs`.
+
+§4 G's three required tests: `core/tests/csfm/arclength.rs` traces the span beam at 50 kip/point under
+`Integrator::ArcLength` past its flexural limit point - lambda rises, reaches an interior maximum, then
+falls for several steps; the refined peak (`lambda ≈ 0.9828`, by local quadratic interpolation) is stable
+to about `5e-6` relative between a radius and its half, two orders of magnitude inside the plan's 0.5%
+tolerance - and confirms a separate `Integrator::LoadControlCutbacks` run stalls below it, at `lambda =
+0.975`, consistent with (not asserted equal to) TS's historical ~97.5% abort recorded in
+`fixtures/README.md` under its own, looser `PRODUCTION` settings. There is no dedicated TS fixture at 50
+kip/point: `spanBeam(loadPerNodeN)` only scales the two load values in `loadMap`, so the test scales
+`span-beam-5kip-gamma-0.001.json`'s loads by 10x in Rust instead of adding a second multi-megabyte TS
+fixture for a load magnitude that never changes the topology (no calcs.app changes).
+`core/tests/csfm/material_limits.rs` lands exactly on utilization 1 for one small, single-purpose model
+per `LimitKind` sub-case - a lightly reinforced tie (TCM rupture), a bare-steel case (`|eps| = eps_u`),
+and an over-reinforced strut (concrete crushing) - each checked just below and above the landing against
+`Material::csfm_rebar_ruptured`'s strict `>`. `core/tests/csfm/critical_load.rs` reproduces TS's
+`findCriticalLoad` bisection on the deep-beam fixture (`critical-load.json`) to `4.5e-5`, inside its own
+`1e-4` `loadFractionTolerance` - TS's from-zero re-solve bisection and Carapace's incremental
+bracket-and-retake are different procedures that agree here because `CsfmConcrete`/`CsfmRebar` are
+stateless and nonlinear-elastic, so the equilibrium state at a given load fraction doesn't depend on how
+it was reached.
+
+No TS or Carapace defects were found during phase 4. One fixture-schema note, not a bug:
+`critical-load.json`'s `model` object omits `loads` (`findCriticalLoad` reads load through
+`resolved.model.loadMap` internally in TS, not a static list, so the export script never needed one here).
+The parity test borrows `models/deep-beam.json`'s `loads` array instead, after confirming the two
+fixtures' `model` objects are otherwise identical field for field (both are calcs.app's `deepBeam()`),
+rather than widening the export script for a field TS's own bisection never uses.
 
 Goal: move the Compatible Stress Field Method (CSFM) analysis from CalcsApp (`../calcs.app/lib/fem`, TypeScript)
 into Carapace, so that Carapace becomes the solver CalcsApp ships. This plan covers only the CSFM procedure and its

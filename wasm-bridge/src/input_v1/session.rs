@@ -210,6 +210,12 @@ pub enum StopReasonDetail {
     LoadFactorZeroCrossing,
     ChordLength,
     StepCount,
+    /// `core::analysis::StopReason::MaterialLimit` (CSFM plan §2.5 point
+    /// 3). Reporting only: there is no wire input for
+    /// `ArcStopCriteria::material_limit` yet (plan §2.7, deferred to
+    /// phase 5), so this variant can appear in a result but never be
+    /// requested over the wire.
+    MaterialLimit,
 }
 
 impl From<ArcStepInfo> for ContinuationDetail {
@@ -234,6 +240,7 @@ impl From<ArcStepInfo> for ContinuationDetail {
                     StopReason::LoadFactorZeroCrossing => StopReasonDetail::LoadFactorZeroCrossing,
                     StopReason::ChordLength => StopReasonDetail::ChordLength,
                     StopReason::StepCount => StopReasonDetail::StepCount,
+                    StopReason::MaterialLimit => StopReasonDetail::MaterialLimit,
                 },
                 landed_exactly: stop.landed_exactly,
                 overshoot: stop.overshoot,
