@@ -25,7 +25,7 @@ const STEPS: u32 = 20;
 const MIN_INCREMENT: f64 = 0.001;
 const MAX_ITER: u32 = 2;
 
-fn input(increment: f64, min_increment: f64) -> CarapaceInputV1 {
+pub fn input(increment: f64, min_increment: f64) -> CarapaceInputV1 {
     let mut input = serde_json::to_value(empty_input(2)).unwrap();
     input["nodes"] = json!({
         "coords": [0.0, 0.0, 100.0, 0.0], "fixed": [7, 6], "massNodeIndex": [], "mass": [],
@@ -204,4 +204,9 @@ fn exhausted_cutbacks_report_the_last_accepted_load_factor() {
         panic!("{:?}", outcome.error);
     };
     assert!(accepted_load_factor < STEPS as f64 * INCREMENT);
+}
+
+/// The cutback model as built by this module's tests, for other modules that need a model with no CSFM limit state.
+pub fn default_input() -> CarapaceInputV1 {
+    input(INCREMENT, MIN_INCREMENT)
 }

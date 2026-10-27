@@ -25,8 +25,8 @@ pub use materials::MaterialSpec;
 pub use model_output::{EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting};
 pub use session::{
     AnalysisErrorDetail, ArcFailureDetail, ContinuationDetail, ContinuationStopDetail,
-    ModalResultsReport, ModalStageResult, ModeResult, RecorderBatch, Session, Session2, Session3,
-    StepOutcome, StopReasonDetail,
+    LimitKindDetail, LimitSample, ModalResultsReport, ModalStageResult, ModeResult, RecorderBatch,
+    Session, Session2, Session3, StepOutcome, StopReasonDetail,
 };
 
 use sequence::SequenceSpec;

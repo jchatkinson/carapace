@@ -1129,3 +1129,77 @@ fn bulk_recorder_decode_errors() {
         DecodeError::ElementKindNotInProfile { table: "quads" }
     );
 }
+
+// ---- per-step material-limit report ----
+
+use carapace_wasm::input_v1::LimitKindDetail;
+
+/// Every accepted step reports the controlling utilization and where it is. On the rupture tie the
+/// bar is the only limit-bearing element that can control (the concrete is unloaded in
+/// compression), and the last step lands on utilization 1.
+#[test]
+fn each_step_reports_the_controlling_limit_and_its_location() {
+    let mut session = decode(tie_input(Some(MaterialLimitSpec {
+        exact: true,
+        ..Default::default()
+    })))
+    .unwrap();
+    let mut history = Vec::new();
+    loop {
+        let outcome = session.advance(10);
+        history.extend(outcome.limit_history.clone());
+        if outcome.done {
+            break;
+        }
+    }
+    // One entry per accepted step, aligned with the load factor.
+    assert!(history.len() > 3);
+    let last = history.last().unwrap();
+    assert!(
+        (last.utilization - 1.0).abs() < 1e-6,
+        "{}",
+        last.utilization
+    );
+    assert_eq!(last.kind, LimitKindDetail::RebarRupture);
+    assert_eq!(last.element_kind, ElementKind::EmbeddedBar);
+    assert_eq!(last.element_index, 0);
+    assert!((last.progress - 540.0).abs() < 1.0);
+    // The bar strains monotonically, so utilization never decreases and progress is increasing.
+    for pair in history.windows(2) {
+        assert!(pair[1].utilization >= pair[0].utilization);
+        assert!(pair[1].progress > pair[0].progress);
+    }
+}
+
+#[test]
+fn limit_history_names_the_controlling_element_kind_and_row() {
+    // The loaded tie: with a heavily strained bar the continuum points stay far from crushing, so
+    // the bar controls; its location is the flat segment index.
+    let mut input = loaded_tie();
+    input.sequence.recorders = vec![];
+    let mut session = decode(input).unwrap();
+    let outcome = session.advance(100);
+    assert_eq!(outcome.limit_history.len(), 4);
+    for sample in &outcome.limit_history {
+        assert_eq!(sample.kind, LimitKindDetail::RebarRupture);
+        assert_eq!(sample.element_kind, ElementKind::EmbeddedBar);
+        assert!(sample.element_index < 2);
+        assert!(sample.utilization > 0.0 && sample.utilization < 1.0);
+    }
+    assert_eq!(
+        outcome
+            .limit_history
+            .iter()
+            .map(|s| s.progress)
+            .collect::<Vec<_>>(),
+        vec![0.25, 0.5, 0.75, 1.0]
+    );
+}
+
+#[test]
+fn models_without_limit_states_report_no_limit_history() {
+    let mut session = decode(crate::cutbacks::default_input()).unwrap();
+    let outcome = session.advance(1000);
+    assert!(outcome.done);
+    assert!(outcome.limit_history.is_empty());
+}

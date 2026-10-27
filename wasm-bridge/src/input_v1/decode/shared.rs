@@ -441,6 +441,20 @@ impl<EId: Copy> ElementIds<EId> {
         self.by_kind[kind as usize] = ids;
     }
 
+    /// Reverse map: each element id to its `(kind, row)` in the wire tables.
+    pub(super) fn locations(&self) -> HashMap<EId, (ElementKind, u32)>
+    where
+        EId: std::hash::Hash + Eq,
+    {
+        let mut map = HashMap::new();
+        for kind in ElementKind::ALL {
+            for (row, &id) in self.by_kind[kind as usize].iter().enumerate() {
+                map.insert(id, (kind, row as u32));
+            }
+        }
+        map
+    }
+
     /// Every element id of `kind`, in table order (`ElementKindNotInProfile` for a kind of the
     /// other profile).
     pub(super) fn all(&self, kind: ElementKind, ndm: u8) -> Result<&[EId], DecodeError> {
@@ -842,6 +856,7 @@ where
         stages,
         recorders,
         bulks,
+        elements.locations(),
         input.header.record_initial,
     ))
 }

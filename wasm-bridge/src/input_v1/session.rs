@@ -19,15 +19,17 @@ use carapace_core::analysis::{
     StopReason, TransientAnalysis,
 };
 use carapace_core::model::{
-    Domain, Element, Element3, ElementOps, LoadPatternId, Node3Id, NodeId, NDF, PLANAR_NDIM,
-    SPATIAL_NDF, SPATIAL_NDIM,
+    Domain, Element, Element3, ElementOps, LimitKind, LimitStateConfig, LoadPatternId, Node3Id,
+    NodeId, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 use serde::Serialize;
 use slotmap::Key;
+use std::collections::HashMap;
 
 use super::error::ModelErrorDetail;
 use super::model_output::ModelOutput;
 use super::sequence::{EmbeddedBarQuantity, FiberResponseKind, GaussQuantity, ModalDampingAnchors};
+use super::tables::ElementKind;
 
 /// Shared by `record_sample`'s `Static`/`Transient` arms: resolves a
 /// `ResolvedRecorder::Fiber` against whatever `element`'s current fiber
@@ -454,6 +456,17 @@ pub enum ResolvedRecorder<NId, EId> {
     },
 }
 
+impl From<LimitKind> for LimitKindDetail {
+    fn from(kind: LimitKind) -> Self {
+        match kind {
+            LimitKind::ConcreteCrushing => LimitKindDetail::ConcreteCrushing,
+            LimitKind::ConcreteTensileStrain => LimitKindDetail::ConcreteTensileStrain,
+            LimitKind::RebarRupture => LimitKindDetail::RebarRupture,
+            LimitKind::RebarStrainLimit => LimitKindDetail::RebarStrainLimit,
+        }
+    }
+}
+
 /// A decoded `RecorderSpec::Bulk`.
 pub(super) struct ResolvedBulk<EId> {
     pub recorder_index: usize,
@@ -564,6 +577,36 @@ pub struct StepOutcome {
     pub recorder_batches: Vec<RecorderBatch>,
     /// This call's `bulk` recorder output, one entry per bulk recorder that recorded a step.
     pub bulk_batches: Vec<BulkBatch>,
+    /// For a `Static` stage whose model has a CSFM limit state (any `csfmConcrete` or `csfmRebar`):
+    /// one entry per sample the stage recorded this call (every accepted step, plus the initial
+    /// state with `header.recordInitial`), naming the controlling material-limit utilization and
+    /// where it is. Always empty for a model with no limit state or for other stage kinds.
+    pub limit_history: Vec<LimitSample>,
+}
+
+/// Which material limit controls (`core::LimitKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum LimitKindDetail {
+    ConcreteCrushing,
+    ConcreteTensileStrain,
+    RebarRupture,
+    RebarStrainLimit,
+}
+
+/// The controlling material-limit utilization at one recorded sample, under the always-on limits
+/// (concrete crushing at `|eps_cu2| = 0.0035` and rebar rupture; the optional strain limits are
+/// only applied by `stop.materialLimit`). `utilization >= 1` means the limit is reached. The
+/// location is element-level: `elementKind` and `elementIndex` are the row in that kind's table
+/// (the flat segment index for `embeddedBar`; `modelOutput` maps it to `(bar, segment)`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitSample {
+    pub progress: f64,
+    pub utilization: f64,
+    pub kind: LimitKindDetail,
+    pub element_kind: ElementKind,
+    pub element_index: u32,
 }
 
 /// One bulk recorder's output over the accepted steps of one `advance` call. `values` holds
@@ -715,6 +758,9 @@ where
     bulks: Vec<ResolvedBulk<E::Id>>,
     // Per bulk recorder, per-advance only: (progress per frame, flat values).
     current_bulk: Vec<(Vec<f64>, Vec<f64>)>,
+    locations: HashMap<E::Id, (ElementKind, u32)>,
+    // Per-advance only, like `current_batch`.
+    current_limits: Vec<LimitSample>,
 }
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> std::fmt::Debug
@@ -756,6 +802,7 @@ where
         stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
         recorders: Vec<ResolvedRecorder<NId, E::Id>>,
         bulks: Vec<ResolvedBulk<E::Id>>,
+        locations: HashMap<E::Id, (ElementKind, u32)>,
         record_initial: bool,
     ) -> Self {
         let pristine = stages
@@ -783,6 +830,8 @@ where
             model_output: ModelOutput::default(),
             current_bulk: vec![(Vec::new(), Vec::new()); bulks.len()],
             bulks,
+            locations,
+            current_limits: Vec::new(),
         }
     }
 
@@ -811,6 +860,7 @@ where
             progress.clear();
             values.clear();
         }
+        self.current_limits.clear();
         self.continuation = None;
 
         if self.error.is_none() && self.runner.is_none() && self.current_stage < self.stages.len() {
@@ -826,6 +876,7 @@ where
                 continuation: None,
                 recorder_batches: Vec::new(),
                 bulk_batches: Vec::new(),
+                limit_history: Vec::new(),
             };
         }
 
@@ -910,6 +961,7 @@ where
             continuation: self.continuation,
             recorder_batches,
             bulk_batches,
+            limit_history: self.current_limits.clone(),
         }
     }
 
@@ -1284,6 +1336,20 @@ where
                 {
                     frames.push(progress);
                     append_bulk_values(analysis.domain(), bulk, values);
+                }
+                if let Some((element, utilization, kind)) = analysis
+                    .domain()
+                    .controlling_limit_utilization(&LimitStateConfig::default())
+                {
+                    if let Some(&(element_kind, element_index)) = self.locations.get(&element) {
+                        self.current_limits.push(LimitSample {
+                            progress,
+                            utilization,
+                            kind: kind.into(),
+                            element_kind,
+                            element_index,
+                        });
+                    }
                 }
             }
             StageRunner::Transient { analysis, .. } => {
