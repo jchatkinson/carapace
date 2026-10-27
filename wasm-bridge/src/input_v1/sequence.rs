@@ -244,7 +244,9 @@ pub enum LineSearchSpec {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[derive(Default)]
 pub enum AlgorithmSpec {
+    #[default]
     Linear,
     Newton {
         #[serde(default)]
@@ -256,12 +258,6 @@ pub enum AlgorithmSpec {
         tangent: TangentStrategySpec,
         max_dimension: u32,
     },
-}
-
-impl Default for AlgorithmSpec {
-    fn default() -> Self {
-        Self::Linear
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]

@@ -183,7 +183,7 @@ impl Truss3 {
         b[SPATIAL_NDF + SpatialDof::Uy as usize] = cy;
         b[SPATIAL_NDF + SpatialDof::Uz as usize] = cz;
 
-        let tangent = (tangent_modulus * self.area / length) * (b.clone() * b.transpose());
+        let tangent = (tangent_modulus * self.area / length) * (b * b.transpose());
         let resistance = (stress * self.area) * b;
         (tangent, resistance)
     }

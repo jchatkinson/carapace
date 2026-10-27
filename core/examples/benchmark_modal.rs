@@ -35,10 +35,10 @@ fn main() {
         nodes.push(row);
     }
     for story in 1..=stories {
-        for bay in 0..=bays {
+        for (&below, &above) in nodes[story - 1].iter().zip(&nodes[story]) {
             domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
-                nodes[story - 1][bay],
-                nodes[story][bay],
+                below,
+                above,
                 200000.0,
                 8000.0,
                 2.0e8,

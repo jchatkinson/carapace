@@ -51,6 +51,10 @@ new_key_type! {
 
 /// Element catalog. Closed enum, `match`-based dispatch, no `Box<dyn Trait>`
 ///.
+// The size gap is `Quad4` (its per-point caches are inline, about 2.4 KB against about 0.6 KB for the next). Boxing it
+// would put an allocation and an indirection on every element visit in the assembly hot loop, so the lint is
+// suppressed deliberately, as for `Integrator`.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Element {
     Truss(Truss),
@@ -494,6 +498,8 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
 }
 /// 3D element catalog — `Domain3`'s counterpart to `Element`. Closed
 /// enum, `match`-based dispatch, same reasoning as `Element`.
+// Same reasoning as `Element`: the gap is `Shell4` (about 13 KB against about 9.6 KB for `Shell3`).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Element3 {
     Truss3(Truss3),
@@ -1180,7 +1186,7 @@ mod mask_conformance {
             &Element3::ZeroLength3(
                 ZeroLength3::new(a, b)
                     .with_material(0, steel())
-                    .with_orientation(tilt.clone()),
+                    .with_orientation(tilt),
             ),
             &nodes,
             false,

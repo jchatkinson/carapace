@@ -296,7 +296,7 @@ fn several_body_force_patterns_through_the_wire_sum_with_their_factors() {
 }
 
 fn decode_error(input: CarapaceInputV1) -> DecodeError {
-    decode(input).err().expect("expected a decode error")
+    decode(input).expect_err("expected a decode error")
 }
 
 /// The continuum tables, loads and Gauss-point recorders survive a serialize/deserialize round trip

@@ -500,6 +500,9 @@ where
 /// loads, stage compilation, recorder resolution, model validation, and the
 /// session. `make_load(spec)` builds the profile's element load from a wire load, or
 /// `None` when the profile has no such load (a 3D model's continuum loads).
+/// Per stage, the `(pattern, element, load)` triples that stage adds.
+type StagedLoads<I, L> = Vec<Vec<(LoadPatternId, I, L)>>;
+
 pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     mut domain: Domain<NDIM, NDOF, NId, E>,
     input: &CarapaceInputV1,
@@ -555,8 +558,7 @@ where
             ));
     }
 
-    let mut element_loads_by_stage: Vec<Vec<(LoadPatternId, E::Id, E::Load)>> =
-        vec![Vec::new(); stage_count];
+    let mut element_loads_by_stage: StagedLoads<E::Id, E::Load> = vec![Vec::new(); stage_count];
     let loads = &input.element_loads;
     for i in 0..loads.element_index.len() {
         let pattern = pattern_at(loads.pattern[i])?;

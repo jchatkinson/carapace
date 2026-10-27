@@ -124,7 +124,7 @@ fn newton_corrector_matches_algorithm_linear_bit_for_bit_on_a_linear_system() {
 /// spring's yield breakpoint. The resisting force `element_local_force`
 /// reads back is *always* evaluated through the material's own real law
 /// (`Material::trial_stress_tangent`, a pure function of committed history
-/// + current displacement, independent of which `Algorithm` chose that
+/// and current displacement, independent of which `Algorithm` chose that
 /// displacement) — so both runs report a force clamped to `fy`. What
 /// `Algorithm::Linear` actually gets wrong is the *displacement* itself:
 /// having solved against the stale elastic tangent for the whole step, its

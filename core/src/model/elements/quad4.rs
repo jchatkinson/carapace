@@ -633,11 +633,11 @@ mod tests {
         assert!(alpha.norm() > 1e-6, "internal modes should engage");
         let d = material().d_matrix();
         let responses = el.gauss_responses(&view);
-        for g in 0..4 {
+        for (g, response) in responses.iter().enumerate().take(4) {
             let strain = cache.points[g].b * u + enhanced.g[g] * alpha;
             let stress = d * strain;
-            assert!((PlaneVector::from(responses[g].stress) - stress).norm() < 1e-9);
-            assert!((PlaneVector::from(responses[g].strain) - strain).norm() < 1e-15);
+            assert!((PlaneVector::from(response.stress) - stress).norm() < 1e-9);
+            assert!((PlaneVector::from(response.strain) - strain).norm() < 1e-15);
             let compatible_only = d * (cache.points[g].b * u);
             assert!((stress - compatible_only).norm() > 1e-3 * stress.norm());
         }

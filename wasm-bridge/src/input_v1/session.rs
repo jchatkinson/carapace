@@ -980,7 +980,7 @@ where
                     domain.add_nodal_load(pattern, node, dof, value);
                 }
                 for (pattern, element, load) in &earlier.pending_element_loads {
-                    domain.add_element_load(*pattern, *element, load.clone());
+                    domain.add_element_load(*pattern, *element, *load);
                 }
             }
             for &(pattern, factor) in &self.holds {
@@ -997,7 +997,7 @@ where
             domain.add_nodal_load(pattern, node, dof, value);
         }
         for (pattern, element, load) in &stage.pending_element_loads {
-            domain.add_element_load(*pattern, *element, load.clone());
+            domain.add_element_load(*pattern, *element, *load);
         }
         // `Transformation` resolves `equal_dof`/`rigid_diaphragm` ties;
         // `Plain` is a strictly cheaper no-op for a domain with none (and

@@ -648,7 +648,7 @@ fn reset_stage_reverts_the_state_but_keeps_held_patterns_applied() {
         second[0].2, 0.0,
         "second stage starts from the as-built state"
     );
-    let end_of_first = samples.iter().filter(|s| s.0 == 0).last().unwrap().2;
+    let end_of_first = samples.iter().rfind(|s| s.0 == 0).unwrap().2;
     assert!(
         (second[1].2 - end_of_first).abs() < 1e-12,
         "the held load is applied in full at once"
@@ -664,7 +664,7 @@ fn reset_stage_lets_an_unheld_pattern_ramp_again() {
     });
     let samples = all_samples(&mut two_stage_bar(true, reset, false));
     let second: Vec<_> = samples.iter().filter(|s| s.0 == 2).collect();
-    let end_of_first = samples.iter().filter(|s| s.0 == 0).last().unwrap().2;
+    let end_of_first = samples.iter().rfind(|s| s.0 == 0).unwrap().2;
     assert_eq!(second[0].2, 0.0);
     assert!(
         (second[1].2 - end_of_first / 2.0).abs() < 1e-12,

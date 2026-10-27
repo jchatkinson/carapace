@@ -315,9 +315,9 @@ fn edge_load_patch(quads: bool, formulation: Quad4Formulation) {
     analysis.step().unwrap();
     for id in elements {
         for point in analysis.domain().element_gauss_responses(id).unwrap() {
-            for c in 0..3 {
+            for (stress, expected) in point.stress.iter().zip(sigma.iter()) {
                 assert!(
-                    (point.stress[c] - sigma[c]).abs() < 1e-9,
+                    (stress - expected).abs() < 1e-9,
                     "quads {quads} {formulation:?}: {point:?}"
                 );
             }

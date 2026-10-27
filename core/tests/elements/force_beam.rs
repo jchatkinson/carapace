@@ -698,7 +698,7 @@ fn asymmetric_biaxial_section_matches_hand_derived_closed_form() {
     // here from the fiber layout rather than by calling `trial`.
     let ea = e * (1.0 + 2.0 + 3.0);
     let eqz = e * (6.0 * 1.0 + 1.0 * 2.0 + -4.0 * 3.0);
-    let eqy = e * (1.0 * 1.0 + 2.0 * 2.0 + -1.0 * 3.0);
+    let eqy = e * (1.0 * 1.0 + 2.0 * 2.0 + -3.0);
     let eizz = e * (36.0 * 1.0 + 1.0 * 2.0 + 16.0 * 3.0);
     let eiyy = e * (1.0 * 1.0 + 4.0 * 2.0 + 1.0 * 3.0);
     let eiyz = e * (6.0 * 1.0 * 1.0 + 1.0 * 2.0 * 2.0 + -4.0 * -1.0 * 3.0);
