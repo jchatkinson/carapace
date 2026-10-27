@@ -1,6 +1,6 @@
 # CSFM in Carapace: implementation and test plan
 
-Status: phases 0-5 complete (phase 5 closed); phase 6 (benchmarks) is next. The golden fixtures and their measured sensitivities are in
+Status: phases 0-5 complete (phase 5 closed); phase 6 (benchmarks) is closed without a published TS comparison (see §4). The golden fixtures and their measured sensitivities are in
 [core/tests/csfm/fixtures](../core/tests/csfm/fixtures/README.md), including the §4 G and H fixtures. The generic
 tangent-vs-finite-difference checker is in `core/src/testkit.rs`, exercised against existing materials and elements
 in `core/tests/materials/tangent_fd.rs` and `core/tests/elements/tangent_fd.rs`. The §4 C independent reference
@@ -445,7 +445,7 @@ phase 0 define "correct" before any law is written.
 | 3. Static procedure | Load-control cutbacks with the scheduling contract. Fixtures run natively. | §4 C, E, F and H pass. Parity with TS on every fixture. |
 | 4. Limit states and arc-length | `limit_utilization`, `material_limit` stop, arc-length runs | §4 G passes. |
 | 5. Wire and results | Tables, recorders, decode errors, docs, PySees type mirror | §4 I passes. `boundary-smoke.ts` case added. The built wasm agrees numerically with native. PySees rebuilt and its regression checks pass. |
-| 6. Benchmark | CSFM benchmarks against CalcsApp TS | Numbers committed to `docs-site/benchmarks/`. |
+| 6. Benchmark | A native CSFM timing tool; no published comparison against CalcsApp's TS solver | `core/examples/benchmark_csfm.rs` runs on the golden fixtures. |
 | 7. CalcsApp cutover (outside this plan's scope) | `femWorker.js` calls Carapace behind a flag | See §5. |
 
 **Phase 0 detail.**
@@ -687,10 +687,16 @@ These are three separate tests. Passing a peak is not reaching a material limit.
 
 **Benchmarks (phase 6).** These are not part of CI.
 
-- A comparison script times CalcsApp's TS `solveLoadPath` with SuperLU against Carapace native and Carapace wasm on
-  the span beam, the deep beam, and a refined deep beam (`createPinnedDeepBeamFixture(48, 24)`).
-- Report wall time, increments and iterations, and commit the JSON next to the existing benchmarks.
-- `csfm-integration.md` predicts about 10x on assembly. This is where that prediction is measured.
+- Decision: no benchmark against CalcsApp's TS solver is published (not in `docs-site/benchmarks/` and not in
+  `comparison/`). That solver is temporary code that CalcsApp is replacing, so a comparison against it would not help
+  anyone outside this project. The wasm timing script, a results JSON and a docs-site page were therefore not built.
+- `core/examples/benchmark_csfm.rs` times native Carapace on a golden model fixture (`model`, `schedule`, `solver`) and
+  prints wall time, increments, iterations and factorizations as JSON. It is a local tool, run on the in-repo
+  fixtures: `cargo run --release -p carapace-core --example benchmark_csfm -- <fixture.json> [reps]`.
+- A comparison against another engine is still open, as a separate piece of work. `csfm-integration.md`'s prediction of
+  about 10x on assembly is not measured by this plan.
+- The one product of this phase is a defect found while loading the larger model: the origin-seed stress (§2.1, and the
+  findings under the status line).
 
 ## 5. CalcsApp cutover (summary only)
 

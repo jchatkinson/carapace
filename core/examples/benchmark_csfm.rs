@@ -1,10 +1,11 @@
-//! CSFM benchmark model on native Carapace (plan `docs/csfm-plan.md` phase 6).
+//! Times a CSFM model on native Carapace (plan `docs/csfm-plan.md` phase 6).
 //!
-//! Reads a model exported by CalcsApp's `npm run export:csfm-benchmark` (which also times the TS
-//! `solveLoadPath` there), solves the same 20-increment load path with the parity settings, and
-//! prints one JSON object with the native timings, increment/iteration counts and the difference
-//! of the final displacements from TS's. Only `Analysis::step` is timed (assembly, factorization
-//! and solves), as in the TS script; model building is excluded.
+//! Reads a model in the golden fixture format (`core/tests/csfm/fixtures/models/*.json`: `model`,
+//! `schedule`, `solver`), solves its load path with the fixture's solver settings and prints one JSON
+//! object with the timings and the increment and iteration counts. Only `Analysis::step` is timed
+//! (assembly, factorization and solves); model building is excluded, and one untimed warm-up run
+//! precedes the timed runs. If the file has a `ts.finalDisplacements` array, the difference of the
+//! final displacements from it is reported too.
 //!
 //! Usage:
 //!   cargo run --release -p carapace-core --example benchmark_csfm -- <model.json> [reps]
@@ -94,17 +95,16 @@ fn main() {
             .collect::<Vec<f64>>();
     }
 
-    let reference: Vec<f64> = fixture["ts"]["finalDisplacements"]
+    let difference = fixture["ts"]["finalDisplacements"]
         .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_f64().unwrap())
-        .collect();
-    let scale = reference.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-    let difference = displacements
-        .iter()
-        .zip(&reference)
-        .fold(0.0_f64, |m, (a, b)| m.max((a - b).abs() / scale));
+        .map(|reference| {
+            let reference: Vec<f64> = reference.iter().map(|v| v.as_f64().unwrap()).collect();
+            let scale = reference.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+            displacements
+                .iter()
+                .zip(&reference)
+                .fold(0.0_f64, |m, (a, b)| m.max((a - b).abs() / scale))
+        });
     let mut sorted = times.clone();
     sorted.sort_by(f64::total_cmp);
     println!(
@@ -113,7 +113,7 @@ fn main() {
             "engine": "native", "reps": reps, "timesMs": times, "medianMs": sorted[sorted.len() / 2],
             "dof": displacements.len(), "increments": schedule.len(),
             "iterations": iterations, "factorizations": factorizations,
-            "maxDisplacementDifferenceFromTs": difference,
+            "maxDisplacementDifferenceFromReference": difference,
         })
     );
 }
