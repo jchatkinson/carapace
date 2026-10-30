@@ -6,7 +6,7 @@
 //! the section develops), which is what CalcsApp's moment-curvature reports.
 //!
 //! Each solve starts from the previous step's `eps0`, expands a bracket in the direction that reduces the
-//! residual `N(eps0) - P`, then closes it with Illinois false position. If that fails (a non-monotone `N`, as
+//! residual `N(eps0) - P`, then closes it with Illinois false position (bisection after 30 iterations, so a jump in `N` is bracketed and reported as the root). If that fails (a non-monotone `N`, as
 //! past crushing), a coarse scan of a wide window picks the sign change closest to the previous `eps0`.
 //! Evaluation is path independent, so there is no unloading history to disagree with a reversible law.
 
@@ -205,7 +205,9 @@ fn illinois(
 ) -> Solved {
     // Invariant: fa and fb have opposite signs (or one is zero).
     for iteration in 1..=100u32 {
-        let c = if fb != fa {
+        // False position stalls at a jump in `N` (tension cracking), so bisect once it has had its chance; the bracket then
+        // collapses onto the jump, which is where equilibrium crosses.
+        let c = if fb != fa && iteration <= 30 {
             (a * fb - b * fa) / (fb - fa)
         } else {
             0.5 * (a + b)
