@@ -39,7 +39,7 @@ pub use materials::{
 };
 pub use moment_curvature::{MomentCurvaturePoint, MomentCurvatureRequest, MomentCurvatureResult};
 
-use materials::{stress, ProbeMaterial};
+use materials::{material_jumps, stress, ProbeMaterial};
 
 /// Fibers as parallel arrays (`y`, `z`, `area`, `material`, optional `group`).
 #[derive(Debug, Clone, Deserialize, tsify::Tsify)]
@@ -137,6 +137,10 @@ pub struct SectionProbe {
     pub(super) group: Vec<u32>,
     group_count: usize,
     materials: Vec<ProbeMaterial>,
+    /// Largest force step one fiber can take from a jump in its stress law, and the section's largest lever arm
+    /// (see `isolines`).
+    quantum: f64,
+    radius: f64,
     grid: Option<isolines::Grid>,
 }
 
@@ -194,6 +198,11 @@ impl SectionProbe {
             f.group.clone()
         };
         let group_count = group.iter().copied().max().unwrap_or(0) as usize + 1;
+        let jumps = material_jumps(&config.materials, &materials);
+        let quantum = (0..n)
+            .map(|i| f.area[i].abs() * jumps[f.material[i] as usize])
+            .fold(0.0, f64::max);
+        let radius = (0..n).map(|i| f.y[i].hypot(f.z[i])).fold(0.0, f64::max);
         Ok(SectionProbe {
             y: f.y.clone(),
             z: f.z.clone(),
@@ -202,6 +211,8 @@ impl SectionProbe {
             group,
             group_count,
             materials,
+            quantum,
+            radius,
             grid: None,
         })
     }

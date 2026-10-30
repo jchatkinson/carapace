@@ -601,3 +601,80 @@ fn profile_state_has_its_moment_along_the_requested_angle() {
         .expect("uniform strain");
     assert!(uniform.c.is_none());
 }
+
+/// A Whitney block is a step in strain: equilibrium is reachable only to within one fiber's force, and the solver
+/// must accept roots at that resolution instead of searching forever.
+#[test]
+fn isolines_of_a_stepped_concrete_law_converge_to_fibre_resolution() {
+    let n = 32usize;
+    let (w, d) = (16.0, 16.0);
+    let (dy, dz) = (d / n as f64, w / n as f64);
+    let mut y = Vec::new();
+    let mut z = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            y.push(-d / 2.0 + dy * (i as f64 + 0.5));
+            z.push(-w / 2.0 + dz * (j as f64 + 0.5));
+        }
+    }
+    let count = y.len();
+    let mut p = SectionProbe::new(&SectionProbeConfig {
+        core_materials: vec![],
+        materials: vec![ProbeMaterialSpec::Concrete(ConcreteSpec {
+            model: ConcreteModel::Whitney,
+            fc: 5.0,
+            ec: 4030.0,
+            ecu: 0.003,
+            eu: Some(0.0031),
+            fu: 0.0,
+            alpha: 0.85,
+            beta1: Some(0.8),
+            tension_capacity: false,
+            ft: 0.0,
+            ets: 0.0,
+            curve_points: vec![],
+            drop_after_last_point: false,
+        })],
+        fibers: ProbeFibers {
+            y,
+            z,
+            area: vec![dy * dz; count],
+            material: vec![0; count],
+            group: vec![],
+        },
+    })
+    .unwrap();
+    let ecu = -0.003;
+    let far = [ecu, -0.002, -0.001, 0.0, 0.002, 0.005, 0.01, 0.02, 0.03];
+    let mut profiles: Vec<f64> = Vec::new();
+    for e in far {
+        profiles.extend_from_slice(&[ecu, e]);
+    }
+    for e in far.iter().rev() {
+        profiles.extend_from_slice(&[*e, ecu]);
+    }
+    let angles: Vec<f64> = (0..24)
+        .map(|i| std::f64::consts::PI * i as f64 / 24.0)
+        .collect();
+    p.build_grid(&angles, &profiles, None).unwrap();
+    let (lo, hi) = p.grid_axial_range(false).unwrap();
+    let levels: Vec<f64> = (1..10).map(|k| lo + (hi - lo) * k as f64 / 11.0).collect();
+    let res = p
+        .solve_isolines(&IsolineRequest {
+            levels: levels.clone(),
+            moment_angles: vec![0.0, 0.5, 1.0],
+            options: IsolineOptions::default(),
+            factored: false,
+        })
+        .unwrap();
+    let found = res.iter().filter(|pt| pt.found).count();
+    assert!(found * 10 >= res.len() * 9, "{found} of {}", res.len());
+    // within a few fibre-forces of the target axial load, moment along the requested direction
+    let fibre_force = 0.85 * 5.0 * dy * dz;
+    for pt in res.iter().filter(|pt| pt.found) {
+        let target = levels[pt.level_index as usize];
+        assert!((pt.n - target).abs() < 20.0 * fibre_force, "{pt:?}");
+    }
+    let evals: u32 = res.iter().map(|pt| pt.evals).sum();
+    assert!(evals as usize / res.len() < 400, "{evals} evaluations");
+}

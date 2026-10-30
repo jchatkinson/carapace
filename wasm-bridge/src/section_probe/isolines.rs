@@ -199,6 +199,9 @@ struct Solver<'a> {
     probe: &'a SectionProbe,
     grid: &'a Grid,
     factored: bool,
+    /// Smallest normalized residual the section can reach: a fiber whose stress law jumps moves the resultants in
+    /// steps of `quantum` (force) and `quantum * radius` (moment), so equilibrium is only found to within those.
+    floor: f64,
     evals: u32,
 }
 
@@ -503,10 +506,16 @@ impl SectionProbe {
         } else {
             (grid.n_min, grid.n_max)
         };
+        let floor = if self.quantum > 0.0 {
+            3.0 * (self.quantum / sp).hypot(self.quantum * self.radius / sm)
+        } else {
+            0.0
+        };
         let mut solver = Solver {
             probe: self,
             grid,
             factored,
+            floor,
             evals: 0,
         };
         let mut order: Vec<usize> = (0..request.levels.len()).collect();
@@ -652,10 +661,15 @@ impl Solver<'_> {
                     m3: state.2,
                 };
             }
-            if value < NEWTON_STOP {
+            if value < NEWTON_STOP.max(self.floor) {
                 break;
             }
-            let (da, ds) = (2e-4, 0.02);
+            // Across a stepped stress law a tiny difference quotient is zero or a spike: use a step that spans many fibres.
+            let (da, ds) = if self.floor > 0.0 {
+                (0.01, 0.15)
+            } else {
+                (2e-4, 0.02)
+            };
             let Some((fa, _)) = self.residual_at(t, theta + da, s) else {
                 break;
             };
@@ -701,7 +715,7 @@ impl Solver<'_> {
         let (mut ra, mut rs) = (0.08, 1.0);
         let (mut ca, mut cs) = (best.theta, best.profile);
         for _ in 0..30 {
-            if best.value <= NEWTON_STOP {
+            if best.value <= NEWTON_STOP.max(self.floor) {
                 break;
             }
             let mut improved = false;
@@ -745,7 +759,7 @@ impl Solver<'_> {
     }
 
     fn accept(&self, t: &Target, root: &Root, tolerance: f64) -> bool {
-        root.value < tolerance && t.signed(root.m2, root.m3) >= 0.0
+        root.value < tolerance.max(self.floor) && t.signed(root.m2, root.m3) >= 0.0
     }
 
     fn solve_level(

@@ -553,3 +553,60 @@ pub(super) fn stress(materials: &[ProbeMaterial], index: usize, strain: f64) -> 
         ProbeMaterial::General(curve) => curve.stress(strain),
     }
 }
+
+/// Largest step in stress of each probe material (a jump in the stress-strain law), found by comparing the
+/// stress either side of every strain where a law changes character. Smooth and merely piecewise-linear laws give
+/// zero; a Whitney block, a cracking drop, a strain cutoff or a curve that drops after its last point give the
+/// height of the step. Isoline solves use it to know how close to equilibrium a discontinuous section can get.
+pub(super) fn material_jumps(specs: &[ProbeMaterialSpec], materials: &[ProbeMaterial]) -> Vec<f64> {
+    let mut jumps: Vec<f64> = Vec::with_capacity(specs.len());
+    for (index, spec) in specs.iter().enumerate() {
+        let jump = match spec {
+            ProbeMaterialSpec::Core { .. } => 0.0,
+            ProbeMaterialSpec::Combine { terms } => terms
+                .iter()
+                .map(|(term, factor)| factor.abs() * jumps[*term as usize])
+                .sum(),
+            _ => {
+                let mut at = vec![0.0];
+                let mut add = |values: &[f64]| at.extend(values.iter().flat_map(|v| [*v, -*v]));
+                match spec {
+                    ProbeMaterialSpec::Concrete(c) => {
+                        add(&[c.ecu, c.eu.unwrap_or(c.ecu)]);
+                        if let Some(beta1) = c.beta1 {
+                            add(&[c.ecu * (1.0 - beta1)]);
+                        }
+                        if c.ec > 0.0 {
+                            add(&[c.fc / c.ec, c.ft / c.ec]);
+                        }
+                        if c.ets > 0.0 {
+                            add(&[c.ft / c.ets]);
+                        }
+                        add(&c.curve_points.iter().map(|p| p[0]).collect::<Vec<_>>());
+                    }
+                    ProbeMaterialSpec::Steel(st) => {
+                        add(&[st.eps_uc, st.eps_ut]);
+                        if st.es > 0.0 {
+                            add(&[st.fy / st.es]);
+                        }
+                        add(&st.curve_points.iter().map(|p| p[0]).collect::<Vec<_>>());
+                    }
+                    ProbeMaterialSpec::General(g) => {
+                        add(&[g.eps_uc, g.eps_ut]);
+                        add(&g.curve_points.iter().map(|p| p[0]).collect::<Vec<_>>());
+                    }
+                    _ => {}
+                }
+                at.iter()
+                    .filter(|b| b.is_finite())
+                    .map(|b| {
+                        let d = 1e-9 * b.abs().max(1.0);
+                        (stress(materials, index, b + d) - stress(materials, index, b - d)).abs()
+                    })
+                    .fold(0.0, f64::max)
+            }
+        };
+        jumps.push(jump);
+    }
+    jumps
+}
