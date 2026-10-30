@@ -567,3 +567,15 @@ fn factored_isolines_solve_in_factored_space() {
         })
         .is_err());
 }
+
+/// Material stress at given strains matches the fiber stress of a one-fiber section.
+#[test]
+fn material_stress_matches_a_single_fiber() {
+    let p = grouped_grid();
+    let strains = [-0.01, 0.0, 0.0005, 0.0017, 0.02];
+    let stresses = p.material_stress(0, &strains);
+    for (e, s) in strains.iter().zip(&stresses) {
+        near(*s, (29_000.0 * e).clamp(-50.0, 50.0), 1e-12);
+    }
+    assert!(p.material_stress(7, &strains).iter().all(|v| v.is_nan()));
+}

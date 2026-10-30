@@ -211,6 +211,12 @@ impl WasmSectionProbe {
         self.0.evaluate_batch(states, with_groups)
     }
 
+    /// Stress of probe material `index` at each strain.
+    #[wasm_bindgen(js_name = materialStress)]
+    pub fn material_stress(&self, index: usize, strains: &[f64]) -> Vec<f64> {
+        self.0.material_stress(index, strains)
+    }
+
     /// `[strain, stress]` for every fiber, flattened.
     #[wasm_bindgen(js_name = fiberResponses)]
     pub fn fiber_responses(&self, eps0: f64, kz: f64, ky: f64) -> Vec<f64> {

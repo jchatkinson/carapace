@@ -248,6 +248,18 @@ impl SectionProbe {
         }
     }
 
+    /// Stress of probe material `index` at each of `strains` (a material preview, and the pure steel stress of a
+    /// bar fiber whose own material is `steel - host`). Out-of-range indices give NaN.
+    pub fn material_stress(&self, index: usize, strains: &[f64]) -> Vec<f64> {
+        if index >= self.materials.len() {
+            return vec![f64::NAN; strains.len()];
+        }
+        strains
+            .iter()
+            .map(|e| stress(&self.materials, index, *e))
+            .collect()
+    }
+
     /// `(strain, stress)` of every fiber at `(eps0, kz, ky)`, flattened: strain, stress, strain, stress, ...
     pub fn fiber_responses(&self, eps0: f64, kz: f64, ky: f64) -> Vec<f64> {
         let mut out = Vec::with_capacity(2 * self.y.len());
