@@ -71,6 +71,10 @@ pub struct IsolineOptions {
     pub continuation_jump: f64,
     #[serde(default = "d_accept")]
     pub accept_tolerance: f64,
+    /// Fraction of the sampled axial range, at the compression end, where a root is not continued from the
+    /// neighbouring moment angle (inner and outer roots merge at a fold there; see the module docs).
+    #[serde(default = "d_apex")]
+    pub apex_fraction: f64,
 }
 
 fn d_seed_stride() -> usize {
@@ -88,6 +92,9 @@ fn d_true() -> bool {
 fn d_jump() -> f64 {
     0.3
 }
+fn d_apex() -> f64 {
+    0.1
+}
 fn d_accept() -> f64 {
     2e-6
 }
@@ -102,6 +109,7 @@ impl Default for IsolineOptions {
             continuation: true,
             continuation_jump: d_jump(),
             accept_tolerance: d_accept(),
+            apex_fraction: d_apex(),
         }
     }
 }
@@ -153,6 +161,9 @@ pub struct IsolinePoint {
     /// Section evaluations spent on this point.
     pub evals: u32,
 }
+
+/// Normalized residual below which Newton and the pattern search stop (the acceptance tolerance is 2e-6).
+const NEWTON_STOP: f64 = 1e-6;
 
 struct Target {
     p: f64,
@@ -364,6 +375,11 @@ impl SectionProbe {
         } else {
             ((grid.n_max - grid.n_min).max(1.0), grid.m_max)
         };
+        let (grid_lo, grid_hi) = if factored {
+            (grid.nf_min, grid.nf_max)
+        } else {
+            (grid.n_min, grid.n_max)
+        };
         let mut solver = Solver {
             probe: self,
             grid,
@@ -374,9 +390,12 @@ impl SectionProbe {
         order.sort_by(|a, b| request.levels[*b].partial_cmp(&request.levels[*a]).unwrap());
 
         let mut points = vec![None; request.levels.len() * request.moment_angles.len()];
+        // Roots of the previous moment angle by level: a second continuation candidate for neighbouring angles.
+        let mut across: Vec<Option<(Root, f64)>> = vec![None; request.levels.len()];
         for (ai, &alpha) in request.moment_angles.iter().enumerate() {
             let (sin, cos) = alpha.sin_cos();
             let mut previous: Option<(Root, f64)> = None;
+            let mut current: Vec<Option<(Root, f64)>> = vec![None; request.levels.len()];
             for &li in &order {
                 let target = Target {
                     p: request.levels[li],
@@ -386,9 +405,18 @@ impl SectionProbe {
                     sm,
                 };
                 let before = solver.evals;
-                let root = solver.solve_level(&target, &opts, previous);
+                let in_apex_zone = (target.p - grid_lo) < opts.apex_fraction * (grid_hi - grid_lo);
+                let neighbour = if in_apex_zone { None } else { across[li] };
+                // Beyond the sampled axial range there is no boundary point to find.
+                let slack = 1e-9 * (grid_hi - grid_lo).abs().max(1.0);
+                let root = if target.p < grid_lo - slack || target.p > grid_hi + slack {
+                    None
+                } else {
+                    solver.solve_level(&target, &opts, &[previous, neighbour])
+                };
                 let evals = solver.evals - before;
                 previous = root.map(|r| (r, target.signed(r.m2, r.m3)));
+                current[li] = previous;
                 points[ai * request.levels.len() + li] = Some(match root {
                     Some(r) => {
                         let (et, eb) = grid.interpolate(r.profile);
@@ -443,6 +471,7 @@ impl SectionProbe {
                     },
                 });
             }
+            across = current;
         }
         Ok(points
             .into_iter()
@@ -500,7 +529,7 @@ impl Solver<'_> {
                     m3: state.2,
                 };
             }
-            if value < 1e-7 {
+            if value < NEWTON_STOP {
                 break;
             }
             let (da, ds) = (2e-4, 0.02);
@@ -542,10 +571,14 @@ impl Solver<'_> {
         }
         // Yielding can make the finite-difference Jacobian singular at a profile knot: finish with a bounded
         // pattern search from the best iterate instead of dropping the level.
+        // A root this far off is in the wrong basin; polishing it only burns evaluations.
+        if best.value > 1e-2 {
+            return best.value.is_finite().then_some(best);
+        }
         let (mut ra, mut rs) = (0.08, 1.0);
         let (mut ca, mut cs) = (best.theta, best.profile);
         for _ in 0..30 {
-            if best.value <= 1e-7 {
+            if best.value <= NEWTON_STOP {
                 break;
             }
             let mut improved = false;
@@ -596,10 +629,10 @@ impl Solver<'_> {
         &mut self,
         t: &Target,
         opts: &IsolineOptions,
-        previous: Option<(Root, f64)>,
+        previous: &[Option<(Root, f64)>],
     ) -> Option<Root> {
         if opts.continuation {
-            if let Some((prev, prev_signed)) = previous {
+            for &(prev, prev_signed) in previous.iter().flatten() {
                 if let Some(root) = self.newton(t, (prev.theta, prev.profile)) {
                     let signed = t.signed(root.m2, root.m3);
                     if self.accept(t, &root, opts.accept_tolerance)

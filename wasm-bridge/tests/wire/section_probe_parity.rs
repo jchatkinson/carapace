@@ -171,7 +171,19 @@ fn isolines_match_the_engine() {
         .solve_isolines(&IsolineRequest {
             levels: levels.clone(),
             moment_angles,
-            options: IsolineOptions::default(),
+            options: {
+                let mut o = IsolineOptions::default();
+                if let Ok(v) = std::env::var("RS") {
+                    o.residual_seeds = v.parse().unwrap();
+                }
+                if let Ok(v) = std::env::var("MS") {
+                    o.moment_seeds = v.parse().unwrap();
+                }
+                if let Ok(v) = std::env::var("ST") {
+                    o.seed_angle_stride = v.parse().unwrap();
+                }
+                o
+            },
             factored: false,
         })
         .unwrap();
@@ -211,6 +223,17 @@ fn isolines_match_the_engine() {
     println!(
         "{:.0} section evaluations per point",
         evals as f64 / res.len() as f64
+    );
+    let mut counts: Vec<u32> = res.iter().map(|p| p.evals).collect();
+    counts.sort();
+    println!(
+        "evals per point: min {} p25 {} median {} p75 {} p90 {} max {}",
+        counts[0],
+        counts[counts.len() / 4],
+        counts[counts.len() / 2],
+        counts[counts.len() * 3 / 4],
+        counts[counts.len() * 9 / 10],
+        counts[counts.len() - 1]
     );
     assert!(
         missing.is_empty(),
