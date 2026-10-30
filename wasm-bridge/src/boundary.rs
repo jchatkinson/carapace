@@ -18,8 +18,8 @@ use crate::material_probe::{
     MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse,
 };
 use crate::section_probe::{
-    AxialExtremes, IsolineRequest, IsolineResult, MomentCurvatureRequest, MomentCurvatureResult,
-    SectionProbe, SectionProbeConfig, SectionProbeError, SectionResponse,
+    AxialExtremes, Factoring, IsolineRequest, IsolineResult, MomentCurvatureRequest,
+    MomentCurvatureResult, SectionProbe, SectionProbeConfig, SectionProbeError, SectionResponse,
 };
 
 /// Opaque handle to a decoded, steppable analysis session — the `Session`
@@ -184,6 +184,15 @@ fn section_error(error: SectionProbeError) -> JsValue {
         .unwrap_or_else(|_| JsValue::from_str("section probe error"))
 }
 
+fn read_factoring(factoring: Option<Ts<Factoring>>) -> Result<Option<Factoring>, JsValue> {
+    factoring
+        .map(|f| {
+            f.to_rust()
+                .map_err(|error| JsValue::from_str(&format!("malformed Factoring: {error}")))
+        })
+        .transpose()
+}
+
 fn ts_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
@@ -238,15 +247,38 @@ impl WasmSectionProbe {
 
     /// Samples the PMM boundary for `solveIsolines`; returns the number of sampled states.
     #[wasm_bindgen(js_name = buildGrid)]
-    pub fn build_grid(&mut self, angles: &[f64], profiles: &[f64]) -> Result<usize, JsValue> {
-        self.0.build_grid(angles, profiles).map_err(section_error)
+    pub fn build_grid(
+        &mut self,
+        angles: &[f64],
+        profiles: &[f64],
+        factoring: Option<Ts<Factoring>>,
+    ) -> Result<usize, JsValue> {
+        let factoring = read_factoring(factoring)?;
+        self.0
+            .build_grid(angles, profiles, factoring)
+            .map_err(section_error)
+    }
+
+    /// Every (angle, profile) state, angles outermost, as rows of `STATE_STRIDE` (11) numbers: nominal
+    /// `n, m2, m3`, factored `n, m2, m3`, `phi`, `epsT`, `c` (NaN where undefined), and the profile's `et, eb`.
+    #[wasm_bindgen(js_name = sampleStates)]
+    pub fn sample_states(
+        &self,
+        angles: &[f64],
+        profiles: &[f64],
+        factoring: Option<Ts<Factoring>>,
+    ) -> Result<Vec<f64>, JsValue> {
+        let factoring = read_factoring(factoring)?;
+        self.0
+            .sample_states(angles, profiles, factoring.as_ref())
+            .map_err(section_error)
     }
 
     /// `[min, max]` axial force over the sampled grid, or empty before `buildGrid`.
     #[wasm_bindgen(js_name = gridAxialRange)]
-    pub fn grid_axial_range(&self) -> Vec<f64> {
+    pub fn grid_axial_range(&self, factored: bool) -> Vec<f64> {
         self.0
-            .grid_axial_range()
+            .grid_axial_range(factored)
             .map(|(lo, hi)| vec![lo, hi])
             .unwrap_or_default()
     }

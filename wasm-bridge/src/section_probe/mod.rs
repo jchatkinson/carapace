@@ -21,6 +21,7 @@
 //! evaluation is path independent. Probe-only materials live in [`materials`] and are not part of Carapace's
 //! `MaterialSpec`.
 
+mod factoring;
 mod isolines;
 mod materials;
 mod moment_curvature;
@@ -30,7 +31,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::input_v1::materials::{resolve_materials, MaterialSpec};
 
-pub use isolines::{IsolineOptions, IsolinePoint, IsolineRequest, IsolineResult};
+pub use factoring::{FactoredResponse, Factoring};
+pub use isolines::{IsolineOptions, IsolinePoint, IsolineRequest, IsolineResult, STATE_STRIDE};
 pub use materials::{
     ConcreteModel, ConcreteSpec, GeneralModel, GeneralSpec, ProbeMaterialError, ProbeMaterialSpec,
     SteelModel, SteelSpec,
@@ -99,7 +101,7 @@ pub struct SectionResponse {
 }
 
 impl SectionResponse {
-    fn new(n: f64, mz: f64, my: f64) -> Self {
+    pub(super) fn new(n: f64, mz: f64, my: f64) -> Self {
         SectionResponse {
             n,
             mz,
@@ -128,11 +130,11 @@ pub struct AxialExtreme {
 }
 
 pub struct SectionProbe {
-    y: Vec<f64>,
-    z: Vec<f64>,
+    pub(super) y: Vec<f64>,
+    pub(super) z: Vec<f64>,
     area: Vec<f64>,
     material: Vec<u32>,
-    group: Vec<u32>,
+    pub(super) group: Vec<u32>,
     group_count: usize,
     materials: Vec<ProbeMaterial>,
     grid: Option<isolines::Grid>,
@@ -213,7 +215,7 @@ impl SectionProbe {
     }
 
     #[inline]
-    fn fiber_force(&self, i: usize, eps0: f64, kz: f64, ky: f64) -> f64 {
+    pub(super) fn fiber_force(&self, i: usize, eps0: f64, kz: f64, ky: f64) -> f64 {
         let strain = eps0 - self.y[i] * kz + self.z[i] * ky;
         stress(&self.materials, self.material[i] as usize, strain) * self.area[i]
     }

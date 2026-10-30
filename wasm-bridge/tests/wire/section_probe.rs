@@ -367,9 +367,9 @@ fn isolines_satisfy_their_equations() {
         .map(|i| std::f64::consts::PI * i as f64 / 36.0)
         .collect();
     let mut p = p;
-    let count = p.build_grid(&angles, &profiles).unwrap();
+    let count = p.build_grid(&angles, &profiles, None).unwrap();
     assert_eq!(count, 36 * 18);
-    let (lo, hi) = p.grid_axial_range().unwrap();
+    let (lo, hi) = p.grid_axial_range(false).unwrap();
     let levels: Vec<f64> = (1..9).map(|k| lo + (hi - lo) * k as f64 / 9.0).collect();
     let moment_angles = [0.0, 0.4, 1.1, 2.0];
     let res = p
@@ -377,6 +377,7 @@ fn isolines_satisfy_their_equations() {
             levels: levels.clone(),
             moment_angles: moment_angles.to_vec(),
             options: IsolineOptions::default(),
+            factored: false,
         })
         .unwrap();
     assert_eq!(res.len(), levels.len() * moment_angles.len());
@@ -404,4 +405,165 @@ fn isolines_satisfy_their_equations() {
         "only {found} of {} solved",
         res.len()
     );
+}
+
+/// 6 x 10 elastic-plastic grid with the outer rows in group 1 ("bars") and the rest in group 0.
+fn grouped_grid() -> SectionProbe {
+    let y: Vec<f64> = (0..60)
+        .map(|k| -5.0 + 10.0 * ((k / 6) as f64 + 0.5) / 10.0)
+        .collect();
+    let group = (0..60)
+        .map(|k| u32::from(k / 6 == 0 || k / 6 == 9))
+        .collect();
+    SectionProbe::new(&SectionProbeConfig {
+        core_materials: vec![],
+        materials: vec![ProbeMaterialSpec::Steel(SteelSpec {
+            model: SteelModel::ElasticPlastic,
+            fy: 50.0,
+            es: 29_000.0,
+            hardening_ratio: 0.0,
+            eps_uc: 0.0,
+            eps_ut: 0.0,
+            curve_points: vec![],
+            drop_after_last_point: false,
+        })],
+        fibers: ProbeFibers {
+            y,
+            z: (0..60)
+                .map(|k| -3.0 + 6.0 * ((k % 6) as f64 + 0.5) / 6.0)
+                .collect(),
+            area: vec![1.0; 60],
+            material: vec![0; 60],
+            group,
+        },
+    })
+    .unwrap()
+}
+
+/// Group factors scale each group's force; ACI phi follows the bar group's largest tensile strain.
+#[test]
+fn factoring_scales_groups_and_follows_the_aci_ramp() {
+    let mut p = grouped_grid();
+    let (e0, kz, ky) = (0.0004, 0.0, 0.0);
+    let mut g = [0.0; 9];
+    p.evaluate_grouped(e0, kz, ky, &mut g);
+    let by_group = p.evaluate_factored(
+        &Factoring::Groups {
+            factors: vec![0.65, 0.85],
+        },
+        e0,
+        kz,
+        ky,
+    );
+    near(by_group.response.n, 0.65 * g[3] + 0.85 * g[6], 1e-12);
+    near(by_group.response.mz, 0.65 * g[4] + 0.85 * g[7], 1e-12);
+    assert!(by_group.phi.is_none());
+
+    let aci = |eps: f64| {
+        p.evaluate_factored(
+            &Factoring::Aci {
+                bar_group: 1,
+                phi_tension: 0.9,
+                phi_compression: 0.65,
+                eps_y: 0.002,
+                eps_tl: 0.005,
+            },
+            eps,
+            0.0,
+            0.0,
+        )
+    };
+    // uniform strain: every bar has strain eps
+    assert_eq!(aci(0.0015).phi, Some(0.65));
+    assert_eq!(aci(-0.002).phi, Some(0.65));
+    assert_eq!(aci(-0.002).eps_t, Some(0.0));
+    near(aci(0.0035).phi.unwrap(), 0.775, 1e-12); // halfway between eps_y and eps_tl
+    assert_eq!(aci(0.01).phi, Some(0.9));
+    let nominal = p.evaluate(0.0035, 0.0, 0.0);
+    near(aci(0.0035).response.n, 0.775 * nominal.n, 1e-12);
+    assert!(p
+        .build_grid(
+            &[0.0],
+            &[0.0; 6],
+            Some(Factoring::Aci {
+                bar_group: 5,
+                phi_tension: 0.9,
+                phi_compression: 0.65,
+                eps_y: 0.002,
+                eps_tl: 0.005
+            })
+        )
+        .is_err());
+}
+
+/// Factored isolines hit the requested factored axial force, and sample_states reports phi and c.
+#[test]
+fn factored_isolines_solve_in_factored_space() {
+    let mut p = grouped_grid();
+    let ecu = -0.003;
+    let far = [ecu, -0.002, -0.001, 0.0, 0.002, 0.005, 0.01, 0.02, 0.03];
+    let mut profiles: Vec<f64> = Vec::new();
+    for e in far {
+        profiles.extend_from_slice(&[ecu, e]);
+    }
+    for e in far.iter().rev() {
+        profiles.extend_from_slice(&[*e, ecu]);
+    }
+    let angles: Vec<f64> = (0..36)
+        .map(|i| std::f64::consts::PI * i as f64 / 36.0)
+        .collect();
+    let aci = Factoring::Aci {
+        bar_group: 1,
+        phi_tension: 0.9,
+        phi_compression: 0.65,
+        eps_y: 50.0 / 29_000.0,
+        eps_tl: 0.005,
+    };
+    let rows = p.sample_states(&angles, &profiles, Some(&aci)).unwrap();
+    assert_eq!(rows.len(), 36 * 18 * STATE_STRIDE);
+    let row = &rows[STATE_STRIDE * 5..STATE_STRIDE * 6];
+    let phi = row[6];
+    assert!((0.65..=0.9).contains(&phi), "{phi}");
+    near(row[3], phi * row[0], 1e-12);
+    near(row[4], phi * row[1], 1e-12);
+    // first profile is uniform crushing: c undefined; the second has the neutral axis outside the section
+    assert!(rows[8].is_nan());
+    assert_eq!((rows[9], rows[10]), (ecu, ecu));
+
+    p.build_grid(&angles, &profiles, Some(aci)).unwrap();
+    let (lo, hi) = p.grid_axial_range(true).unwrap();
+    let (nlo, nhi) = p.grid_axial_range(false).unwrap();
+    assert!(
+        hi <= nhi + 1e-9 && lo >= nlo - 1e-9,
+        "{lo} {hi} {nlo} {nhi}"
+    );
+    let levels: Vec<f64> = (1..9).map(|k| lo + (hi - lo) * k as f64 / 9.0).collect();
+    let res = p
+        .solve_isolines(&IsolineRequest {
+            levels: levels.clone(),
+            moment_angles: vec![0.0, 1.0],
+            options: IsolineOptions::default(),
+            factored: true,
+        })
+        .unwrap();
+    let mut found = 0;
+    for pt in res.iter().filter(|pt| pt.found) {
+        found += 1;
+        near(pt.n, levels[pt.level_index as usize], 1e-4 * (hi - lo));
+        let phi = pt.phi.expect("ACI phi is reported for factored points");
+        assert!((0.65 - 1e-12..=0.9 + 1e-12).contains(&phi), "{pt:?}");
+        assert!(pt.eps_t.is_some());
+    }
+    assert!(found >= res.len() * 3 / 4, "{found} of {}", res.len());
+    // factored isolines need a factoring
+    let mut q = grouped_grid();
+    q.build_grid(&angles, &profiles, None).unwrap();
+    assert!(q
+        .solve_isolines(&IsolineRequest {
+            levels: vec![0.0],
+            moment_angles: vec![0.0],
+            options: IsolineOptions::default(),
+            factored: true,
+        })
+        .is_err());
 }

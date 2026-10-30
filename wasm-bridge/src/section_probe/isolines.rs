@@ -26,13 +26,15 @@ use std::f64::consts::PI;
 
 use serde::{Deserialize, Serialize};
 
-use super::{SectionProbe, SectionProbeError};
+use super::{Factoring, SectionProbe, SectionProbeError};
 
 #[derive(Debug, Clone)]
 pub(super) struct GridState {
     pub theta: f64,
     pub profile: f64,
     pub n: f64,
+    /// Factored axial force (equal to `n` without factoring).
+    pub nf: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,10 @@ pub(super) struct Grid {
     n_min: f64,
     n_max: f64,
     m_max: f64,
+    nf_min: f64,
+    nf_max: f64,
+    mf_max: f64,
+    factoring: Option<Factoring>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, tsify::Tsify)]
@@ -109,6 +115,10 @@ pub struct IsolineRequest {
     pub moment_angles: Vec<f64>,
     #[serde(default)]
     pub options: IsolineOptions,
+    /// Solve in factored space (needs a factoring in `build_grid`): `levels` are factored axial forces and the
+    /// moments are factored.
+    #[serde(default)]
+    pub factored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
@@ -135,6 +145,11 @@ pub struct IsolinePoint {
     pub profile: f64,
     pub top_strain: f64,
     pub bottom_strain: f64,
+    /// Neutral-axis depth from the extreme compression edge; `None` for uniform strain.
+    pub c: Option<f64>,
+    /// ACI `phi` and the largest bar tensile strain behind it (see `Factoring::Aci`).
+    pub phi: Option<f64>,
+    pub eps_t: Option<f64>,
     /// Section evaluations spent on this point.
     pub evals: u32,
 }
@@ -172,10 +187,19 @@ struct Root {
 struct Solver<'a> {
     probe: &'a SectionProbe,
     grid: &'a Grid,
+    factored: bool,
     evals: u32,
 }
 
 impl Grid {
+    fn axial(&self, state: &GridState, factored: bool) -> f64 {
+        if factored {
+            state.nf
+        } else {
+            state.n
+        }
+    }
+
     fn last_profile(&self) -> f64 {
         (self.profiles.len() - 1) as f64
     }
@@ -211,7 +235,12 @@ impl SectionProbe {
         &mut self,
         angles: &[f64],
         profiles: &[f64],
+        factoring: Option<Factoring>,
     ) -> Result<usize, SectionProbeError> {
+        if let Some(f) = &factoring {
+            f.validate(self.group_count)
+                .map_err(|reason| SectionProbeError::InvalidRequest { reason })?;
+        }
         let pairs: Vec<[f64; 2]> = profiles.chunks_exact(2).map(|p| [p[0], p[1]]).collect();
         if pairs.len() < 3 || angles.is_empty() {
             return Err(SectionProbeError::InvalidRequest {
@@ -221,19 +250,28 @@ impl SectionProbe {
         let mut states = Vec::with_capacity(angles.len() * pairs.len());
         let mut by_angle = Vec::with_capacity(angles.len());
         let (mut n_min, mut n_max, mut m_max) = (f64::INFINITY, f64::NEG_INFINITY, 1.0f64);
+        let (mut nf_min, mut nf_max, mut mf_max) = (f64::INFINITY, f64::NEG_INFINITY, 1.0f64);
         for &theta in angles {
             let mut row = Vec::with_capacity(pairs.len());
             for (pi, p) in pairs.iter().enumerate() {
                 let (e0, kz, ky) = self.profile_state(theta, p[0], p[1])?;
                 let r = self.evaluate(e0, kz, ky);
+                let rf = match &factoring {
+                    Some(f) => self.evaluate_factored(f, e0, kz, ky).response,
+                    None => r,
+                };
                 n_min = n_min.min(r.n);
                 n_max = n_max.max(r.n);
                 m_max = m_max.max(r.m2.hypot(r.m3));
+                nf_min = nf_min.min(rf.n);
+                nf_max = nf_max.max(rf.n);
+                mf_max = mf_max.max(rf.m2.hypot(rf.m3));
                 row.push(states.len());
                 states.push(GridState {
                     theta,
                     profile: pi as f64,
                     n: r.n,
+                    nf: rf.n,
                 });
             }
             by_angle.push(row);
@@ -246,13 +284,67 @@ impl SectionProbe {
             n_min,
             n_max,
             m_max,
+            nf_min,
+            nf_max,
+            mf_max,
+            factoring,
         });
         Ok(count)
     }
 
-    /// `(n_min, n_max)` over the sampled boundary, if a grid is built.
-    pub fn grid_axial_range(&self) -> Option<(f64, f64)> {
-        self.grid.as_ref().map(|g| (g.n_min, g.n_max))
+    /// `(n_min, n_max)` over the sampled boundary, if a grid is built (factored axial forces with `factored`).
+    pub fn grid_axial_range(&self, factored: bool) -> Option<(f64, f64)> {
+        self.grid.as_ref().map(|g| {
+            if factored {
+                (g.nf_min, g.nf_max)
+            } else {
+                (g.n_min, g.n_max)
+            }
+        })
+    }
+
+    /// Every `(angle, profile)` state, angles outermost, as rows of [`STATE_STRIDE`] numbers: nominal `n, m2, m3`,
+    /// factored `n, m2, m3` (equal to nominal without factoring), `phi`, `eps_t` (NaN when not defined), `c`
+    /// (NaN for uniform strain) and the profile's `et, eb`.
+    pub fn sample_states(
+        &self,
+        angles: &[f64],
+        profiles: &[f64],
+        factoring: Option<&Factoring>,
+    ) -> Result<Vec<f64>, SectionProbeError> {
+        if let Some(f) = factoring {
+            f.validate(self.group_count)
+                .map_err(|reason| SectionProbeError::InvalidRequest { reason })?;
+        }
+        let mut out = Vec::with_capacity(angles.len() * profiles.len() / 2 * STATE_STRIDE);
+        for &theta in angles {
+            let (lo, hi) = self.extents(theta);
+            for p in profiles.chunks_exact(2) {
+                let (e0, kz, ky) = self.profile_state(theta, p[0], p[1])?;
+                let r = self.evaluate(e0, kz, ky);
+                let (rf, phi, eps_t) = match factoring {
+                    Some(f) => {
+                        let x = self.evaluate_factored(f, e0, kz, ky);
+                        (x.response, x.phi, x.eps_t)
+                    }
+                    None => (r, None, None),
+                };
+                out.extend_from_slice(&[
+                    r.n,
+                    r.m2,
+                    r.m3,
+                    rf.n,
+                    rf.m2,
+                    rf.m3,
+                    phi.unwrap_or(f64::NAN),
+                    eps_t.unwrap_or(f64::NAN),
+                    neutral_axis_depth(hi - lo, p[0], p[1]).unwrap_or(f64::NAN),
+                    p[0],
+                    p[1],
+                ]);
+            }
+        }
+        Ok(out)
     }
 
     pub fn solve_isolines(
@@ -260,12 +352,22 @@ impl SectionProbe {
         request: &IsolineRequest,
     ) -> Result<Vec<IsolinePoint>, SectionProbeError> {
         let grid = self.grid.as_ref().ok_or(SectionProbeError::NoGrid)?;
+        let factored = request.factored;
+        if factored && grid.factoring.is_none() {
+            return Err(SectionProbeError::InvalidRequest {
+                reason: "factored isolines need a factoring in buildGrid".into(),
+            });
+        }
         let opts = request.options;
-        let sp = (grid.n_max - grid.n_min).max(1.0);
-        let sm = grid.m_max;
+        let (sp, sm) = if factored {
+            ((grid.nf_max - grid.nf_min).max(1.0), grid.mf_max)
+        } else {
+            ((grid.n_max - grid.n_min).max(1.0), grid.m_max)
+        };
         let mut solver = Solver {
             probe: self,
             grid,
+            factored,
             evals: 0,
         };
         let mut order: Vec<usize> = (0..request.levels.len()).collect();
@@ -291,6 +393,15 @@ impl SectionProbe {
                     Some(r) => {
                         let (et, eb) = grid.interpolate(r.profile);
                         let moment = target.signed(r.m2, r.m3);
+                        let (lo, hi) = self.extents(r.theta);
+                        let (phi, eps_t) = match (&grid.factoring, factored) {
+                            (Some(f), true) => {
+                                let (e0, kz, ky) = self.profile_state(r.theta, et, eb)?;
+                                let x = self.evaluate_factored(f, e0, kz, ky);
+                                (x.phi, x.eps_t)
+                            }
+                            _ => (None, None),
+                        };
                         IsolinePoint {
                             moment_angle_index: ai as u32,
                             level_index: li as u32,
@@ -305,6 +416,9 @@ impl SectionProbe {
                             profile: r.profile,
                             top_strain: et,
                             bottom_strain: eb,
+                            c: neutral_axis_depth(hi - lo, et, eb),
+                            phi,
+                            eps_t,
                             evals,
                         }
                     }
@@ -322,6 +436,9 @@ impl SectionProbe {
                         profile: 0.0,
                         top_strain: 0.0,
                         bottom_strain: 0.0,
+                        c: None,
+                        phi: None,
+                        eps_t: None,
                         evals,
                     },
                 });
@@ -341,7 +458,10 @@ impl Solver<'_> {
         let (theta, s) = self.grid.wrap(theta, s);
         let (et, eb) = self.grid.interpolate(s);
         let (e0, kz, ky) = self.probe.profile_state(theta, et, eb).ok()?;
-        let r = self.probe.evaluate(e0, kz, ky);
+        let r = match (&self.grid.factoring, self.factored) {
+            (Some(f), true) => self.probe.evaluate_factored(f, e0, kz, ky).response,
+            _ => self.probe.evaluate(e0, kz, ky),
+        };
         Some((r.n, r.m2, r.m3))
     }
 
@@ -497,7 +617,10 @@ impl Solver<'_> {
             let row = &grid.by_angle[ai];
             for w in row.windows(2) {
                 let (a, b) = (&grid.states[w[0]], &grid.states[w[1]]);
-                let (r0, r1) = (a.n - t.p, b.n - t.p);
+                let (r0, r1) = (
+                    grid.axial(a, self.factored) - t.p,
+                    grid.axial(b, self.factored) - t.p,
+                );
                 if r0 * r1 > 0.0 {
                     continue;
                 }
@@ -518,7 +641,7 @@ impl Solver<'_> {
                 .states
                 .iter()
                 .enumerate()
-                .map(|(i, g)| ((g.n - t.p).abs(), i))
+                .map(|(i, g)| ((grid.axial(g, self.factored) - t.p).abs(), i))
                 .collect();
             near.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             for &(_, i) in near.iter().take(opts.nearest_seeds) {
@@ -559,5 +682,20 @@ impl Solver<'_> {
             }
         }
         found.map(|(_, root)| root)
+    }
+}
+
+/// Numbers per row of [`SectionProbe::sample_states`].
+pub const STATE_STRIDE: usize = 11;
+
+/// Depth of the neutral axis from the extreme compression edge for a profile over section height `h`; `None`
+/// for (near) uniform strain, where it lies at infinity.
+fn neutral_axis_depth(h: f64, et: f64, eb: f64) -> Option<f64> {
+    if (et - eb).abs() <= 1e-12 {
+        None
+    } else if et <= eb {
+        Some(h * et / (et - eb))
+    } else {
+        Some(h * eb / (eb - et))
     }
 }

@@ -166,12 +166,13 @@ fn isolines_match_the_engine() {
     let fx = fixture("isolines.json");
     let (angles, profiles) = (f64s(&fx["angles"]), f64s(&fx["profiles"]));
     let (levels, moment_angles) = (f64s(&fx["levels"]), f64s(&fx["momentAnglesRad"]));
-    probe.build_grid(&angles, &profiles).unwrap();
+    probe.build_grid(&angles, &profiles, None).unwrap();
     let res = probe
         .solve_isolines(&IsolineRequest {
             levels: levels.clone(),
             moment_angles,
             options: IsolineOptions::default(),
+            factored: false,
         })
         .unwrap();
     let roots = fx["roots"].as_array().unwrap();
