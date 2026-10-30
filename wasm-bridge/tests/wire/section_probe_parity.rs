@@ -15,7 +15,10 @@ fn fixture(name: &str) -> Value {
 }
 
 fn section() -> SectionProbe {
-    SectionProbe::new(&SectionProbeConfig::deserialize(fixture("section.json")).unwrap()).unwrap()
+    // The engine evaluates every fibre at its centroid strain; the probe's step smoothing is tested separately.
+    let mut config = SectionProbeConfig::deserialize(fixture("section.json")).unwrap();
+    config.step_smoothing = false;
+    SectionProbe::new(&config).unwrap()
 }
 
 fn f64s(v: &Value) -> Vec<f64> {
@@ -34,6 +37,7 @@ fn material_laws_match_the_engine() {
     for case in cases["cases"].as_array().unwrap() {
         let spec = ProbeMaterialSpec::deserialize(&case["spec"]).unwrap();
         let probe = SectionProbe::new(&SectionProbeConfig {
+            step_smoothing: true,
             core_materials: vec![],
             materials: vec![spec],
             fibers: ProbeFibers {

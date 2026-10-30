@@ -19,6 +19,7 @@ fn rectangle(width: f64, depth: f64, n: usize) -> ProbeFibers {
 
 fn elastic_probe(e: f64, n: usize) -> SectionProbe {
     SectionProbe::new(&SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![MaterialSpec::Elastic { e }],
         materials: vec![ProbeMaterialSpec::Core { index: 0 }],
         fibers: rectangle(10.0, 20.0, n),
@@ -53,6 +54,7 @@ fn group_sums_add_to_total() {
     let mut fibers = rectangle(10.0, 20.0, 40);
     fibers.group = (0..40).map(|i| (i % 3) as u32).collect();
     let p = SectionProbe::new(&SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![MaterialSpec::Elastic { e: 1000.0 }],
         materials: vec![ProbeMaterialSpec::Core { index: 0 }],
         fibers,
@@ -76,6 +78,7 @@ fn group_sums_add_to_total() {
 fn probe_only_materials() {
     let build = |m: ProbeMaterialSpec| {
         SectionProbe::new(&SectionProbeConfig {
+            step_smoothing: true,
             core_materials: vec![],
             materials: vec![m],
             fibers: ProbeFibers {
@@ -194,6 +197,7 @@ fn invalid_materials_are_rejected() {
         group: vec![],
     };
     let cfg = |materials| SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![],
         materials,
         fibers: fibers(),
@@ -225,6 +229,7 @@ fn invalid_materials_are_rejected() {
 #[test]
 fn combine_subtracts_the_host() {
     let p = SectionProbe::new(&SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![
             MaterialSpec::Elastic { e: 30_000.0 },
             MaterialSpec::Elastic { e: 29_000_000.0 },
@@ -281,6 +286,7 @@ fn profile_states_hit_the_extreme_strains() {
 #[test]
 fn axial_extremes_of_an_elastic_plastic_section() {
     let p = SectionProbe::new(&SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![],
         materials: vec![ProbeMaterialSpec::Steel(SteelSpec {
             model: SteelModel::ElasticPlastic,
@@ -327,6 +333,7 @@ fn elastic_moment_curvature() {
 fn isolines_satisfy_their_equations() {
     // symmetric rectangle, elastic-plastic steel-like material, tension and compression capable
     let p = SectionProbe::new(&SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![],
         materials: vec![ProbeMaterialSpec::Steel(SteelSpec {
             model: SteelModel::ElasticPlastic,
@@ -416,6 +423,7 @@ fn grouped_grid() -> SectionProbe {
         .map(|k| u32::from(k / 6 == 0 || k / 6 == 9))
         .collect();
     SectionProbe::new(&SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![],
         materials: vec![ProbeMaterialSpec::Steel(SteelSpec {
             model: SteelModel::ElasticPlastic,
@@ -619,6 +627,7 @@ fn isolines_of_a_stepped_concrete_law_converge_to_fibre_resolution() {
     }
     let count = y.len();
     let mut p = SectionProbe::new(&SectionProbeConfig {
+        step_smoothing: true,
         core_materials: vec![],
         materials: vec![ProbeMaterialSpec::Concrete(ConcreteSpec {
             model: ConcreteModel::Whitney,
@@ -677,4 +686,50 @@ fn isolines_of_a_stepped_concrete_law_converge_to_fibre_resolution() {
     }
     let evals: u32 = res.iter().map(|pt| pt.evals).sum();
     assert!(evals as usize / res.len() < 400, "{evals} evaluations");
+}
+
+/// A fibre whose strain window straddles the start of a Whitney block carries the block's share of the window.
+#[test]
+fn a_stepped_law_is_averaged_over_the_fibre_window() {
+    let config = |step_smoothing| SectionProbeConfig {
+        step_smoothing,
+        core_materials: vec![],
+        materials: vec![ProbeMaterialSpec::Concrete(ConcreteSpec {
+            model: ConcreteModel::Whitney,
+            fc: 5.0,
+            ec: 4030.0,
+            ecu: 0.003,
+            eu: Some(0.0031),
+            fu: 0.0,
+            alpha: 0.85,
+            beta1: Some(0.8), // the block starts at ecu * (1 - beta1) = 0.0006
+            tension_capacity: false,
+            ft: 0.0,
+            ets: 0.0,
+            curve_points: vec![],
+            drop_after_last_point: false,
+        })],
+        fibers: ProbeFibers {
+            y: vec![0.0],
+            z: vec![0.0],
+            area: vec![1.0],
+            material: vec![0],
+            group: vec![],
+        },
+    };
+    // half-window = sqrt(area) / 2 * kz = 1e-3, centred on the block start
+    let (smooth, exact) = (
+        SectionProbe::new(&config(true)).unwrap(),
+        SectionProbe::new(&config(false)).unwrap(),
+    );
+    near(
+        smooth.evaluate(-0.0006, 2e-3, 0.0).n,
+        -0.5 * 0.85 * 5.0,
+        1e-9,
+    );
+    // without smoothing the fibre sits on the step and carries all or none of the block
+    let n = exact.evaluate(-0.0006, 2e-3, 0.0).n;
+    assert!(n == 0.0 || (n + 0.85 * 5.0).abs() < 1e-9, "{n}");
+    // uniform strain has no window
+    near(smooth.evaluate(-0.002, 0.0, 0.0).n, -0.85 * 5.0, 1e-9);
 }

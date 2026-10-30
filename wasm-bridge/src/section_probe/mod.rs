@@ -39,7 +39,7 @@ pub use materials::{
 };
 pub use moment_curvature::{MomentCurvaturePoint, MomentCurvatureRequest, MomentCurvatureResult};
 
-use materials::{material_jumps, stress, ProbeMaterial};
+use materials::{material_jumps, stress, windowed_stress, ProbeMaterial, WINDOW_SAMPLES};
 
 /// Fibers as parallel arrays (`y`, `z`, `area`, `material`, optional `group`).
 #[derive(Debug, Clone, Deserialize, tsify::Tsify)]
@@ -64,6 +64,14 @@ pub struct SectionProbeConfig {
     pub core_materials: Vec<MaterialSpec>,
     pub materials: Vec<ProbeMaterialSpec>,
     pub fibers: ProbeFibers,
+    /// Average fibers over the strain window they span where a stress law has a step (default `true`; see
+    /// `materials::windowed_stress`). `false` evaluates every fiber at its centroid strain, as CalcsApp's JS engine did.
+    #[serde(default = "default_true")]
+    pub step_smoothing: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
@@ -141,6 +149,10 @@ pub struct SectionProbe {
     /// (see `isolines`).
     quantum: f64,
     radius: f64,
+    /// Materials with a step in their law: their fibers are averaged over the strain window the fiber spans.
+    windowed: Vec<bool>,
+    /// Half the size of each fiber, `sqrt(area) / 2`.
+    half_size: Vec<f64>,
     grid: Option<isolines::Grid>,
 }
 
@@ -199,9 +211,20 @@ impl SectionProbe {
         };
         let group_count = group.iter().copied().max().unwrap_or(0) as usize + 1;
         let jumps = material_jumps(&config.materials, &materials);
+        let windowed: Vec<bool> = jumps
+            .iter()
+            .map(|j| config.step_smoothing && *j > 0.0)
+            .collect();
+        // Averaged over a fiber's window a step is spread over `WINDOW_SAMPLES` smaller ones.
+        let spread = if config.step_smoothing {
+            WINDOW_SAMPLES as f64
+        } else {
+            1.0
+        };
         let quantum = (0..n)
-            .map(|i| f.area[i].abs() * jumps[f.material[i] as usize])
+            .map(|i| f.area[i].abs() * jumps[f.material[i] as usize] / spread)
             .fold(0.0, f64::max);
+        let half_size: Vec<f64> = f.area.iter().map(|a| 0.5 * a.abs().sqrt()).collect();
         let radius = (0..n).map(|i| f.y[i].hypot(f.z[i])).fold(0.0, f64::max);
         Ok(SectionProbe {
             y: f.y.clone(),
@@ -213,6 +236,8 @@ impl SectionProbe {
             materials,
             quantum,
             radius,
+            windowed,
+            half_size,
             grid: None,
         })
     }
@@ -228,7 +253,18 @@ impl SectionProbe {
     #[inline]
     pub(super) fn fiber_force(&self, i: usize, eps0: f64, kz: f64, ky: f64) -> f64 {
         let strain = eps0 - self.y[i] * kz + self.z[i] * ky;
-        stress(&self.materials, self.material[i] as usize, strain) * self.area[i]
+        let material = self.material[i] as usize;
+        let stress = if self.windowed[material] {
+            windowed_stress(
+                &self.materials,
+                material,
+                strain,
+                self.half_size[i] * kz.hypot(ky),
+            )
+        } else {
+            stress(&self.materials, material, strain)
+        };
+        stress * self.area[i]
     }
 
     /// Resultants at `(eps0, kz, ky)`.

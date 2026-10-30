@@ -610,3 +610,37 @@ pub(super) fn material_jumps(specs: &[ProbeMaterialSpec], materials: &[ProbeMate
     }
     jumps
 }
+
+/// Samples across a fiber's strain window where a stepped law is averaged.
+pub(super) const WINDOW_SAMPLES: usize = 32;
+
+/// Stress of material `index` averaged over the strain range `[strain - half, strain + half]` that a fiber of finite
+/// size sees across the section's strain gradient. A fiber is a point sample of a strain field, so a stepped law
+/// (a Whitney block, a cracking drop, a strain cutoff) turns the resultants into a staircase in the strain state; the
+/// window average integrates the step over the fiber, which makes the resultants continuous (the stress block is
+/// integrated exactly in the limit of fine fibers). Only the few fibers whose window straddles a step cost more
+/// than a plain evaluation.
+pub(super) fn windowed_stress(
+    materials: &[ProbeMaterial],
+    index: usize,
+    strain: f64,
+    half: f64,
+) -> f64 {
+    let centre = stress(materials, index, strain);
+    if half <= 1e-12 {
+        return centre;
+    }
+    let (low, high) = (
+        stress(materials, index, strain - half),
+        stress(materials, index, strain + half),
+    );
+    // Collinear samples: the law is linear across the window and its average is the centre value.
+    if (0.5 * (low + high) - centre).abs() <= 1e-9 * (low.abs() + high.abs() + centre.abs()) {
+        return centre;
+    }
+    let width = 2.0 * half / WINDOW_SAMPLES as f64;
+    (0..WINDOW_SAMPLES)
+        .map(|k| stress(materials, index, strain - half + (k as f64 + 0.5) * width))
+        .sum::<f64>()
+        / WINDOW_SAMPLES as f64
+}
