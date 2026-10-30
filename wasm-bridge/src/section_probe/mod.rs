@@ -39,7 +39,7 @@ pub use materials::{
 };
 pub use moment_curvature::{MomentCurvaturePoint, MomentCurvatureRequest, MomentCurvatureResult};
 
-use materials::{material_jumps, stress, windowed_stress, ProbeMaterial, WINDOW_SAMPLES};
+use materials::{material_steps, stress, windowed_stress, ProbeMaterial, WINDOW_SAMPLES};
 
 /// Fibers as parallel arrays (`y`, `z`, `area`, `material`, optional `group`).
 #[derive(Debug, Clone, Deserialize, tsify::Tsify)]
@@ -151,6 +151,8 @@ pub struct SectionProbe {
     radius: f64,
     /// Materials with a step in their law: their fibers are averaged over the strain window the fiber spans.
     windowed: Vec<bool>,
+    /// Strains of the steps in each material's law (empty for smooth laws).
+    step_points: Vec<Vec<f64>>,
     /// Half the size of each fiber, `sqrt(area) / 2`.
     half_size: Vec<f64>,
     grid: Option<isolines::Grid>,
@@ -210,7 +212,7 @@ impl SectionProbe {
             f.group.clone()
         };
         let group_count = group.iter().copied().max().unwrap_or(0) as usize + 1;
-        let jumps = material_jumps(&config.materials, &materials);
+        let (jumps, step_points) = material_steps(&config.materials, &materials);
         let windowed: Vec<bool> = jumps
             .iter()
             .map(|j| config.step_smoothing && *j > 0.0)
@@ -237,6 +239,7 @@ impl SectionProbe {
             quantum,
             radius,
             windowed,
+            step_points,
             half_size,
             grid: None,
         })
@@ -258,6 +261,7 @@ impl SectionProbe {
             windowed_stress(
                 &self.materials,
                 material,
+                &self.step_points[material],
                 strain,
                 self.half_size[i] * kz.hypot(ky),
             )

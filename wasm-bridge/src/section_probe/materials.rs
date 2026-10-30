@@ -554,22 +554,34 @@ pub(super) fn stress(materials: &[ProbeMaterial], index: usize, strain: f64) -> 
     }
 }
 
-/// Largest step in stress of each probe material (a jump in the stress-strain law), found by comparing the
-/// stress either side of every strain where a law changes character. Smooth and merely piecewise-linear laws give
-/// zero; a Whitney block, a cracking drop, a strain cutoff or a curve that drops after its last point give the
-/// height of the step. Isoline solves use it to know how close to equilibrium a discontinuous section can get.
-pub(super) fn material_jumps(specs: &[ProbeMaterialSpec], materials: &[ProbeMaterial]) -> Vec<f64> {
+/// Steps in the stress law of each probe material: the height of the largest one, and the strains where there is
+/// one. Found by comparing the stress either side of every strain where a law changes character. Smooth and merely
+/// piecewise-linear laws give none; a Whitney block, a cracking drop, a strain cutoff or a curve that drops after its
+/// last point give the height of the step and where it is. Section evaluation averages fibers over their strain window
+/// near such strains, and isoline solves use the height to know how close to equilibrium a stepped section can get.
+pub(super) fn material_steps(
+    specs: &[ProbeMaterialSpec],
+    materials: &[ProbeMaterial],
+) -> (Vec<f64>, Vec<Vec<f64>>) {
     let mut jumps: Vec<f64> = Vec::with_capacity(specs.len());
+    let mut points: Vec<Vec<f64>> = Vec::with_capacity(specs.len());
     for (index, spec) in specs.iter().enumerate() {
-        let jump = match spec {
-            ProbeMaterialSpec::Core { .. } => 0.0,
-            ProbeMaterialSpec::Combine { terms } => terms
-                .iter()
-                .map(|(term, factor)| factor.abs() * jumps[*term as usize])
-                .sum(),
+        let (jump, at) = match spec {
+            ProbeMaterialSpec::Core { .. } => (0.0, Vec::new()),
+            ProbeMaterialSpec::Combine { terms } => (
+                terms
+                    .iter()
+                    .map(|(term, factor)| factor.abs() * jumps[*term as usize])
+                    .sum(),
+                terms
+                    .iter()
+                    .flat_map(|(term, _)| points[*term as usize].iter().copied())
+                    .collect(),
+            ),
             _ => {
-                let mut at = vec![0.0];
-                let mut add = |values: &[f64]| at.extend(values.iter().flat_map(|v| [*v, -*v]));
+                let mut candidates = vec![0.0];
+                let mut add =
+                    |values: &[f64]| candidates.extend(values.iter().flat_map(|v| [*v, -*v]));
                 match spec {
                     ProbeMaterialSpec::Concrete(c) => {
                         add(&[c.ecu, c.eu.unwrap_or(c.ecu)]);
@@ -597,18 +609,31 @@ pub(super) fn material_jumps(specs: &[ProbeMaterialSpec], materials: &[ProbeMate
                     }
                     _ => {}
                 }
-                at.iter()
-                    .filter(|b| b.is_finite())
-                    .map(|b| {
-                        let d = 1e-9 * b.abs().max(1.0);
-                        (stress(materials, index, b + d) - stress(materials, index, b - d)).abs()
-                    })
-                    .fold(0.0, f64::max)
+                let mut at = Vec::new();
+                let mut largest: f64 = 0.0;
+                for b in candidates.into_iter().filter(|b| b.is_finite()) {
+                    let d = 1e-9 * b.abs().max(1.0);
+                    let step =
+                        (stress(materials, index, b + d) - stress(materials, index, b - d)).abs();
+                    // Elastic slope over the probe width is ~1e-9 of a stress; a real step is far larger.
+                    if step
+                        > 1e-6
+                            * stress(materials, index, b)
+                                .abs()
+                                .max(stress(materials, index, b + 1e-3).abs())
+                                .max(1e-12)
+                    {
+                        at.push(b);
+                        largest = largest.max(step);
+                    }
+                }
+                (largest, at)
             }
         };
         jumps.push(jump);
+        points.push(at);
     }
-    jumps
+    (jumps, points)
 }
 
 /// Samples across a fiber's strain window where a stepped law is averaged.
@@ -623,20 +648,14 @@ pub(super) const WINDOW_SAMPLES: usize = 32;
 pub(super) fn windowed_stress(
     materials: &[ProbeMaterial],
     index: usize,
+    steps: &[f64],
     strain: f64,
     half: f64,
 ) -> f64 {
-    let centre = stress(materials, index, strain);
-    if half <= 1e-12 {
-        return centre;
-    }
-    let (low, high) = (
-        stress(materials, index, strain - half),
-        stress(materials, index, strain + half),
-    );
-    // Collinear samples: the law is linear across the window and its average is the centre value.
-    if (0.5 * (low + high) - centre).abs() <= 1e-9 * (low.abs() + high.abs() + centre.abs()) {
-        return centre;
+    // Only a window that contains a step differs from the plain evaluation (a kink averages out to the same value to
+    // first order, and the engine's laws are piecewise linear or smooth away from the steps).
+    if half <= 1e-12 || !steps.iter().any(|b| (b - strain).abs() < half) {
+        return stress(materials, index, strain);
     }
     let width = 2.0 * half / WINDOW_SAMPLES as f64;
     (0..WINDOW_SAMPLES)
