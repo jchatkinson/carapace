@@ -171,19 +171,7 @@ fn isolines_match_the_engine() {
         .solve_isolines(&IsolineRequest {
             levels: levels.clone(),
             moment_angles,
-            options: {
-                let mut o = IsolineOptions::default();
-                if let Ok(v) = std::env::var("RS") {
-                    o.residual_seeds = v.parse().unwrap();
-                }
-                if let Ok(v) = std::env::var("MS") {
-                    o.moment_seeds = v.parse().unwrap();
-                }
-                if let Ok(v) = std::env::var("ST") {
-                    o.seed_angle_stride = v.parse().unwrap();
-                }
-                o
-            },
+            options: IsolineOptions::default(),
             factored: false,
         })
         .unwrap();
