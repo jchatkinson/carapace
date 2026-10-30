@@ -35,6 +35,9 @@ pub(super) struct GridState {
     pub n: f64,
     /// Factored axial force (equal to `n` without factoring).
     pub nf: f64,
+    /// Nominal and factored moments `(m2, m3)`, so a level's slice can be bounded without another evaluation.
+    pub m: [f64; 2],
+    pub mf: [f64; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +216,64 @@ struct Solver<'a> {
     evals: u32,
 }
 
+/// Angular margin added to a level's cone of reachable directions: the cone is built from sampled crossings only.
+const CONE_MARGIN: f64 = 0.2;
+
 impl Grid {
+    /// The cone `(centre, half-width)` of moment directions, seen from the origin, in which the slice of the sampled
+    /// boundary at axial force `p` lies; `None` when the slice surrounds the origin (or is too close to tell), so every
+    /// direction can have a root. Built from where the sampled angle lines cross `p`, with no further evaluation.
+    fn level_cone(&self, p: f64, factored: bool, m_scale: f64) -> Option<(f64, f64)> {
+        let mut angles: Vec<f64> = Vec::new();
+        for row in &self.by_angle {
+            for w in row.windows(2) {
+                let (a, b) = (&self.states[w[0]], &self.states[w[1]]);
+                let (r0, r1) = (self.axial(a, factored) - p, self.axial(b, factored) - p);
+                if r0 * r1 > 0.0 {
+                    continue;
+                }
+                let t = if (r1 - r0).abs() < 1e-30 {
+                    0.0
+                } else {
+                    -r0 / (r1 - r0)
+                };
+                let (ma, mb) = (self.moments(a, factored), self.moments(b, factored));
+                let (m2, m3) = (ma[0] + (mb[0] - ma[0]) * t, ma[1] + (mb[1] - ma[1]) * t);
+                if m2.hypot(m3) < 1e-3 * m_scale {
+                    return None;
+                }
+                angles.push(m3.atan2(m2));
+            }
+        }
+        if angles.len() < 3 {
+            return None;
+        }
+        angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // Largest gap between consecutive directions (wrapping): the cone is the complement.
+        let (mut gap, mut at) = (
+            angles[0] + 2.0 * PI - angles[angles.len() - 1],
+            angles.len() - 1,
+        );
+        for i in 1..angles.len() {
+            if angles[i] - angles[i - 1] > gap {
+                gap = angles[i] - angles[i - 1];
+                at = i - 1;
+            }
+        }
+        // The cone runs from the direction after the gap to the one before it.
+        let start = angles[(at + 1) % angles.len()];
+        let width = 2.0 * PI - gap;
+        (gap > PI).then_some((start + 0.5 * width, 0.5 * width))
+    }
+
+    fn moments(&self, state: &GridState, factored: bool) -> [f64; 2] {
+        if factored {
+            state.mf
+        } else {
+            state.m
+        }
+    }
+
     fn axial(&self, state: &GridState, factored: bool) -> f64 {
         if factored {
             state.nf
@@ -294,6 +354,8 @@ impl SectionProbe {
                     profile: pi as f64,
                     n: r.n,
                     nf: rf.n,
+                    m: [r.m2, r.m3],
+                    mf: [rf.m2, rf.m3],
                 });
             }
             by_angle.push(row);
@@ -529,6 +591,12 @@ impl SectionProbe {
         let mut order: Vec<usize> = (0..request.levels.len()).collect();
         order.sort_by(|a, b| request.levels[*b].partial_cmp(&request.levels[*a]).unwrap());
 
+        // Where the slice at a level lies to one side of the origin, directions away from it have no root.
+        let cones: Vec<Option<(f64, f64)>> = request
+            .levels
+            .iter()
+            .map(|p| grid.level_cone(*p, factored, sm))
+            .collect();
         let mut points = vec![None; request.levels.len() * request.moment_angles.len()];
         // Roots of the previous moment angle by level: a second continuation candidate for neighbouring angles.
         let mut across: Vec<Option<(Root, f64)>> = vec![None; request.levels.len()];
@@ -549,11 +617,19 @@ impl SectionProbe {
                 let neighbour = if in_apex_zone { None } else { across[li] };
                 // Beyond the sampled axial range there is no boundary point to find.
                 let slack = 1e-9 * (grid_hi - grid_lo).abs().max(1.0);
-                let root = if target.p < grid_lo - slack || target.p > grid_hi + slack {
-                    None
-                } else {
-                    solver.solve_level(&target, &opts, &[previous, neighbour])
-                };
+                let unreachable = cones[li].map_or(false, |(centre, half)| {
+                    let mut d = (alpha - centre).rem_euclid(2.0 * PI);
+                    if d > PI {
+                        d = 2.0 * PI - d;
+                    }
+                    d > half + CONE_MARGIN
+                });
+                let root =
+                    if unreachable || target.p < grid_lo - slack || target.p > grid_hi + slack {
+                        None
+                    } else {
+                        solver.solve_level(&target, &opts, &[previous, neighbour])
+                    };
                 let evals = solver.evals - before;
                 previous = root.map(|r| (r, target.signed(r.m2, r.m3)));
                 current[li] = previous;
