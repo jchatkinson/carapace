@@ -71,6 +71,10 @@ pub struct IsolineOptions {
     pub continuation_jump: f64,
     #[serde(default = "d_accept")]
     pub accept_tolerance: f64,
+    /// Section evaluations after which the search of one point stops starting new seeds. Where no root exists (for
+    /// instance a moment direction the folded boundary near the axial maximum never reaches) the search ends here.
+    #[serde(default = "d_budget")]
+    pub eval_budget: u32,
     /// Fraction of the sampled axial range, at the compression end, where a root is not continued from the
     /// neighbouring moment angle (inner and outer roots merge at a fold there; see the module docs).
     #[serde(default = "d_apex")]
@@ -95,6 +99,9 @@ fn d_jump() -> f64 {
 fn d_apex() -> f64 {
     0.1
 }
+fn d_budget() -> u32 {
+    600
+}
 fn d_accept() -> f64 {
     2e-6
 }
@@ -110,6 +117,7 @@ impl Default for IsolineOptions {
             continuation_jump: d_jump(),
             accept_tolerance: d_accept(),
             apex_fraction: d_apex(),
+            eval_budget: d_budget(),
         }
     }
 }
@@ -768,6 +776,7 @@ impl Solver<'_> {
         opts: &IsolineOptions,
         previous: &[Option<(Root, f64)>],
     ) -> Option<Root> {
+        let started = self.evals;
         if opts.continuation {
             for &(prev, prev_signed) in previous.iter().flatten() {
                 if let Some(root) = self.newton(t, (prev.theta, prev.profile)) {
@@ -842,6 +851,9 @@ impl Solver<'_> {
         }
         let mut found: Option<(f64, Root)> = None;
         for seed in picks {
+            if self.evals - started > opts.eval_budget {
+                break;
+            }
             if let Some(root) = self.newton(t, seed) {
                 if self.accept(t, &root, opts.accept_tolerance) {
                     let signed = t.signed(root.m2, root.m3);
