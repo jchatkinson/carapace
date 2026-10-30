@@ -333,7 +333,7 @@ pub enum PlaneMaterialSpec {
     /// `[d11, d12, d13, d22, d23, d33]`.
     ElasticMatrix { d: [f64; 6] },
     /// The CSFM rotating principal-strain concrete (units N, mm, MPa; `nu = 0`). `fck` must
-    /// satisfy `0 < fck <= 50`; `ecm` overrides the derived `Ecm`; `tensile_regularization` is
+    /// satisfy `0 < fck <= 65` (EN 1992-1-1 Table 3.1 strength constants above 50); `ecm` overrides the derived `Ecm`; `tensile_regularization` is
     /// the numerical regularization factor `gamma` (`0 < gamma < 1`), not a material property.
     CsfmConcrete {
         fck: f64,

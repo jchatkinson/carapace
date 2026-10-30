@@ -72,7 +72,7 @@ pub enum PlaneMaterialError {
     InvalidPoissonRatio,
     /// The constitutive matrix is not finite, symmetric positive definite.
     NotPositiveDefinite,
-    /// `fck` is not in `0 < fck <= 50` MPa (plan §1 point 2), or an `ecm`
+    /// `fck` is not in `0 < fck <= 65` MPa, or an `ecm`
     /// override is not finite and positive.
     InvalidFck,
     /// A tensile-regularization `gamma` does not satisfy `0 < gamma < 1`.
@@ -88,7 +88,7 @@ impl PlaneMaterialError {
                 "the constitutive matrix is not symmetric positive definite"
             }
             PlaneMaterialError::InvalidFck => {
-                "fck must satisfy 0 < fck <= 50 MPa, and an Ecm override must be finite and positive"
+                "fck must satisfy 0 < fck <= 65 MPa, and an Ecm override must be finite and positive"
             }
             PlaneMaterialError::InvalidRegularizationGamma => {
                 "tensile-regularization gamma must satisfy 0 < gamma < 1"
@@ -191,7 +191,7 @@ impl PlaneMaterial {
             #[cfg(test)]
             PlaneMaterial::Probe { .. } => {}
             PlaneMaterial::CsfmConcrete(fields) => {
-                if !(fields.fck > 0.0 && fields.fck <= 50.0) || positive(fields.ecm).is_err() {
+                if !(fields.fck > 0.0 && fields.fck <= csfm_concrete::MAX_FCK) || positive(fields.ecm).is_err() {
                     return Err(PlaneMaterialError::InvalidFck);
                 }
                 if let Some(gamma) = fields.gamma {
@@ -336,10 +336,10 @@ impl PlaneMaterial {
         strain: &PlaneVector,
         config: &LimitStateConfig,
     ) -> (f64, LimitKind) {
-        if !matches!(self, PlaneMaterial::CsfmConcrete(_)) {
+        let PlaneMaterial::CsfmConcrete(fields) = self else {
             panic!("csfm_concrete_limit_utilization called on a non-CsfmConcrete material");
-        }
-        csfm_concrete::limit_utilization(strain, config)
+        };
+        csfm_concrete::limit_utilization(fields, strain, config)
     }
 
     /// Whether the response is linear in strain and history-free (what the

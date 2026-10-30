@@ -50,15 +50,37 @@ pub struct CsfmConcreteFields {
     pub fctm: f64,
     pub eta_fc: f64,
     pub e0: f64,
+    /// Strain at the peak of the parabola-rectangle law (negative) and the
+    /// default crushing strain (negative), both EN 1992-1-1 Table 3.1
+    /// functions of `fck`: `-0.002` and `-0.0035` up to C50/60.
+    pub eps_c2: f64,
+    pub eps_cu2: f64,
+    /// Exponent `n` of the parabola-rectangle branch `1 - (1 - eps/eps_c2)^n`: `2` up to C50/60.
+    pub n: f64,
 }
 
-const EPS_C2: f64 = -0.002;
-/// The default crushing strain limit (plan §6 decision 5), for **both**
-/// compression laws: `findCriticalLoad`'s own `StopCriteria` exists in TS
-/// but is unused by the worker path, so there is no TS default to port —
-/// this value is the plan's own decision, not a parity figure.
-/// [`LimitStateConfig::concrete_crushing_limit`] can override it.
-const EPS_CU2: f64 = -0.0035;
+/// The largest `fck` (MPa) the law accepts.
+pub const MAX_FCK: f64 = 65.0;
+
+/// Strength-dependent constants of EN 1992-1-1 Table 3.1 (`fck` in MPa),
+/// continuous at 50 MPa: `(eps_c2, eps_cu2, n, fctm)`. Up to 50 MPa they are
+/// the constants `-0.002`, `-0.0035`, `2` and `0.3 fck^(2/3)` the law was
+/// built on; above it `eps_c2 = 2.0 + 0.085 (fck - 50)^0.53` (per mille),
+/// `eps_cu2 = 2.6 + 35 ((90 - fck) / 100)^4`, `n = 1.4 + 23.4 ((90 - fck) /
+/// 100)^4` and `fctm = 2.12 ln(1 + (fck + 8) / 10)`.
+fn strength_constants(fck: f64) -> (f64, f64, f64, f64) {
+    if fck <= 50.0 {
+        (-0.002, -0.0035, 2.0, 0.3 * fck.powf(2.0 / 3.0))
+    } else {
+        let q = ((90.0 - fck) / 100.0).powi(4);
+        (
+            -(2.0 + 0.085 * (fck - 50.0).powf(0.53)) / 1000.0,
+            -(2.6 + 35.0 * q) / 1000.0,
+            1.4 + 23.4 * q,
+            2.12 * (1.0 + (fck + 8.0) / 10.0).ln(),
+        )
+    }
+}
 /// The exact-origin isotropic seed applies within this strain magnitude on
 /// every Cartesian component (plan §1, §4 A — matches CalcsApp's
 /// `ORIGIN_STRAIN`). It is a numerical policy, not the law's derivative
@@ -74,7 +96,7 @@ impl PlaneMaterial {
     /// # Errors
     ///
     /// [`PlaneMaterialError::InvalidFck`] if `fck` is not in `0 < fck <=
-    /// 50` MPa, or `ecm_override` is given and not finite and positive;
+    /// 65` MPa ([`MAX_FCK`]), or `ecm_override` is given and not finite and positive;
     /// [`PlaneMaterialError::InvalidRegularizationGamma`] if `gamma` is
     /// given and not in `0 < gamma < 1`.
     pub fn csfm_concrete(
@@ -84,7 +106,7 @@ impl PlaneMaterial {
         softening: bool,
         gamma: Option<f64>,
     ) -> Result<Self, PlaneMaterialError> {
-        if !(fck > 0.0 && fck <= 50.0) {
+        if !(fck > 0.0 && fck <= MAX_FCK) {
             return Err(PlaneMaterialError::InvalidFck);
         }
         let ecm = match ecm_override {
@@ -97,11 +119,11 @@ impl PlaneMaterial {
                 return Err(PlaneMaterialError::InvalidRegularizationGamma);
             }
         }
-        let fctm = 0.3 * fck.powf(2.0 / 3.0);
+        let (eps_c2, eps_cu2, n, fctm) = strength_constants(fck);
         let eta_fc = (30.0 / fck).powf(1.0 / 3.0).min(1.0);
         let e0 = match law {
             CsfmConcreteLaw::ElasticIdeallyPlastic => ecm,
-            CsfmConcreteLaw::ParabolaRectangle => 2.0 * eta_fc * fck / EPS_C2.abs(),
+            CsfmConcreteLaw::ParabolaRectangle => n * eta_fc * fck / eps_c2.abs(),
         };
         Ok(PlaneMaterial::CsfmConcrete(Box::new(CsfmConcreteFields {
             fck,
@@ -112,6 +134,9 @@ impl PlaneMaterial {
             fctm,
             eta_fc,
             e0,
+            eps_c2,
+            eps_cu2,
+            n,
         })))
     }
 }
@@ -171,14 +196,16 @@ fn dkc2_deps1(eps1: f64, softening: bool) -> f64 {
 /// `(stress, d(stress)/d(eps), d(stress)/d(fc))` — the second needed only
 /// for the `kc2` coupling term, where `fc` itself varies with `eps1`.
 /// Requires `eps <= 0`.
-fn compression(eps: f64, fc: f64, law: CsfmConcreteLaw, ecm: f64) -> (f64, f64, f64) {
-    match law {
+fn compression(eps: f64, fc: f64, f: &CsfmConcreteFields) -> (f64, f64, f64) {
+    let ecm = f.ecm;
+    match f.law {
         CsfmConcreteLaw::ParabolaRectangle => {
-            if eps >= EPS_C2 {
-                // r in [0, 1] from 0 at eps=0 to 1 at eps=eps_c2.
-                let r = eps / EPS_C2;
-                let shape = 2.0 * r - r * r;
-                (-fc * shape, -2.0 * fc * (1.0 - r) / EPS_C2, -shape)
+            if eps >= f.eps_c2 {
+                // r in [0, 1] from 0 at eps=0 to 1 at eps=eps_c2; shape 1 - (1 - r)^n (n = 2 is 2r - r^2).
+                let r = eps / f.eps_c2;
+                let rest = (1.0 - r).max(0.0);
+                let shape = 1.0 - rest.powf(f.n);
+                (-fc * shape, -f.n * fc * rest.powf(f.n - 1.0) / f.eps_c2, -shape)
             } else {
                 (-fc, 0.0, -1.0)
             }
@@ -223,7 +250,7 @@ fn branch(eps: f64, fc: f64, f: &CsfmConcreteFields, compression_at_zero: bool) 
         eps < 0.0
     };
     if is_compression {
-        let (stress, slope, _d_fc) = compression(eps, fc, f.law, f.ecm);
+        let (stress, slope, _d_fc) = compression(eps, fc, f);
         (stress, slope)
     } else {
         tension(eps, f.fctm, f.ecm, f.gamma)
@@ -261,7 +288,7 @@ pub(super) fn evaluate(f: &CsfmConcreteFields, strain: &PlaneVector) -> (PlaneVe
 
     let dfc2_deps1 = f.eta_fc * f.fck * dkc2_deps1(eps1, f.softening);
     let dsigma2_deps1 = if eps2 < 0.0 && dfc2_deps1 != 0.0 {
-        let (_, _, d_fc) = compression(eps2, fc2, f.law, f.ecm);
+        let (_, _, d_fc) = compression(eps2, fc2, f);
         d_fc * dfc2_deps1
     } else {
         0.0
@@ -299,7 +326,7 @@ pub(super) fn evaluate(f: &CsfmConcreteFields, strain: &PlaneVector) -> (PlaneVe
 }
 
 /// `(utilization, LimitKind)` at `strain` (plan §2.5 point 3): crushing
-/// (`max(0, -eps_2) / limit_c`, `limit_c` defaulting to `|EPS_CU2|` unless
+/// (`max(0, -eps_2) / limit_c`, `limit_c` defaulting to `|eps_cu2|` of the strength unless
 /// `config.concrete_crushing_limit` gives a usable override) always, and
 /// the optional tensile-strain criterion (`max(0, eps_1) / limit_t`)
 /// instead when `config.concrete_tensile_limit` is usable and gives the
@@ -316,11 +343,12 @@ pub(super) fn kc2(strain: &PlaneVector, softening: bool) -> f64 {
 }
 
 pub(super) fn limit_utilization(
+    f: &CsfmConcreteFields,
     strain: &PlaneVector,
     config: &LimitStateConfig,
 ) -> (f64, LimitKind) {
     let (eps1, eps2, _theta) = principal(strain);
-    let limit_c = LimitStateConfig::usable(config.concrete_crushing_limit).unwrap_or(EPS_CU2.abs());
+    let limit_c = LimitStateConfig::usable(config.concrete_crushing_limit).unwrap_or(f.eps_cu2.abs());
     let crushing = (-eps2).max(0.0) / limit_c;
     match LimitStateConfig::usable(config.concrete_tensile_limit) {
         Some(limit_t) => {

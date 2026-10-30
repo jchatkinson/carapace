@@ -159,7 +159,7 @@ The CalcsApp procedure, which is the parity target:
    DOFs, nodal point loads, nodal springs (`kx`, `ky`), and embedded rebar polylines.
 2. **Concrete** (`evaluateConcrete` + `makeConcreteContinuumLaw`). This is a stateless rotating principal-strain law
    with `nu = 0`.
-   - Properties come from `fck` (0 < fck ≤ 50 MPa): `Ecm = 22000 ((fck+8)/10)^0.3` (an override is allowed),
+   - Properties come from `fck` (0 < fck ≤ 65 MPa; EC2 Table 3.1 strength constants above 50): `Ecm = 22000 ((fck+8)/10)^0.3` (an override is allowed),
      `fctm = 0.3 fck^(2/3)`, `eps_c2 = -0.002`, `eps_cu2 = -0.0035`, `eta_fc = min(1, (30/fck)^(1/3))`.
    - Compression is either a parabola-rectangle (peak `eta_fc fck` at `eps_c2`) or elastic-ideally-plastic (`Ecm`,
      capped at `eta_fc fck`).

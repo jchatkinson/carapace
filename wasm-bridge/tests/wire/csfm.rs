@@ -69,12 +69,12 @@ fn csfm_concrete_matches_native_constructor() {
 
 #[test]
 fn csfm_concrete_rejects_bad_fck_and_gamma() {
-    for bad_fck in [0.0, -5.0, 50.1] {
+    for bad_fck in [0.0, -5.0, 65.1] {
         assert_eq!(
             plane_material_error(concrete(json!({ "fck": bad_fck }))),
             DecodeError::InvalidPlaneMaterial {
                 index: 0,
-                reason: "fck must satisfy 0 < fck <= 50 MPa, and an Ecm override must be finite and positive",
+                reason: "fck must satisfy 0 < fck <= 65 MPa, and an Ecm override must be finite and positive",
             }
         );
     }

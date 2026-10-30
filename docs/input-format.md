@@ -222,9 +222,9 @@ law, and rebar polylines embedded in a 2D continuum mesh. Units are N, mm, MPa t
 
 | Field | Meaning |
 |---|---|
-| `fck` | Characteristic strength, `0 < fck <= 50` MPa. |
+| `fck` | Characteristic strength, `0 < fck <= 65` MPa. Above 50 the EN 1992-1-1 Table 3.1 strength constants apply (`eps_c2`, `eps_cu2`, the parabola exponent `n` and `fctm`); up to 50 they are `-0.002`, `-0.0035`, `2` and `0.3 fck^(2/3)`. |
 | `ecm?` | Replaces the derived `Ecm = 22000 ((fck + 8) / 10)^0.3`. Finite and positive. |
-| `law` | `"parabolaRectangle"` (parabola to `eps_c2 = -0.002`, then a plateau) or `"elasticIdeallyPlastic"`. |
+| `law` | `"parabolaRectangle"` (parabola `1 - (1 - eps/eps_c2)^n` to `eps_c2` (`-0.002`, `n = 2` up to C50/60), then a plateau) or `"elasticIdeallyPlastic"`. |
 | `softening` | Kaufmann compression softening `kc2 = min(1, 1 / (0.8 + 140 eps_1))` on or off. |
 | `tensileRegularization?` | `gamma`, `0 < gamma < 1`. Omitted gives the exact zero-tension law. |
 
