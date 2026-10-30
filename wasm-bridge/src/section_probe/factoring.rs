@@ -49,15 +49,14 @@ pub struct FactoredResponse {
 }
 
 impl Factoring {
+    /// An ACI factoring whose `bar_group` has no fibers (a section without reinforcement) is valid: no bar is in
+    /// tension, so `phi` is `phi_compression`.
     pub(super) fn validate(&self, group_count: usize) -> Result<(), String> {
         match self {
             Factoring::Groups { factors } if factors.len() < group_count => Err(format!(
                 "factoring needs one factor per fiber group ({group_count}), got {}",
                 factors.len()
             )),
-            Factoring::Aci { bar_group, .. } if *bar_group as usize >= group_count => {
-                Err(format!("barGroup {bar_group} is not a fiber group"))
-            }
             _ => Ok(()),
         }
     }

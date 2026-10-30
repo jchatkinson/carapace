@@ -489,19 +489,17 @@ fn factoring_scales_groups_and_follows_the_aci_ramp() {
     assert_eq!(aci(0.01).phi, Some(0.9));
     let nominal = p.evaluate(0.0035, 0.0, 0.0);
     near(aci(0.0035).response.n, 0.775 * nominal.n, 1e-12);
-    assert!(p
-        .build_grid(
-            &[0.0],
-            &[0.0; 6],
-            Some(Factoring::Aci {
-                bar_group: 5,
-                phi_tension: 0.9,
-                phi_compression: 0.65,
-                eps_y: 0.002,
-                eps_tl: 0.005
-            })
-        )
-        .is_err());
+    // a bar group with no fibres (no reinforcement) is allowed: nothing is in tension, so phi is phi_compression
+    let unreinforced = Factoring::Aci {
+        bar_group: 5,
+        phi_tension: 0.9,
+        phi_compression: 0.65,
+        eps_y: 0.002,
+        eps_tl: 0.005,
+    };
+    let f = p.evaluate_factored(&unreinforced, 0.01, 0.0, 0.0);
+    assert_eq!((f.phi, f.eps_t), (Some(0.65), Some(0.0)));
+    assert!(p.build_grid(&[0.0], &[0.0; 6], Some(unreinforced)).is_ok());
 }
 
 /// Factored isolines hit the requested factored axial force, and sample_states reports phi and c.
