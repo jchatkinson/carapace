@@ -579,3 +579,25 @@ fn material_stress_matches_a_single_fiber() {
     }
     assert!(p.material_stress(7, &strains).iter().all(|v| v.is_nan()));
 }
+
+/// A fixed strain profile solved for a moment direction: the moment lies along it, and uniform strain has no
+/// preferred angle.
+#[test]
+fn profile_state_has_its_moment_along_the_requested_angle() {
+    let p = grouped_grid();
+    for alpha in [0.0_f64, 0.7, 1.4, 2.5] {
+        let pt = p
+            .solve_profile_at_moment_angle(-0.003, 0.002, alpha, None)
+            .unwrap()
+            .expect("a root exists");
+        let cross = pt.m2 * alpha.sin() - pt.m3 * alpha.cos();
+        assert!(cross.abs() < 1e-6 * pt.m2.hypot(pt.m3).max(1.0), "{pt:?}");
+        assert_eq!((pt.top_strain, pt.bottom_strain), (-0.003, 0.002));
+        assert!(pt.c.is_some());
+    }
+    let uniform = p
+        .solve_profile_at_moment_angle(-0.003, -0.003, 0.5, None)
+        .unwrap()
+        .expect("uniform strain");
+    assert!(uniform.c.is_none());
+}

@@ -18,7 +18,7 @@ use crate::material_probe::{
     MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse,
 };
 use crate::section_probe::{
-    AxialExtremes, Factoring, IsolineRequest, IsolineResult, MomentCurvatureRequest,
+    AxialExtremes, Factoring, IsolinePoint, IsolineRequest, IsolineResult, MomentCurvatureRequest,
     MomentCurvatureResult, SectionProbe, SectionProbeConfig, SectionProbeError, SectionResponse,
 };
 
@@ -287,6 +287,24 @@ impl WasmSectionProbe {
             .grid_axial_range(factored)
             .map(|(lo, hi)| vec![lo, hi])
             .unwrap_or_default()
+    }
+
+    /// The state of strain profile `(et, eb)` whose moment lies along `alpha`, or null if none does. The point's
+    /// indices are zero.
+    #[wasm_bindgen(js_name = solveProfile)]
+    pub fn solve_profile(
+        &self,
+        et: f64,
+        eb: f64,
+        alpha: f64,
+        factoring: Option<Ts<Factoring>>,
+    ) -> Result<Option<Ts<IsolinePoint>>, JsValue> {
+        let factoring = read_factoring(factoring)?;
+        self.0
+            .solve_profile_at_moment_angle(et, eb, alpha, factoring.as_ref())
+            .map_err(section_error)?
+            .map(|point| point.into_ts().map_err(ts_error))
+            .transpose()
     }
 
     #[wasm_bindgen(js_name = solveIsolines)]

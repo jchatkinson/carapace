@@ -358,6 +358,129 @@ impl SectionProbe {
         Ok(out)
     }
 
+    /// The state of one strain profile `(et, eb)` whose resultant moment lies along `alpha` (signed: the moment
+    /// has a non-negative component along `alpha`): a one-dimensional root in the profile angle `theta`, by Newton
+    /// from `theta = alpha` and, failing that, a bracket scan over a half turn. For named code-control states
+    /// (balance point, uniform strain) whose axial force is an outcome, not a target. `None` if no angle works.
+    pub fn solve_profile_at_moment_angle(
+        &self,
+        et: f64,
+        eb: f64,
+        alpha: f64,
+        factoring: Option<&Factoring>,
+    ) -> Result<Option<IsolinePoint>, SectionProbeError> {
+        if let Some(f) = factoring {
+            f.validate(self.group_count)
+                .map_err(|reason| SectionProbeError::InvalidRequest { reason })?;
+        }
+        let (sin, cos) = alpha.sin_cos();
+        let state = |theta: f64| -> Option<(f64, f64, f64, Option<f64>, Option<f64>)> {
+            let (e0, kz, ky) = self.profile_state(theta, et, eb).ok()?;
+            Some(match factoring {
+                Some(f) => {
+                    let x = self.evaluate_factored(f, e0, kz, ky);
+                    (x.response.n, x.response.m2, x.response.m3, x.phi, x.eps_t)
+                }
+                None => {
+                    let r = self.evaluate(e0, kz, ky);
+                    (r.n, r.m2, r.m3, None, None)
+                }
+            })
+        };
+        let residual = |theta: f64| state(theta).map(|s| s.1 * sin - s.2 * cos);
+        let scale = |theta: f64| state(theta).map_or(1.0, |s| s.1.hypot(s.2).max(1.0));
+
+        let mut found: Option<f64> = None;
+        let mut theta = alpha;
+        for _ in 0..30 {
+            let Some(r) = residual(theta) else { break };
+            if r.abs() <= 1e-9 * scale(theta) {
+                found = Some(theta);
+                break;
+            }
+            let h = 1e-5;
+            let (Some(a), Some(b)) = (residual(theta + h), residual(theta - h)) else {
+                break;
+            };
+            let derivative = (a - b) / (2.0 * h);
+            if !derivative.is_finite() || derivative.abs() < 1e-12 {
+                break;
+            }
+            theta -= r / derivative;
+            if !theta.is_finite() {
+                break;
+            }
+        }
+        if found.is_none() {
+            let steps = 24;
+            let (mut previous_theta, mut previous) = (0.0, residual(0.0));
+            let mut bracket = None;
+            for i in 1..=steps {
+                let candidate = PI * i as f64 / steps as f64;
+                let (Some(p), Some(r)) = (previous, residual(candidate)) else {
+                    previous_theta = candidate;
+                    previous = residual(candidate);
+                    continue;
+                };
+                if p == 0.0 {
+                    bracket = Some((previous_theta, previous_theta));
+                    break;
+                }
+                if p * r < 0.0 {
+                    bracket = Some((previous_theta, candidate));
+                    break;
+                }
+                previous_theta = candidate;
+                previous = Some(r);
+            }
+            if let Some((mut lo, mut hi)) = bracket {
+                let Some(mut lo_r) = residual(lo) else {
+                    return Ok(None);
+                };
+                for _ in 0..40 {
+                    if hi - lo <= 1e-12 {
+                        break;
+                    }
+                    let mid = 0.5 * (lo + hi);
+                    let Some(mid_r) = residual(mid) else {
+                        return Ok(None);
+                    };
+                    if lo_r * mid_r <= 0.0 {
+                        hi = mid;
+                    } else {
+                        lo = mid;
+                        lo_r = mid_r;
+                    }
+                }
+                found = Some(0.5 * (lo + hi));
+            }
+        }
+        let Some(theta) = found else {
+            return Ok(None);
+        };
+        let (n, m2, m3, phi, eps_t) = state(theta).expect("evaluated at the root");
+        let (lo, hi) = self.extents(theta);
+        Ok(Some(IsolinePoint {
+            moment_angle_index: 0,
+            level_index: 0,
+            found: true,
+            n,
+            mz: -m2,
+            my: m3,
+            m2,
+            m3,
+            moment: m2 * cos + m3 * sin,
+            theta,
+            profile: 0.0,
+            top_strain: et,
+            bottom_strain: eb,
+            c: neutral_axis_depth(hi - lo, et, eb),
+            phi,
+            eps_t,
+            evals: 0,
+        }))
+    }
+
     pub fn solve_isolines(
         &self,
         request: &IsolineRequest,
