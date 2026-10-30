@@ -3,6 +3,10 @@
 
 pub mod input_v1;
 pub mod material_probe;
+pub mod section_probe;
 
 mod boundary;
-pub use boundary::{create_material_probe, decode_input, WasmMaterialProbe, WasmSession};
+pub use boundary::{
+    create_material_probe, create_section_probe, decode_input, WasmMaterialProbe, WasmSectionProbe,
+    WasmSession,
+};

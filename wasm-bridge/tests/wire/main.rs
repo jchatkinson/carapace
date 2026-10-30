@@ -10,6 +10,8 @@ mod material_probe;
 mod modal;
 mod profiles;
 mod recorders;
+mod section_probe;
+mod section_probe_parity;
 mod shells;
 mod span_beam;
 mod stages;

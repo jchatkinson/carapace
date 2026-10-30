@@ -17,6 +17,10 @@ use crate::input_v1::{self, CarapaceInputV1};
 use crate::material_probe::{
     MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse,
 };
+use crate::section_probe::{
+    AxialExtremes, IsolineRequest, IsolineResult, MomentCurvatureRequest, MomentCurvatureResult,
+    SectionProbe, SectionProbeConfig, SectionProbeError, SectionResponse,
+};
 
 /// Opaque handle to a decoded, steppable analysis session — the `Session`
 /// enum itself can't cross the boundary directly, since `wasm_bindgen`
@@ -158,4 +162,122 @@ impl WasmMaterialProbe {
 fn probe_error(error: MaterialProbeError) -> JsValue {
     serde_wasm_bindgen::to_value(&error)
         .unwrap_or_else(|_| JsValue::from_str("material probe error"))
+}
+
+/// Opaque handle to a fiber-section probe (`section_probe`). Evaluation is stateless: nothing here commits
+/// material history, so the same strain state always returns the same resultants.
+#[wasm_bindgen]
+pub struct WasmSectionProbe(SectionProbe);
+
+#[wasm_bindgen(js_name = createSectionProbe)]
+pub fn create_section_probe(config: Ts<SectionProbeConfig>) -> Result<WasmSectionProbe, JsValue> {
+    let config: SectionProbeConfig = config
+        .to_rust()
+        .map_err(|error| JsValue::from_str(&format!("malformed SectionProbeConfig: {error}")))?;
+    SectionProbe::new(&config)
+        .map(WasmSectionProbe)
+        .map_err(section_error)
+}
+
+fn section_error(error: SectionProbeError) -> JsValue {
+    serde_wasm_bindgen::to_value(&error)
+        .unwrap_or_else(|_| JsValue::from_str("section probe error"))
+}
+
+fn ts_error(error: impl std::fmt::Display) -> JsValue {
+    JsValue::from_str(&error.to_string())
+}
+
+#[wasm_bindgen]
+impl WasmSectionProbe {
+    /// `{ n, mz, my, m2, m3 }` at `(eps0, kz, ky)`; strain is `eps0 - y kz + z ky`.
+    pub fn evaluate(&self, eps0: f64, kz: f64, ky: f64) -> Result<Ts<SectionResponse>, JsValue> {
+        self.0.evaluate(eps0, kz, ky).into_ts().map_err(ts_error)
+    }
+
+    /// `(eps0, kz, ky)` triples in, `(n, mz, my)` triples out; with `withGroups` each state also returns the
+    /// per-group `(n, mz, my)` after the total.
+    #[wasm_bindgen(js_name = evaluateBatch)]
+    pub fn evaluate_batch(&self, states: &[f64], with_groups: bool) -> Vec<f64> {
+        self.0.evaluate_batch(states, with_groups)
+    }
+
+    /// `[strain, stress]` for every fiber, flattened.
+    #[wasm_bindgen(js_name = fiberResponses)]
+    pub fn fiber_responses(&self, eps0: f64, kz: f64, ky: f64) -> Vec<f64> {
+        self.0.fiber_responses(eps0, kz, ky)
+    }
+
+    #[wasm_bindgen(js_name = fiberCount)]
+    pub fn fiber_count(&self) -> usize {
+        self.0.fiber_count()
+    }
+
+    #[wasm_bindgen(js_name = groupCount)]
+    pub fn group_count(&self) -> usize {
+        self.0.group_count()
+    }
+
+    /// `(eps0, kz, ky)` for every (angle, profile) pair, angles outermost; `profiles` is `(et, eb)` pairs.
+    #[wasm_bindgen(js_name = profileStates)]
+    pub fn profile_states(&self, angles: &[f64], profiles: &[f64]) -> Result<Vec<f64>, JsValue> {
+        self.0
+            .profile_states(angles, profiles)
+            .map_err(section_error)
+    }
+
+    /// Maximum compressive and tensile axial force over uniform strain in `[-maxStrain, maxStrain]`.
+    #[wasm_bindgen(js_name = axialExtremes)]
+    pub fn axial_extremes(&self, max_strain: f64) -> Result<Ts<AxialExtremes>, JsValue> {
+        self.0
+            .axial_extremes(max_strain)
+            .map_err(section_error)?
+            .into_ts()
+            .map_err(ts_error)
+    }
+
+    /// Samples the PMM boundary for `solveIsolines`; returns the number of sampled states.
+    #[wasm_bindgen(js_name = buildGrid)]
+    pub fn build_grid(&mut self, angles: &[f64], profiles: &[f64]) -> Result<usize, JsValue> {
+        self.0.build_grid(angles, profiles).map_err(section_error)
+    }
+
+    /// `[min, max]` axial force over the sampled grid, or empty before `buildGrid`.
+    #[wasm_bindgen(js_name = gridAxialRange)]
+    pub fn grid_axial_range(&self) -> Vec<f64> {
+        self.0
+            .grid_axial_range()
+            .map(|(lo, hi)| vec![lo, hi])
+            .unwrap_or_default()
+    }
+
+    #[wasm_bindgen(js_name = solveIsolines)]
+    pub fn solve_isolines(
+        &self,
+        request: Ts<IsolineRequest>,
+    ) -> Result<Ts<IsolineResult>, JsValue> {
+        let request: IsolineRequest = request
+            .to_rust()
+            .map_err(|error| JsValue::from_str(&format!("malformed IsolineRequest: {error}")))?;
+        IsolineResult {
+            points: self.0.solve_isolines(&request).map_err(section_error)?,
+        }
+        .into_ts()
+        .map_err(ts_error)
+    }
+
+    #[wasm_bindgen(js_name = momentCurvature)]
+    pub fn moment_curvature(
+        &self,
+        request: Ts<MomentCurvatureRequest>,
+    ) -> Result<Ts<MomentCurvatureResult>, JsValue> {
+        let request: MomentCurvatureRequest = request.to_rust().map_err(|error| {
+            JsValue::from_str(&format!("malformed MomentCurvatureRequest: {error}"))
+        })?;
+        self.0
+            .moment_curvature(&request)
+            .map_err(section_error)?
+            .into_ts()
+            .map_err(ts_error)
+    }
 }

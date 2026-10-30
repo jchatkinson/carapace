@@ -179,10 +179,11 @@ scripts/build-wasm.sh
 
 # check the generated package through its application API (Node 22.18+)
 node wasm-bridge/tests/boundary-smoke.ts
+node wasm-bridge/tests/section-probe-smoke.ts   # section probe, against the CalcsApp-generated fixtures
 
 # check the generated declarations and their use by the smoke test
 npm exec --package=typescript -- tsc --strict --noEmit --target es2022 --lib esnext,dom \
-  --module nodenext wasm-bridge/tests/boundary-smoke.ts
+  --module nodenext --resolveJsonModule wasm-bridge/tests/boundary-smoke.ts wasm-bridge/tests/section-probe-smoke.ts
 ```
 
 The build is `--target web` (ES modules). A browser or worker initializes the module with the default
