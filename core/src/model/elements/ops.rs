@@ -300,6 +300,12 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         None
     }
 
+    /// A zero-length element's `(deformation, force)` along its first material direction (`None` for every other
+    /// element, and for a zero-length with no material).
+    fn zero_length_response(&self, _nodes: &NodeView<'_, NDIM, NDOF, NId>) -> Option<(f64, f64)> {
+        None
+    }
+
     /// Components per Gauss-point strain or stress vector (3 for plane elements, 8 for shells);
     /// the bound a Gauss-point recorder's `component` is checked against.
     fn gauss_component_count(&self) -> usize {

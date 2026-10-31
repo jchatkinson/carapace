@@ -470,6 +470,9 @@ pub enum BulkTable {
     EmbeddedBars,
     /// Every node, in input node-table order; one point per node and one component per DOF.
     Nodes,
+    /// Every `zeroLength` element, in table order and then the bond and anchorage springs of bonded
+    /// bars (`modelOutput` lists those rows); one value per element, along its first material direction.
+    ZeroLengths,
 }
 
 /// What a [`RecorderSpec::Bulk`] reads. `strain`/`stress`/`principalStrain`/`principalStress`/`kc2`
@@ -491,6 +494,11 @@ pub enum BulkQuantity {
     Displacement,
     /// `nodes` only: the support reaction, `ndf` components (`0` on a free DOF).
     Reaction,
+    /// `zeroLengths` only: the relative displacement along the element's first material direction (mm for a
+    /// bond or anchorage spring: the slip).
+    Deformation,
+    /// `zeroLengths` only: the force the material returns for that deformation (N).
+    Force,
 }
 
 /// What a [`RecorderSpec::EmbeddedBar`] reads.

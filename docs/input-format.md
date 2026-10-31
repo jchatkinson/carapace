@@ -270,8 +270,34 @@ is in no allowed host (outside the mesh, or across a hole) is `invalidModel` wit
 `embeddedBarOutsideMesh`, one in several overlapping hosts is `embeddedBarAmbiguousHost`, and a
 path with no length is `embeddedBarDegeneratePath`. The table in a 3D model is `tableNotInProfile`.
 
+**Bond slip** (`embeddedBars[i].bond`, ULS; omit for the perfect-bond bar above). The bar slips against the concrete
+through bond springs; N, mm, MPa:
+
+| Field | Meaning |
+|---|---|
+| `perimeter` | Total bar perimeter `n·π·Ø` (mm). |
+| `fbd` | Design bond strength (MPa). |
+| `gb` | Elastic bond stiffness `kG·Ec/Ø` (MPa per mm of slip). |
+| `rf` | Plastic slope as a fraction of `gb`; default `1e-5`. |
+| `slipLimit` | Stop slip `α·δumax` (mm) of the bond and anchorage springs. |
+| `lockAngle` | Turn angle (degrees) above which a vertex is slip-locked; default 15. |
+| `start`, `end` | Optional anchorage spring at the first/last point: `{ fau, ka, ksn? }` (N, N/mm, default `1e-2`). Omitted: a straight end. |
+
+Each bar point gets a **concrete image** node (no DOFs of its own: the host's shape functions at the point) and a **rod node**
+(free, with the motion normal to the bar tied to the image). The rod segments are `embeddedBar` elements between rod nodes (the
+same law, rupture flag and recorders as a perfect-bond segment); an oriented `zeroLength` per rod node carries the bond law
+(`steel01`: stiffness `Gb·P·l`, yield `fbd·P·l`, `l` the tributary length), and an end spring carries `Fau`, `Ka`. At a slip-locked
+vertex the segments attach to the image node and no spring acts. The springs are appended to the `zeroLengths` table after its own
+rows; `modelOutput().embeddedBars[i].bond.points[k]` gives each point's position, tangent, tributary length and the row of its
+`spring` and `endSpring`. The springs report `bondSlip` / `anchorageSlip` utilization `|slip|/slipLimit` (location
+`elementKind: "zeroLength"`, `elementIndex` that row), so `stop.materialLimit` and the limit history see them. The slip stays in the
+spring's state (`steel01` is hysteretic): after plastic slip the bar unloads elastically with a permanent offset. Bulk recorder
+`{ table: "zeroLengths", quantity: "deformation" | "force" }` records every `zeroLength` row (one value per row, along its first material
+direction): the slip in mm and the spring force in N. Errors: a non-finite or non-positive `perimeter`, `fbd`, `gb`, `slipLimit`, an
+`rf` outside [0, 1], or a bad end spring is `invalidRow` (`embedded_bars`).
+
 **`modelOutput()`** is available right after `decodeInput`:
-`{ embeddedBars: { firstSegment, segments, routing?, sr? }[] }`, one group per `embeddedBars` row.
+`{ embeddedBars: { firstSegment, segments, routing?, sr?, bond? }[] }`, one group per `embeddedBars` row.
 `segments[s]` is `{ start, end, length, hostKind, hostNodes }` (undeformed end points in drawing
 order; the host's nodes as `nodes` rows). Results are indexed `(bar, segment)`; the flat
 `embeddedBar` element index of segment `s` of bar `b` is `groups[b].firstSegment + s`. For a
@@ -489,7 +515,7 @@ in element, then point, then component order (element = table row, or the flat s
 `LimitSample`: `{ progress, utilization, kind, elementKind, elementIndex }` for each sample a
 `static` stage recorded in the call (every accepted step, plus the initial state with
 `header.recordInitial`). `utilization >= 1` means a limit is reached. `kind` is
-`"concreteCrushing" | "concreteTensileStrain" | "rebarRupture" | "rebarStrainLimit"` (the default
+`"concreteCrushing" | "concreteTensileStrain" | "rebarRupture" | "rebarStrainLimit" | "bondSlip" | "anchorageSlip"` (the default
 report checks crushing at `|eps_cu2| = 0.0035` and rupture only; the other two appear only through
 `stop.materialLimit`). The location is element-level: `elementIndex` is the row in the table of
 `elementKind` (the flat segment index for `embeddedBar`, mapped to `(bar, segment)` by

@@ -376,6 +376,53 @@ pub struct EmbeddedBarSpec {
     #[serde(default)]
     #[tsify(optional)]
     pub hosts: Option<EmbeddedBarHostsSpec>,
+    /// Bond-slip model (ULS): the bar slips against the concrete through bond springs at its discretization
+    /// points. Omitted: perfect bond (the bar strain is the host displacement field projected on it).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub bond: Option<BondSpecWire>,
+}
+
+/// `embeddedBars[i].bond` (N, mm, MPa). See `core::model::continuum::bond`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BondSpecWire {
+    /// Total bar perimeter `n pi D` (mm).
+    pub perimeter: f64,
+    /// Design bond strength `fbd` (MPa).
+    pub fbd: f64,
+    /// Elastic bond stiffness `kG Ec / D` (MPa per mm of slip).
+    pub gb: f64,
+    /// Plastic slope as a fraction of `gb`; omitted is the book's `1e-5`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub rf: Option<f64>,
+    /// Stop slip `alpha delta_u_max` (mm) of the bond and anchorage springs.
+    pub slip_limit: f64,
+    /// Turn angle (degrees) above which a vertex is slip-locked; omitted is 15.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub lock_angle: Option<f64>,
+    /// Anchorage spring at the first point of the polyline (omitted: a straight end).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub start: Option<AnchorageSpringWire>,
+    /// Anchorage spring at the last point.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub end: Option<AnchorageSpringWire>,
+}
+
+/// An anchorage end spring: yield force `fau` (N), elastic stiffness `ka` (N/mm), hardening `ksn * ka`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct AnchorageSpringWire {
+    pub fau: f64,
+    pub ka: f64,
+    /// Omitted is the book's `1e-2`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub ksn: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]

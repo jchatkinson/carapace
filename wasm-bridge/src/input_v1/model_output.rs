@@ -44,6 +44,36 @@ pub struct EmbeddedBarGroup {
     /// Crack spacing `sr` (mm; `0` for POM). `Some` only for a `csfmRebar` material.
     #[tsify(optional)]
     pub sr: Option<f64>,
+    /// Present when the bar has a `bond` spec: where each bar point went.
+    #[tsify(optional)]
+    pub bond: Option<BondGroup>,
+}
+
+/// The bond-slip discretization of one bar: one entry per bar point, in polyline order (segment `s` joins
+/// points `s` and `s + 1`).
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BondGroup {
+    pub points: Vec<BondPointInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BondPointInfo {
+    /// Undeformed position `[x, y]` (mm).
+    pub position: [f64; 2],
+    /// Unit tangent used for the slip direction.
+    pub tangent: [f64; 2],
+    /// `true` at a slip-locked vertex (no bond spring there).
+    pub locked: bool,
+    /// Tributary length of the bond spring (mm); `0` at a locked vertex.
+    pub tributary: f64,
+    /// Row of the bond spring in the `zeroLengths` table (the table's own rows first, then the bond springs).
+    #[tsify(optional)]
+    pub spring: Option<u32>,
+    /// Row of the anchorage spring, at a bar end that has one.
+    #[tsify(optional)]
+    pub end_spring: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, tsify::Tsify)]

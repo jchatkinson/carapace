@@ -33,6 +33,11 @@ pub enum LimitKind {
     /// this is never reported unless `LimitStateConfig::rebar_strain_limit`
     /// is given.
     RebarStrainLimit,
+    /// Bond slip at a rod node of a bonded bar: `|s| / limit`, with the stop slip
+    /// `alpha * delta_u_max` (CSFM book §3.6.7). Reported by a `ZeroLength` that carries a slip limit.
+    BondSlip,
+    /// Slip of an anchorage end spring: `|s| / limit`, with the stop slip `alpha * Fau / Ka`.
+    AnchorageSlip,
 }
 
 /// Parameters a `limit_utilization` query needs beyond what the material

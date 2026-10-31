@@ -422,6 +422,10 @@ fn run_native(fx: &Value) -> Vec<Frame> {
                     carapace_core::model::LimitKind::RebarStrainLimit => {
                         LimitKindDetail::RebarStrainLimit
                     }
+                    carapace_core::model::LimitKind::BondSlip => LimitKindDetail::BondSlip,
+                    carapace_core::model::LimitKind::AnchorageSlip => {
+                        LimitKindDetail::AnchorageSlip
+                    }
                 };
                 (utilization, kind, element_kind, index as u32)
             });

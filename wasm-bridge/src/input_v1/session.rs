@@ -136,7 +136,18 @@ fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
         return;
     }
     for &element in &bulk.elements {
-        if bulk.bars {
+        if bulk.zero_lengths {
+            let value = domain
+                .element_zero_length_response(element)
+                .map(|(deformation, force)| {
+                    if bulk.quantity == BulkQuantity::Deformation {
+                        deformation
+                    } else {
+                        force
+                    }
+                });
+            out.push(value.unwrap_or(f64::NAN));
+        } else if bulk.bars {
             let quantity = match bulk.quantity {
                 BulkQuantity::AxialForce => EmbeddedBarQuantity::AxialForce,
                 BulkQuantity::Strain => EmbeddedBarQuantity::Strain,
@@ -474,6 +485,8 @@ impl From<LimitKind> for LimitKindDetail {
             LimitKind::ConcreteTensileStrain => LimitKindDetail::ConcreteTensileStrain,
             LimitKind::RebarRupture => LimitKindDetail::RebarRupture,
             LimitKind::RebarStrainLimit => LimitKindDetail::RebarStrainLimit,
+            LimitKind::BondSlip => LimitKindDetail::BondSlip,
+            LimitKind::AnchorageSlip => LimitKindDetail::AnchorageSlip,
         }
     }
 }
@@ -488,6 +501,8 @@ pub(super) struct ResolvedBulk<NId, EId> {
     pub components: u32,
     pub quantity: super::sequence::BulkQuantity,
     pub bars: bool,
+    /// A `zeroLengths` table.
+    pub zero_lengths: bool,
     pub emitted: u32,
 }
 
@@ -642,6 +657,8 @@ pub enum LimitKindDetail {
     ConcreteTensileStrain,
     RebarRupture,
     RebarStrainLimit,
+    BondSlip,
+    AnchorageSlip,
 }
 
 /// The controlling material-limit utilization at one recorded sample, under the always-on limits

@@ -1,8 +1,8 @@
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use super::super::{
-    DofMask, FiberSection, FiberSection3, Material, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF,
-    SPATIAL_NDF,
+    DofMask, FiberSection, FiberSection3, LimitKind, Material, Node, Node3, Node3Id, NodeId,
+    ELEMENT_DOF, NDF, SPATIAL_NDF,
 };
 use super::truss::{SpatialElementMatrix, SpatialElementVector};
 
@@ -331,6 +331,17 @@ pub struct ZeroLength {
     materials: [Option<Material>; NDF],
     friction: Option<Friction>,
     frame: SMatrix<f64, NDF, NDF>,
+    slip_limits: Vec<SlipLimit>,
+}
+
+/// A slip limit on one local direction of a `ZeroLength`: the element reports `|relative displacement| / limit`
+/// as a material-limit utilization of `kind` (`BondSlip` or `AnchorageSlip`), so `stop.materialLimit` and the
+/// limit history see it like a concrete or rebar limit. Stateless: the first time it reaches 1 the run stops.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SlipLimit {
+    pub dof: usize,
+    pub limit: f64,
+    pub kind: LimitKind,
 }
 
 impl ZeroLength {
@@ -341,12 +352,54 @@ impl ZeroLength {
             materials: std::array::from_fn(|_| None),
             friction: None,
             frame: SMatrix::identity(),
+            slip_limits: Vec::new(),
         }
     }
 
     pub fn with_material(mut self, dof: usize, material: Material) -> Self {
         self.materials[dof] = Some(material);
         self
+    }
+
+    /// Reports `|relative displacement along local dof| / limit` as a `kind` utilization. `limit` must be finite and
+    /// positive (the wire decoder checks); a non-positive limit is ignored by `limit_utilization`.
+    pub fn with_slip_limit(mut self, dof: usize, limit: f64, kind: LimitKind) -> Self {
+        self.slip_limits.push(SlipLimit { dof, limit, kind });
+        self
+    }
+
+    pub fn slip_limits(&self) -> &[SlipLimit] {
+        &self.slip_limits
+    }
+
+    /// `(deformation, force)` of the lowest local direction that has a material: the relative displacement along
+    /// that local axis and the force the material returns for it (`None` if the element has no material).
+    pub(super) fn response(&self, node_i: &Node, node_j: &Node) -> Option<(f64, f64)> {
+        let dof = self.materials.iter().position(Option::is_some)?;
+        let relative = local_relative(&self.frame, dof, &node_i.displacement, &node_j.displacement);
+        let material = self.materials[dof].as_ref()?;
+        Some((relative, material.trial_stress_tangent(relative).0))
+    }
+
+    /// The worst slip-limit utilization over this element's limits (`None` if it has none), at the trial state.
+    pub(super) fn limit_utilization(
+        &self,
+        node_i: &Node,
+        node_j: &Node,
+    ) -> Option<(f64, LimitKind)> {
+        self.slip_limits
+            .iter()
+            .filter(|l| l.limit.is_finite() && l.limit > 0.0)
+            .map(|l| {
+                let relative = local_relative(
+                    &self.frame,
+                    l.dof,
+                    &node_i.displacement,
+                    &node_j.displacement,
+                );
+                (relative.abs() / l.limit, l.kind)
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
     }
 
     /// Evaluate every DOF along the local axes of `orientation` instead of

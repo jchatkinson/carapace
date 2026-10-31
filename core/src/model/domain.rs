@@ -344,6 +344,12 @@ where
         self.elements[id].embedded_bar_response(&self.node_view())
     }
 
+    /// `(deformation, force)` of the zero-length element `id` along its first material direction (`None` for any
+    /// other element kind).
+    pub fn element_zero_length_response(&self, id: E::Id) -> Option<(f64, f64)> {
+        self.elements[id].zero_length_response(&self.node_view())
+    }
+
     /// Components per Gauss-point strain/stress vector of `id` (3 for plane elements, 8 for shells).
     pub fn element_gauss_component_count(&self, id: E::Id) -> usize {
         self.elements[id].gauss_component_count()

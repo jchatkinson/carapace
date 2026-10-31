@@ -4,12 +4,12 @@
 //! strategy as `elements_3d.rs`; only the element constructors and table
 //! shapes differ (see `tables.rs`).
 
-use carapace_core::model::continuum::embed_polyline_in;
+use carapace_core::model::continuum::{bond_polyline, embed_polyline_in, BondSpec, EndSpring};
 use carapace_core::model::{
     CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain, ElasticBeamColumn, Element,
-    ElementId, ElementLoad, EmbeddedBarHost, Fiber, FiberSection, ForceBeamColumn, Friction,
-    GeomTransf, Material, NodeId, PlaneMaterial, Quad4, Quad4Formulation, Tri3, Truss, ZeroLength,
-    ZeroLengthSection,
+    ElementId, ElementLoad, EmbeddedBar, EmbeddedBarHost, Fiber, FiberSection, ForceBeamColumn,
+    Friction, GeomTransf, Material, NodeId, PlaneMaterial, Quad4, Quad4Formulation, Tri3, Truss,
+    ZeroLength, ZeroLengthSection,
 };
 
 use super::shared::{
@@ -20,7 +20,7 @@ use super::shared::{
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::{
-    EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting,
+    BondGroup, BondPointInfo, EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting,
 };
 use crate::input_v1::session::Session2;
 use crate::input_v1::tables::{
@@ -259,7 +259,60 @@ fn add_embedded_bars(
 
         let first_segment = all_segments.len() as u32;
         let mut reported = Vec::with_capacity(segments.len());
-        for segment in segments {
+        let mut bond_group = None;
+        let mut rods: Vec<EmbeddedBar> = Vec::new();
+        if let Some(wire) = &bar.bond {
+            let spec = BondSpec {
+                perimeter: wire.perimeter,
+                fbd: wire.fbd,
+                gb: wire.gb,
+                rf: wire.rf.unwrap_or(1e-5),
+                slip_limit: wire.slip_limit,
+                lock_angle: wire.lock_angle.unwrap_or(15.0).to_radians(),
+                ends: [wire.start, wire.end].map(|end| {
+                    end.map(|e| EndSpring {
+                        fau: e.fau,
+                        ka: e.ka,
+                        ksn: e.ksn.unwrap_or(1e-2),
+                    })
+                }),
+            };
+            spec.validate().map_err(|reason| invalid(row, reason))?;
+            let built =
+                bond_polyline(domain, &segments, bar.area, material, &spec).map_err(|error| {
+                    DecodeError::InvalidModel {
+                        error: error.into(),
+                    }
+                })?;
+            let mut points: Vec<BondPointInfo> = built
+                .points
+                .iter()
+                .map(|p| BondPointInfo {
+                    position: p.coords,
+                    tangent: p.tangent,
+                    locked: p.rod.is_none(),
+                    tributary: 0.0,
+                    spring: None,
+                    end_spring: None,
+                })
+                .collect();
+            let first_row = elements.count(ElementKind::ZeroLength) as u32;
+            let mut ids = Vec::with_capacity(built.springs.len());
+            for (offset, spring) in built.springs.into_iter().enumerate() {
+                let point = &mut points[spring.point];
+                if spring.end {
+                    point.end_spring = Some(first_row + offset as u32);
+                } else {
+                    point.spring = Some(first_row + offset as u32);
+                    point.tributary = spring.tributary;
+                }
+                ids.push(domain.add_element(Element::ZeroLength(spring.element)));
+            }
+            elements.extend(ElementKind::ZeroLength, ids);
+            bond_group = Some(BondGroup { points });
+            rods = built.rods;
+        }
+        for (index, segment) in segments.into_iter().enumerate() {
             let [start, end] = segment
                 .end_points()
                 .expect("embed_polyline sets end points");
@@ -272,6 +325,9 @@ fn add_embedded_bars(
                     ElementKind::Quad4,
                     nodes.iter().map(|&n| node_row(n)).collect(),
                 ),
+                EmbeddedBarHost::Rod { .. } => {
+                    unreachable!("embed_polyline binds every segment to a host")
+                }
             };
             reported.push(EmbeddedBarSegment {
                 start,
@@ -280,7 +336,12 @@ fn add_embedded_bars(
                 host_kind,
                 host_nodes,
             });
-            all_segments.push(domain.add_element(Element::EmbeddedBar(segment)));
+            let element = if bar.bond.is_some() {
+                rods[index].clone()
+            } else {
+                segment
+            };
+            all_segments.push(domain.add_element(Element::EmbeddedBar(element)));
         }
         let (routing, sr) = match material {
             Material::CsfmRebar(fields) => (
@@ -297,6 +358,7 @@ fn add_embedded_bars(
             segments: reported,
             routing,
             sr,
+            bond: bond_group,
         });
     }
     elements.set(ElementKind::EmbeddedBar, all_segments);

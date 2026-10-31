@@ -5,6 +5,7 @@
 //! dimension-agnostic bookkeeping; what is specific to an element (the `B`
 //! matrix shape, the constitutive reduction) stays in the element.
 
+pub mod bond;
 pub mod embed;
 pub mod jacobian;
 pub mod natural_coords;
@@ -12,6 +13,7 @@ pub mod quadrature;
 pub mod shape;
 pub mod validate;
 
+pub use bond::{bond_polyline, BondPoint, BondSpec, BondSpring, BondedBar, EndSpring};
 pub use embed::{embed_polyline, embed_polyline_in};
 pub use jacobian::{physical_derivatives, Jacobian};
 pub use natural_coords::{

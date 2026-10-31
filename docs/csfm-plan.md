@@ -734,5 +734,6 @@ Items 1, 2 and 5 were decided by the owner on 2026-10-25. The rest are standing 
      - the rejected `lambda = 2` case;
      - the UI's worst case, `lambda = 1` just above `rho_crit`, which stays continuous;
      - equal principal strains giving equal stresses in every regime.
-7. **Bond-slip.** Out of scope. `rod.ts` keeps a `RodCoupling` seam for it. Here, `EmbeddedBar` would gain slip DOFs,
-   which needs nodes it owns and is a later element.
+7. **Bond-slip.** Implemented for the ULS check as `embeddedBars[i].bond` (`core/src/model/continuum/bond.rs`, `docs/input-format.md`
+   "Bond slip"): rod nodes and concrete-image nodes per bar point, oriented `zeroLength` `Steel01` bond springs, anchorage end springs,
+   `BondSlip`/`AnchorageSlip` limits. The design is in CalcsApp's `docs/concrete/csfm/bond-plan.md`.

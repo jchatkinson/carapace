@@ -441,6 +441,16 @@ impl<EId: Copy> ElementIds<EId> {
         self.by_kind[kind as usize] = ids;
     }
 
+    /// Appends rows to `kind` after the ones its table registered.
+    pub(super) fn extend(&mut self, kind: ElementKind, ids: impl IntoIterator<Item = EId>) {
+        self.by_kind[kind as usize].extend(ids);
+    }
+
+    /// The number of rows registered for `kind`.
+    pub(super) fn count(&self, kind: ElementKind) -> usize {
+        self.by_kind[kind as usize].len()
+    }
+
     /// Reverse map: each element id to its `(kind, row)` in the wire tables.
     pub(super) fn locations(&self) -> HashMap<EId, (ElementKind, u32)>
     where
@@ -774,6 +784,7 @@ where
                             components: ndof as u32,
                             quantity,
                             bars: false,
+                            zero_lengths: false,
                             emitted: 0,
                         });
                         return Ok(ResolvedRecorder::Bulk {
@@ -788,7 +799,16 @@ where
                             "displacement and reaction belong to the nodes table",
                         ));
                     }
+                    let zero_lengths = table == BulkTable::ZeroLengths;
+                    if zero_lengths
+                        != matches!(quantity, BulkQuantity::Deformation | BulkQuantity::Force)
+                    {
+                        return Err(not_applicable(
+                            "deformation and force belong to the zeroLengths table, and only they",
+                        ));
+                    }
                     let kind = match table {
+                        BulkTable::ZeroLengths => ElementKind::ZeroLength,
                         BulkTable::Triangles => ElementKind::Tri3,
                         BulkTable::Quads => ElementKind::Quad4,
                         _ => ElementKind::EmbeddedBar,
@@ -815,7 +835,11 @@ where
                     let Some(&first) = ids.first() else {
                         return Err(not_applicable("the table is empty"));
                     };
-                    let points = domain.element_gauss_point_count(first) as u32;
+                    let points = if zero_lengths {
+                        1
+                    } else {
+                        domain.element_gauss_point_count(first) as u32
+                    };
                     if quantity == BulkQuantity::Kc2 {
                         let csfm = ids.iter().all(|&id| {
                             (0..points as usize).all(|p| domain.element_gauss_kc2(id, p).is_some())
@@ -824,7 +848,7 @@ where
                             return Err(not_applicable("kc2 needs a csfmConcrete element"));
                         }
                     }
-                    let components = if bars || quantity == BulkQuantity::Kc2 {
+                    let components = if bars || zero_lengths || quantity == BulkQuantity::Kc2 {
                         1
                     } else {
                         3
@@ -837,6 +861,7 @@ where
                         components,
                         quantity,
                         bars,
+                        zero_lengths,
                         emitted: 0,
                     });
                     ResolvedRecorder::Bulk {

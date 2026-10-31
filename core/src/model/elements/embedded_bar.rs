@@ -37,6 +37,13 @@ pub enum EmbeddedBarHost {
         nodes: [NodeId; 4],
         coeffs: [[f64; 2]; 4],
     },
+    /// A bonded bar's segment between two of its own **rod nodes** (bond-slip model, docs in
+    /// `model/continuum/bond.rs`): `strain = d . (u_b - u_a) / L`, so `coeffs = [-d, d] / L`. The rod
+    /// nodes slip against the host through bond springs; the segment itself knows nothing of the host.
+    Rod {
+        nodes: [NodeId; 2],
+        coeffs: [[f64; 2]; 2],
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +53,10 @@ pub struct EmbeddedBar {
     area: f64,
     material: Material,
     ends: Option<[[f64; 2]; 2]>,
+    /// Segment direction (unit, undeformed).
+    direction: [f64; 2],
+    /// The host's shape-function values at the segment's start and end (zero-padded to 4; empty for a `Rod`).
+    shapes: Option<([f64; 4], [f64; 4])>,
 }
 
 impl EmbeddedBar {
@@ -72,6 +83,8 @@ impl EmbeddedBar {
             area,
             material,
             ends: None,
+            direction,
+            shapes: Some(([n_a[0], n_a[1], n_a[2], 0.0], [n_b[0], n_b[1], n_b[2], 0.0])),
         }
     }
 
@@ -95,7 +108,44 @@ impl EmbeddedBar {
             area,
             material,
             ends: None,
+            direction,
+            shapes: Some((n_a, n_b)),
         }
+    }
+
+    /// Builds a segment between two free rod nodes (see [`EmbeddedBarHost::Rod`]); `direction` is the unit vector
+    /// from the first node to the second, `length` their distance.
+    pub fn between_nodes(
+        nodes: [NodeId; 2],
+        direction: [f64; 2],
+        length: f64,
+        area: f64,
+        material: Material,
+    ) -> Self {
+        let c = [direction[0] / length, direction[1] / length];
+        EmbeddedBar {
+            host: EmbeddedBarHost::Rod {
+                nodes,
+                coeffs: [[-c[0], -c[1]], c],
+            },
+            length,
+            area,
+            material,
+            ends: None,
+            direction,
+            shapes: None,
+        }
+    }
+
+    /// The segment's unit direction in the undeformed configuration.
+    pub fn direction(&self) -> [f64; 2] {
+        self.direction
+    }
+
+    /// The host's shape-function values at the segment's start and end points, zero-padded to four entries
+    /// (`None` for a `Rod` segment, which has no host).
+    pub fn end_shapes(&self) -> Option<&([f64; 4], [f64; 4])> {
+        self.shapes.as_ref()
     }
 
     /// Records the segment's undeformed end points `[start, end]` (mm), for reporting and
@@ -146,6 +196,7 @@ impl EmbeddedBar {
         match &self.host {
             EmbeddedBarHost::Tri3 { nodes, coeffs } => Self::strain(nodes, coeffs, view),
             EmbeddedBarHost::Quad4 { nodes, coeffs } => Self::strain(nodes, coeffs, view),
+            EmbeddedBarHost::Rod { nodes, coeffs } => Self::strain(nodes, coeffs, view),
         }
     }
 
@@ -204,6 +255,17 @@ impl EmbeddedBar {
                 );
                 sink.add(&plane_dofs::<4, 8>(nodes), &k, &r);
             }
+            EmbeddedBarHost::Rod { nodes, coeffs } => {
+                let (k, r) = Self::tangent_and_resistance::<2, 4>(
+                    nodes,
+                    coeffs,
+                    self.length,
+                    self.area,
+                    &self.material,
+                    view,
+                );
+                sink.add(&plane_dofs::<2, 4>(nodes), &k, &r);
+            }
         }
     }
 
@@ -216,6 +278,7 @@ impl EmbeddedBar {
         match &self.host {
             EmbeddedBarHost::Tri3 { .. } => 6,
             EmbeddedBarHost::Quad4 { .. } => 8,
+            EmbeddedBarHost::Rod { .. } => 4,
         }
     }
 
@@ -234,6 +297,17 @@ impl EmbeddedBar {
             }
             EmbeddedBarHost::Quad4 { nodes, coeffs } => {
                 let (_, r) = Self::tangent_and_resistance::<4, 8>(
+                    nodes,
+                    coeffs,
+                    self.length,
+                    self.area,
+                    &self.material,
+                    view,
+                );
+                r.into()
+            }
+            EmbeddedBarHost::Rod { nodes, coeffs } => {
+                let (_, r) = Self::tangent_and_resistance::<2, 4>(
                     nodes,
                     coeffs,
                     self.length,

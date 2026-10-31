@@ -80,6 +80,7 @@ impl Element {
             Element::EmbeddedBar(bar) => match bar.host() {
                 EmbeddedBarHost::Tri3 { nodes, .. } => nodes.iter().copied().collect(),
                 EmbeddedBarHost::Quad4 { nodes, .. } => nodes.iter().copied().collect(),
+                EmbeddedBarHost::Rod { nodes, .. } => nodes.iter().copied().collect(),
             },
             _ => self.pair().into_iter().collect(),
         }
@@ -332,6 +333,19 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         }
     }
 
+    fn zero_length_response(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> Option<(f64, f64)> {
+        match self {
+            Element::ZeroLength(z) => {
+                let [i, j] = Element::pair(self);
+                z.response(nodes.get(i), nodes.get(j))
+            }
+            _ => None,
+        }
+    }
+
     fn gauss_responses(
         &self,
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
@@ -492,6 +506,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Tri3(t) => t.limit_utilization(nodes, limits),
             Element::Quad4(q) => q.limit_utilization(nodes, limits),
             Element::EmbeddedBar(bar) => bar.limit_utilization(nodes, limits),
+            Element::ZeroLength(z) => {
+                let [i, j] = Element::pair(self);
+                z.limit_utilization(nodes.get(i), nodes.get(j))
+            }
             _ => None,
         }
     }
