@@ -63,6 +63,25 @@ pub struct CsfmRebarFields {
 /// root at a vanishing argument. Matches CalcsApp's `ORIGIN_STRAIN`.
 const ORIGIN_STRAIN: f64 = 1e-9;
 
+/// The POM relation `sigma = c sqrt(eps)` has an infinite slope at the origin, which Newton cannot follow: from the initial
+/// tangent the first iterate lands far above the root (any start above four times the root of a square root is sent to or
+/// below zero), and the old tangent clamp (`10 Es`) disagreed with the true slope over the first 90 MPa, so a bar with
+/// `rho_eff < rho_crit` did not converge at any load (`core/tests/materials/csfm_rebar.rs`, `pom_*` tests). Below `eps_m = (1.5 c / k)^2` the
+/// law is replaced by the C1 quadratic `k eps - k eps^2 / (3 eps_m)`, which joins the square root in value and slope and
+/// starts with the bounded slope `k = POM_ORIGIN_SLOPE_FACTOR * Es`, so law and tangent agree. For the book's bars this
+/// changes the relation only below about 30 MPa (below the first point, 100 MPa, of the book's Test 1 curve).
+const POM_ORIGIN_SLOPE_FACTOR: f64 = 100.0;
+
+/// `(k, eps_m)` of the POM origin regularization, or `None` when the quadratic would reach past the yield branch.
+fn pom_origin(f: &CsfmRebarFields) -> Option<(f64, f64)> {
+    let ratio = f.tau_b1 / f.tau_b0;
+    let denominator = f.ft + f.fy * (ratio - 1.0);
+    let c = (2.0 * f.es * denominator / ratio).sqrt();
+    let k = POM_ORIGIN_SLOPE_FACTOR * f.es;
+    let eps_m = (1.5 * c / k).powi(2);
+    (eps_m < f.eps_m_at_fy).then_some((k, eps_m))
+}
+
 impl Material {
     /// Builds a `CsfmRebar`. `es`/`fy`/`ft`/`eps_u` are the bare-steel
     /// bilinear properties; `fctm`/`ecm` are the host concrete's tensile
@@ -307,6 +326,11 @@ fn inverse_stress(strain: f64, f: &CsfmRebarFields) -> f64 {
         CsfmRebarRouting::Pom => {
             let ratio = f.tau_b1 / f.tau_b0;
             let denominator = f.ft + f.fy * (ratio - 1.0);
+            if let Some((k, eps_m)) = pom_origin(f) {
+                if strain < eps_m {
+                    return k * strain - k * strain * strain / (3.0 * eps_m);
+                }
+            }
             if strain <= f.eps_m_at_fy {
                 (strain.max(0.0) * 2.0 * f.es * denominator / ratio).sqrt()
             } else {
@@ -370,7 +394,11 @@ fn tension_stiffened_stress(strain: f64, f: &CsfmRebarFields) -> f64 {
 /// material property. The POM forward relation is quadratic through the
 /// origin, so its slope vanishes there and the raw reciprocal diverges.
 fn bounded_tangent(tangent: f64, f: &CsfmRebarFields) -> f64 {
-    let maximum = 10.0 * f.es;
+    let maximum = if f.routing == CsfmRebarRouting::Pom {
+        POM_ORIGIN_SLOPE_FACTOR * f.es
+    } else {
+        10.0 * f.es
+    };
     let minimum = f.es / 1e4;
     if !tangent.is_finite() || tangent > maximum {
         maximum
@@ -405,11 +433,23 @@ fn bare_steel(strain: f64, f: &CsfmRebarFields) -> (f64, f64) {
 /// `tension_stiffening` is off; otherwise the TCM/POM inverse (with the
 /// startup bridge and rupture) in tension.
 pub(super) fn evaluate(f: &CsfmRebarFields, strain: f64) -> (f64, f64) {
-    if strain <= 0.0 || !f.tension_stiffening {
+    // At exactly zero strain a POM bar already has its (bounded) origin slope, not `Es`: the first Newton iterate of every step starts there.
+    let at_pom_origin = strain == 0.0 && f.routing == CsfmRebarRouting::Pom && f.tension_stiffening;
+    if (strain <= 0.0 && !at_pom_origin) || !f.tension_stiffening {
         return bare_steel(strain, f);
     }
-    if f.routing == CsfmRebarRouting::Pom && strain <= ORIGIN_STRAIN {
-        return (0.0, f.es);
+    if f.routing == CsfmRebarRouting::Pom {
+        if let Some((k, eps_m)) = pom_origin(f) {
+            if strain < eps_m {
+                // The regularized origin: its own tangent, consistent with its stress.
+                return (
+                    k * strain - k * strain * strain / (3.0 * eps_m),
+                    k - 2.0 * k * strain / (3.0 * eps_m),
+                );
+            }
+        } else if strain <= ORIGIN_STRAIN {
+            return (0.0, f.es);
+        }
     }
     if strain > f.eps_m_at_ft {
         return (f.ft, f.ft / strain);

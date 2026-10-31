@@ -58,6 +58,18 @@ fn material_for_case(case: &Value) -> (Material, f64) {
     (material, rho_eff)
 }
 
+/// The POM origin regularization of `Material::csfm_rebar` (see `pom_origin` in the material): `(k, eps_m)`, `k = 100 Es`, `eps_m = (1.5 c / k)^2`,
+/// `c = sqrt(2 Es (ft + fy (ratio - 1)) / ratio)`, `ratio = tau_b1 / tau_b0`.
+fn pom_origin(material: &Material) -> (f64, f64) {
+    let Material::CsfmRebar(f) = material else {
+        panic!()
+    };
+    let ratio = f.tau_b1 / f.tau_b0;
+    let c = (2.0 * f.es * (f.ft + f.fy * (ratio - 1.0)) / ratio).sqrt();
+    let k = 100.0 * f.es;
+    (k, (1.5 * c / k).powi(2))
+}
+
 /// Stress and tangent match every fixture strain to `rel` 1e-9 (the
 /// cancellation-free quadratic roots may differ from TS by rounding; any
 /// larger difference is a bug, per the plan).
@@ -67,8 +79,17 @@ fn stress_and_tangent_match_the_fixtures_at_every_strain() {
     let mut checked = 0;
     for case in fixture["cases"].as_array().unwrap() {
         let (material, _) = material_for_case(case);
+        // The POM origin (strain below eps_m, about 1e-6) is deliberately regularized, so it no longer matches the old TS fixture there; it has its own tests below.
+        let regularized_below = if case["label"] == "pom" {
+            pom_origin(&material).1
+        } else {
+            0.0
+        };
         for point in case["points"].as_array().unwrap() {
             let strain = point["strain"].as_f64().unwrap();
+            if strain >= 0.0 && strain < regularized_below {
+                continue;
+            }
             let expected_stress = point["stress"].as_f64().unwrap();
             let expected_tangent = point["tangent"].as_f64().unwrap();
             let (stress, tangent) = material.trial_stress_tangent(strain);
@@ -252,8 +273,9 @@ fn tcm_startup_bridge_is_c1_and_has_no_jump_at_the_origin() {
 }
 
 /// Numerical policy: the tangent clamp `[Es / 1e4, 10 * Es]`.
+/// The POM tangent never exceeds the bounded origin slope `k = 100 Es` and never drops below `Es / 1e4`.
 #[test]
-fn tangent_clamp_bounds_the_pom_tangent_near_the_origin() {
+fn tangent_is_bounded_near_the_pom_origin() {
     let fixture = fixture();
     let case = fixture["cases"]
         .as_array()
@@ -265,17 +287,20 @@ fn tangent_clamp_bounds_the_pom_tangent_near_the_origin() {
     let Material::CsfmRebar(fields) = &material else {
         panic!()
     };
-    // Just past the origin guard, the POM forward relation's reciprocal
-    // tangent is largest (it diverges at the origin itself).
-    let (_, tangent) = material.trial_stress_tangent(2e-9);
-    assert!(tangent <= 10.0 * fields.es + 1e-6);
-    assert!(tangent >= fields.es / 1e4 - 1e-6);
+    let (k, _) = pom_origin(&material);
+    for strain in [0.0, 5e-10, 2e-9, 1e-7, 1e-6, 1e-5] {
+        let (_, tangent) = material.trial_stress_tangent(strain);
+        assert!(
+            tangent <= k + 1e-6 && tangent >= fields.es / 1e4 - 1e-6,
+            "strain {strain}: tangent {tangent}"
+        );
+    }
 }
 
-/// Numerical policy: the POM origin guard (stress 0, tangent `Es`, strain
-/// at or below `ORIGIN_STRAIN`).
+/// The regularized POM origin: zero stress and the bounded slope `k` at zero strain (the first iterate of every Newton step), the exact quadratic
+/// `k eps - k eps^2 / (3 eps_m)` below `eps_m`, and a C1 join with the square-root law at `eps_m`.
 #[test]
-fn pom_origin_guard_gives_zero_stress_and_es_tangent() {
+fn pom_origin_is_regularized_and_joins_the_square_root_in_value_and_slope() {
     let fixture = fixture();
     let case = fixture["cases"]
         .as_array()
@@ -284,12 +309,128 @@ fn pom_origin_guard_gives_zero_stress_and_es_tangent() {
         .find(|c| c["label"] == "pom")
         .unwrap();
     let (material, _) = material_for_case(case);
-    let (stress, tangent) = material.trial_stress_tangent(5e-10);
-    assert_eq!(stress, 0.0);
-    let Material::CsfmRebar(fields) = &material else {
+    let (k, eps_m) = pom_origin(&material);
+    let (stress, tangent) = material.trial_stress_tangent(0.0);
+    assert_eq!((stress, tangent), (0.0, k));
+    let eps = 0.5 * eps_m;
+    let (stress, tangent) = material.trial_stress_tangent(eps);
+    assert!(
+        close(
+            stress,
+            k * eps - k * eps * eps / (3.0 * eps_m),
+            1e-12,
+            1e-12
+        ),
+        "{stress}"
+    );
+    assert!(
+        close(tangent, k - 2.0 * k * eps / (3.0 * eps_m), 1e-6, 1e-12),
+        "{tangent}"
+    );
+    // Just either side of eps_m: continuous in value and in slope (the square-root side's slope there is k / 3).
+    let (below, slope_below) = material.trial_stress_tangent(eps_m * (1.0 - 1e-9));
+    let (above, slope_above) = material.trial_stress_tangent(eps_m * (1.0 + 1e-9));
+    assert!(
+        close(below, above, 1e-6, 1e-8),
+        "value jump {below} -> {above}"
+    );
+    assert!(
+        close(slope_below, slope_above, 1e-3 * k, 1e-6),
+        "slope jump {slope_below} -> {slope_above}"
+    );
+    // Above eps_m the law is the unregularized fixture law (checked point by point in the fixture test); at 2 eps_m it is c sqrt(eps).
+    let Material::CsfmRebar(f) = &material else {
         panic!()
     };
-    assert_eq!(tangent, fields.es);
+    let ratio = f.tau_b1 / f.tau_b0;
+    let c = (2.0 * f.es * (f.ft + f.fy * (ratio - 1.0)) / ratio).sqrt();
+    let (stress, _) = material.trial_stress_tangent(2.0 * eps_m);
+    assert!(close(stress, c * (2.0 * eps_m).sqrt(), 1e-9, 1e-12));
+}
+
+/// The analytic POM tangent matches central differences across the regularized origin, the join and the square-root branch (the old
+/// 10 Es clamp disagreed with the true slope over the first ~90 MPa, which is what made Newton fail).
+#[test]
+fn pom_tangent_matches_finite_differences_across_the_origin() {
+    let fixture = fixture();
+    let case = fixture["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["label"] == "pom")
+        .unwrap();
+    let (material, _) = material_for_case(case);
+    let (_, eps_m) = pom_origin(&material);
+    for strain in [
+        0.1 * eps_m,
+        0.5 * eps_m,
+        0.9 * eps_m,
+        1.5 * eps_m,
+        4.0 * eps_m,
+        20.0 * eps_m,
+        1e-4,
+        5e-4,
+    ] {
+        let h = strain * 1e-6;
+        let (up, _) = material.trial_stress_tangent(strain + h);
+        let (down, _) = material.trial_stress_tangent(strain - h);
+        let (_, tangent) = material.trial_stress_tangent(strain);
+        assert!(
+            close(tangent, (up - down) / (2.0 * h), 0.0, 1e-5),
+            "strain {strain}: tangent {tangent} vs fd {}",
+            (up - down) / (2.0 * h)
+        );
+    }
+}
+
+/// A single POM bar (`rho_eff` below `rho_crit`) converges under load control at every load level: before the origin regularization Newton did not
+/// converge at any load, because its first iterate started far above the square-root root and was sent into compression.
+#[test]
+fn a_pom_bar_converges_under_load_at_every_level() {
+    use carapace_core::analysis::{
+        Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
+    };
+    use carapace_core::model::{Domain, Element, Node, Truss};
+    for rho in [0.005, 0.0069] {
+        for force in [1.0, 100.0, 5000.0, 30000.0] {
+            let mut domain: Domain = Domain::new();
+            let a = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+            let b = domain.add_node(Node::new([100.0, 0.0]).fix(1).fix(2));
+            let steel = Material::csfm_rebar(
+                199_948.0, 413.7, 662.0, 0.05, 2.9, 25_000.0, 9.525, rho, 0.67, true,
+            )
+            .unwrap();
+            let Material::CsfmRebar(f) = &steel else {
+                panic!()
+            };
+            assert_eq!(
+                f.routing,
+                carapace_core::model::CsfmRebarRouting::Pom,
+                "rho {rho}"
+            );
+            domain.add_element(Element::Truss(Truss::new(a, b, 142.0, steel)));
+            domain.load_node(b, 0, force);
+            let mut analysis = AnalysisBuilder::new()
+                .constraint_handler(ConstraintHandler::Plain)
+                .integrator(Integrator::LoadControl { increment: 1.0 })
+                .algorithm(Algorithm::Newton {
+                    tangent: TangentStrategy::Current,
+                    line_search: None,
+                })
+                .test(ConvergenceTest::Combined {
+                    force_tol: 1e-6 * force,
+                    moment_tol: 1e-6 * force,
+                    relative_tol: 1e-6,
+                    displacement_tol: None,
+                    max_iter: 30,
+                })
+                .build(domain);
+            analysis
+                .step()
+                .unwrap_or_else(|e| panic!("rho {rho}, force {force}: {e:?}"));
+            assert!(analysis.domain().node(b).displacement[0] > 0.0);
+        }
+    }
 }
 
 /// Numerical policy: rupture gives stress `±ft` and a small positive
