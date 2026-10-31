@@ -238,8 +238,8 @@ pub fn bond_polyline(
     }
 
     let mut springs = Vec::new();
-    for k in 0..count {
-        let Some(rod) = points[k].rod else { continue };
+    for (k, point) in points.iter().enumerate() {
+        let Some(rod) = point.rod else { continue };
         let neighbours = [k.checked_sub(1), (k < segments.len()).then_some(k)];
         let tributary: f64 = neighbours
             .iter()
@@ -247,9 +247,9 @@ pub fn bond_polyline(
             .map(|&s| segments[s].length() / 2.0)
             .sum();
         let force_scale = spec.perimeter * tributary;
-        let orientation = Orientation::in_plane(points[k].tangent[0], points[k].tangent[1])
-            .expect("a unit tangent");
-        let bond = ZeroLength::new(points[k].image, rod)
+        let orientation =
+            Orientation::in_plane(point.tangent[0], point.tangent[1]).expect("a unit tangent");
+        let bond = ZeroLength::new(point.image, rod)
             .with_material(
                 0,
                 Material::steel01(
@@ -279,7 +279,7 @@ pub fn bond_polyline(
             None
         };
         if let Some(end) = end {
-            let anchorage = ZeroLength::new(points[k].image, rod)
+            let anchorage = ZeroLength::new(point.image, rod)
                 .with_material(
                     0,
                     Material::steel01(end.fau, end.ka, end.ksn, 0.0, 1.0, 0.0, 1.0),

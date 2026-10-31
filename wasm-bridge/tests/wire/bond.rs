@@ -127,8 +127,8 @@ fn the_zero_lengths_recorder_reports_slip_and_bond_force() {
         outcome
             .bulk_batches
             .iter()
-            .filter(|b| b.recorder_index == index)
-            .last()
+            .rev()
+            .find(|b| b.recorder_index == index)
             .expect("batch")
     };
     let (deformation, force) = (batch(6), batch(7));
