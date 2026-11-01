@@ -169,3 +169,33 @@ fn invalid_bond_data_is_rejected() {
         }
     }
 }
+
+/// `anchoredStart` / `anchoredEnd` on a perfectly bonded bar (no `bond`): the end is held along the bar and takes its force to the restraint.
+/// The bar is anchored at the loaded end, where the concrete is pulled away from it: the last segment is held and no longer stiffens the strip, so
+/// the tip moves a little more than without the anchor (here 1.6%); the model reports no bond group (no slip springs) and the same two segments.
+/// The force equilibrium of an anchored end is checked natively (`core/tests/bond/host.rs`).
+#[test]
+fn an_anchored_end_restrains_a_perfectly_bonded_bar() {
+    let tip = |outcome: &carapace_wasm::input_v1::StepOutcome| {
+        crate::common::last_sample(outcome, 2).unwrap().1
+    };
+    let plain = run(tie_model(serde_json::Value::Null));
+    let mut input = tie_model(serde_json::Value::Null);
+    input.embedded_bars[0].anchored_end = Some(true);
+    let session = decode(input.clone()).unwrap();
+    let group = &session.model_output().embedded_bars[0];
+    assert_eq!(group.segments.len(), 2);
+    assert!(group.bond.is_none());
+    let anchored = run(input);
+    assert!(
+        tip(&anchored) > 1.005 * tip(&plain) && tip(&anchored) < 1.2 * tip(&plain),
+        "tip {} with the anchor, {} without",
+        tip(&anchored),
+        tip(&plain)
+    );
+    // Anchoring the fixed end instead changes the tip by a few percent at most (the end segment alone is released from the concrete).
+    let mut input = tie_model(serde_json::Value::Null);
+    input.embedded_bars[0].anchored_start = Some(true);
+    let at_fixed_end = run(input);
+    assert!((tip(&at_fixed_end) - tip(&plain)).abs() <= 0.05 * tip(&plain));
+}

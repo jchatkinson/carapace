@@ -23,16 +23,24 @@ struct Strip {
 }
 
 fn strip(polyline: &[[f64; 2]]) -> Strip {
+    strip_with(polyline, true)
+}
+
+/// `fix_left` fixes the left edge in x; without it the strip is held in y only (its bottom corners) and rests on whatever restrains the bar.
+fn strip_with(polyline: &[[f64; 2]], fix_left: bool) -> Strip {
     let mut domain: Domain = Domain::new();
     let mut nodes = Vec::new();
     for j in 0..=NY {
         for i in 0..=NX {
             let mut node =
                 Node::new([LENGTH * i as f64 / NX as f64, HEIGHT * j as f64 / NY as f64]);
-            if i == 0 {
+            if i == 0 && fix_left {
                 node = node.fix(0);
             }
             if i == 0 && j == 0 {
+                node = node.fix(1);
+            }
+            if i == NX && j == 0 && !fix_left {
                 node = node.fix(1);
             }
             nodes.push(domain.add_node(node));
@@ -102,6 +110,8 @@ fn bonded_spec(stiff: f64) -> BondSpec {
         slip_limit: 10.0,
         lock_angle: 15f64.to_radians(),
         ends: [None, None],
+        perfect: false,
+        restrained: [false, false],
     }
 }
 
@@ -225,4 +235,84 @@ fn a_soft_bond_lets_the_bar_slip() {
     };
     let (stiff, soft) = (force_at_mid(1e9), force_at_mid(1.0));
     assert!(soft < stiff, "{soft} vs {stiff}");
+}
+
+/// A bar anchored beyond the mesh passes its end force to the restraint and not into the concrete: a strip with no other support in x, pulled
+/// by 4000 N, hangs on the bar anchored at its left end, so the first rod segment carries the whole load. Without the anchor the strip would be
+/// a mechanism; with the anchor at an end where the strip is fixed anyway the result is unchanged (checked below). A perfectly bonded bar
+/// (`perfect`) and a bonded one (a stiff bond) both do it.
+#[test]
+fn an_anchored_end_takes_the_bar_force_to_its_restraint() {
+    let polyline = [[0.0, 15.0], [200.0, 15.0]];
+    for (name, perfect) in [("perfect bond", true), ("stiff bond", false)] {
+        let model = strip_with(&polyline, false);
+        let mut domain = model.domain.clone();
+        let mut spec = bonded_spec(1e9);
+        spec.perfect = perfect;
+        spec.restrained = [true, false];
+        let built = bond_polyline(
+            &mut domain,
+            &model.segments,
+            BAR_AREA,
+            &Material::Elastic { e: 200_000.0 },
+            &spec,
+        )
+        .unwrap();
+        assert!(
+            built.springs.iter().all(|s| s.point != 0),
+            "{name}: no spring at the anchored end"
+        );
+        let rod_ids: Vec<ElementId> = built
+            .rods
+            .into_iter()
+            .map(|s| domain.add_element(Element::EmbeddedBar(s)))
+            .collect();
+        for spring in built.springs {
+            domain.add_element(Element::ZeroLength(spring.element));
+        }
+        let result = solve(analysis(domain), 1.0);
+        let first = result
+            .domain()
+            .element_embedded_bar_response(rod_ids[0])
+            .unwrap()
+            .0;
+        assert!(
+            (first - 4000.0).abs() <= 1e-6 * 4000.0,
+            "{name}: first segment force {first}, expected the whole 4000 N load"
+        );
+    }
+
+    // Where the strip is fixed anyway, anchoring the bar at that end changes nothing but the end segment: the concrete takes the load.
+    let model = strip(&polyline);
+    let mut domain = model.domain.clone();
+    let mut spec = bonded_spec(1e9);
+    spec.perfect = true;
+    spec.restrained = [true, false];
+    let built = bond_polyline(
+        &mut domain,
+        &model.segments,
+        BAR_AREA,
+        &Material::Elastic { e: 200_000.0 },
+        &spec,
+    )
+    .unwrap();
+    for rod in built.rods {
+        domain.add_element(Element::EmbeddedBar(rod));
+    }
+    let anchored = solve(analysis(domain), 1.0);
+    let plain = strip(&polyline);
+    let mut domain = plain.domain.clone();
+    for segment in plain.segments.iter().cloned() {
+        domain.add_element(Element::EmbeddedBar(segment));
+    }
+    let reference = solve(analysis(domain), 1.0);
+    let tip = |analysis: &Analysis, node: NodeId| analysis.domain().node(node).displacement[0];
+    let (a, b) = (
+        tip(&anchored, model.nodes[NX]),
+        tip(&reference, plain.nodes[NX]),
+    );
+    assert!(
+        (a - b).abs() <= 1e-4 * b.abs(),
+        "tip displacement {a} vs {b}"
+    );
 }

@@ -261,21 +261,42 @@ fn add_embedded_bars(
         let mut reported = Vec::with_capacity(segments.len());
         let mut bond_group = None;
         let mut rods: Vec<EmbeddedBar> = Vec::new();
-        if let Some(wire) = &bar.bond {
-            let spec = BondSpec {
-                perimeter: wire.perimeter,
-                fbd: wire.fbd,
-                gb: wire.gb,
-                rf: wire.rf.unwrap_or(1e-5),
-                slip_limit: wire.slip_limit,
-                lock_angle: wire.lock_angle.unwrap_or(15.0).to_radians(),
-                ends: [wire.start, wire.end].map(|end| {
-                    end.map(|e| EndSpring {
-                        fau: e.fau,
-                        ka: e.ka,
-                        ksn: e.ksn.unwrap_or(1e-2),
-                    })
-                }),
+        let restrained = [
+            bar.anchored_start.unwrap_or(false),
+            bar.anchored_end.unwrap_or(false),
+        ];
+        // A bar with a bond law, or perfectly bonded with an end anchored beyond the mesh, is built from rod nodes.
+        let rebuilt = bar.bond.is_some() || restrained.iter().any(|&r| r);
+        if rebuilt {
+            let spec = match &bar.bond {
+                Some(wire) => BondSpec {
+                    perimeter: wire.perimeter,
+                    fbd: wire.fbd,
+                    gb: wire.gb,
+                    rf: wire.rf.unwrap_or(1e-5),
+                    slip_limit: wire.slip_limit,
+                    lock_angle: wire.lock_angle.unwrap_or(15.0).to_radians(),
+                    ends: [wire.start, wire.end].map(|end| {
+                        end.map(|e| EndSpring {
+                            fau: e.fau,
+                            ka: e.ka,
+                            ksn: e.ksn.unwrap_or(1e-2),
+                        })
+                    }),
+                    perfect: false,
+                    restrained,
+                },
+                None => BondSpec {
+                    perimeter: 1.0,
+                    fbd: 1.0,
+                    gb: 1.0,
+                    rf: 1e-5,
+                    slip_limit: 1.0,
+                    lock_angle: 15f64.to_radians(),
+                    ends: [None, None],
+                    perfect: true,
+                    restrained,
+                },
             };
             spec.validate().map_err(|reason| invalid(row, reason))?;
             let built =
@@ -309,7 +330,9 @@ fn add_embedded_bars(
                 ids.push(domain.add_element(Element::ZeroLength(spring.element)));
             }
             elements.extend(ElementKind::ZeroLength, ids);
-            bond_group = Some(BondGroup { points });
+            if bar.bond.is_some() {
+                bond_group = Some(BondGroup { points });
+            }
             rods = built.rods;
         }
         for (index, segment) in segments.into_iter().enumerate() {
@@ -336,7 +359,7 @@ fn add_embedded_bars(
                 host_kind,
                 host_nodes,
             });
-            let element = if bar.bond.is_some() {
+            let element = if rebuilt {
                 rods[index].clone()
             } else {
                 segment

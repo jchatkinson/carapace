@@ -11,6 +11,11 @@
 //!   (`e0 = Gb P l_k`, `fy = fbd P l_k`, hardening `Rf`) with `l_k` the tributary length. It reports `BondSlip` utilization;
 //! - at the bar ends, an optional parallel anchorage spring (`Fau`, `Ka`, hardening `KSN`) reporting `AnchorageSlip`.
 //!
+//! An end can instead be **restrained** (anchored beyond the mesh, `BondSpec::restrained`): its rod node follows the concrete only in the
+//! normal direction and is held along the tangent, so the bar force at that end goes to the restraint and not into the concrete, and no bond or
+//! anchorage spring acts there. With `BondSpec::perfect` every interior point is slip-locked (perfect bond) and only the restrained ends get a
+//! rod node, which is how a perfectly bonded bar is anchored beyond the mesh.
+//!
 //! The rod segments become [`EmbeddedBar`]s between rod nodes (the `Rod` host), so the bar law (`CsfmRebar`, rupture, tension
 //! stiffening routing, recorders) is unchanged. A vertex whose turn angle exceeds `lock_angle` is **slip-locked**: no rod node,
 //! the segments attach to `C_k` and no bond spring acts there (a bend as a bearing anchorage, book §3.6.5).
@@ -47,11 +52,22 @@ pub struct BondSpec {
     pub lock_angle: f64,
     /// Anchorage springs at the start and the end of the bar (`None` = a straight end, beta 0).
     pub ends: [Option<EndSpring>; 2],
+    /// Perfect bond between the ends: no bond springs, every interior point slip-locked. The bond numbers are then unused.
+    pub perfect: bool,
+    /// The bar end (start, end) is anchored beyond the mesh: held along the tangent, no bond or anchorage spring.
+    pub restrained: [bool; 2],
 }
 
 impl BondSpec {
     /// `Err(reason)` unless every number is finite and in range.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.perfect {
+            return if self.lock_angle.is_finite() && self.lock_angle > 0.0 {
+                Ok(())
+            } else {
+                Err("bond lockAngle must be finite and positive")
+            };
+        }
         let positive = |v: f64| v.is_finite() && v > 0.0;
         if !(positive(self.perimeter)
             && positive(self.fbd)
@@ -162,7 +178,7 @@ pub fn bond_polyline(
             let norm = sum[0].hypot(sum[1]);
             // Opposite directions (a hairpin) have no tangent: lock the vertex, the bar doubles back on itself.
             let angle = (a[0] * b[0] + a[1] * b[1]).clamp(-1.0, 1.0).acos();
-            locked[k] = angle > spec.lock_angle || norm < 1e-9;
+            locked[k] = spec.perfect || angle > spec.lock_angle || norm < 1e-9;
             tangents.push(if norm < 1e-9 {
                 a
             } else {
@@ -193,7 +209,21 @@ pub fn bond_polyline(
                 .collect();
             domain.add_constraint((image, dof), &terms);
         }
-        let rod = if locked[k] {
+        let restrained = (k == 0 && spec.restrained[0]) || (k == count - 1 && spec.restrained[1]);
+        let rod = if restrained {
+            // Anchored beyond the mesh: the rod node moves with the concrete normal to the bar and not at all along it,
+            // u_R = (n . u_C) n, so the end force of the bar goes to this restraint.
+            let rod = domain.add_node(Node::new(coords[k]));
+            let t = tangents[k];
+            let n = [-t[1], t[0]];
+            for dof in 0..2 {
+                domain.add_constraint(
+                    (rod, dof),
+                    &[(image, 0, n[dof] * n[0]), (image, 1, n[dof] * n[1])],
+                );
+            }
+            Some(rod)
+        } else if locked[k] || (spec.perfect && (k == 0 || k == count - 1)) {
             None
         } else {
             let rod = domain.add_node(Node::new(coords[k]));
@@ -240,6 +270,10 @@ pub fn bond_polyline(
     let mut springs = Vec::new();
     for (k, point) in points.iter().enumerate() {
         let Some(rod) = point.rod else { continue };
+        if spec.perfect || (k == 0 && spec.restrained[0]) || (k == count - 1 && spec.restrained[1])
+        {
+            continue;
+        }
         let neighbours = [k.checked_sub(1), (k < segments.len()).then_some(k)];
         let tributary: f64 = neighbours
             .iter()

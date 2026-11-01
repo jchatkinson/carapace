@@ -381,6 +381,15 @@ pub struct EmbeddedBarSpec {
     #[serde(default)]
     #[tsify(optional)]
     pub bond: Option<BondSpecWire>,
+    /// The first point of the polyline is anchored beyond the mesh: the bar is held along its tangent there (its force goes to
+    /// that restraint, not into the concrete) and follows the concrete normal to it. No bond or anchorage spring acts at that end.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub anchored_start: Option<bool>,
+    /// The last point of the polyline is anchored beyond the mesh, as `anchoredStart`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub anchored_end: Option<bool>,
 }
 
 /// `embeddedBars[i].bond` (N, mm, MPa). See `core::model::continuum::bond`.

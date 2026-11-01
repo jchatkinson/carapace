@@ -296,6 +296,13 @@ spring's state (`steel01` is hysteretic): after plastic slip the bar unloads ela
 direction): the slip in mm and the spring force in N. Errors: a non-finite or non-positive `perimeter`, `fbd`, `gb`, `slipLimit`, an
 `rf` outside [0, 1], or a bad end spring is `invalidRow` (`embedded_bars`).
 
+**Anchored ends** (`embeddedBars[i].anchoredStart` / `anchoredEnd`, booleans, default `false`; with or without `bond`). The bar end is
+anchored beyond the mesh: its rod node follows the concrete only normal to the bar, `u_R = (n·u_C) n`, and is held along the bar, so the
+end force of the bar goes to that restraint and not into the concrete (a bar that runs into a foundation or a region that is not
+modelled). No bond or anchorage spring acts at an anchored end. A perfectly bonded bar with an anchored end is built from the same
+nodes, with every interior point slip-locked, and reports no `bond` group in `modelOutput()`. The bar must still start or end inside the
+mesh (`embeddedBarOutsideMesh`); the anchored end point is the last point of the bar in the concrete.
+
 **`modelOutput()`** is available right after `decodeInput`:
 `{ embeddedBars: { firstSegment, segments, routing?, sr?, bond? }[] }`, one group per `embeddedBars` row.
 `segments[s]` is `{ start, end, length, hostKind, hostNodes }` (undeformed end points in drawing
