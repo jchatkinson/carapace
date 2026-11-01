@@ -191,7 +191,9 @@ impl PlaneMaterial {
             #[cfg(test)]
             PlaneMaterial::Probe { .. } => {}
             PlaneMaterial::CsfmConcrete(fields) => {
-                if !(fields.fck > 0.0 && fields.fck <= csfm_concrete::MAX_FCK) || positive(fields.ecm).is_err() {
+                if !(fields.fck > 0.0 && fields.fck <= csfm_concrete::MAX_FCK)
+                    || positive(fields.ecm).is_err()
+                {
                     return Err(PlaneMaterialError::InvalidFck);
                 }
                 if let Some(gamma) = fields.gamma {

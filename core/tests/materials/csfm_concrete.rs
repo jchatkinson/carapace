@@ -709,11 +709,17 @@ fn kc2_follows_the_principal_tension_strain() {
 /// `fck <= 50` constants (`-0.002`, `-0.0035`, `n = 2`, `fctm = 0.3 fck^(2/3)`) at 50 MPa.
 #[test]
 fn high_strength_constants_match_hand_values_and_join_continuously_at_c50() {
-    let fields_of = |fck: f64| {
-        match PlaneMaterial::csfm_concrete(fck, None, CsfmConcreteLaw::ParabolaRectangle, false, None).unwrap() {
-            PlaneMaterial::CsfmConcrete(fields) => *fields,
-            _ => unreachable!(),
-        }
+    let fields_of = |fck: f64| match PlaneMaterial::csfm_concrete(
+        fck,
+        None,
+        CsfmConcreteLaw::ParabolaRectangle,
+        false,
+        None,
+    )
+    .unwrap()
+    {
+        PlaneMaterial::CsfmConcrete(fields) => *fields,
+        _ => unreachable!(),
     };
     // (fck, eps_c2, eps_cu2, n, fctm), by hand from the Table 3.1 formulas.
     let cases = [
@@ -722,25 +728,68 @@ fn high_strength_constants_match_hand_values_and_join_continuously_at_c50() {
     ];
     for (fck, eps_c2, eps_cu2, n, fctm) in cases {
         let fields = fields_of(fck);
-        assert!(close(fields.eps_c2, eps_c2, 0.0, 2e-4), "eps_c2 at {fck}: {}", fields.eps_c2);
-        assert!(close(fields.eps_cu2, eps_cu2, 0.0, 2e-4), "eps_cu2 at {fck}: {}", fields.eps_cu2);
+        assert!(
+            close(fields.eps_c2, eps_c2, 0.0, 2e-4),
+            "eps_c2 at {fck}: {}",
+            fields.eps_c2
+        );
+        assert!(
+            close(fields.eps_cu2, eps_cu2, 0.0, 2e-4),
+            "eps_cu2 at {fck}: {}",
+            fields.eps_cu2
+        );
         assert!(close(fields.n, n, 0.0, 2e-4), "n at {fck}: {}", fields.n);
-        assert!(close(fields.fctm, fctm, 0.0, 2e-4), "fctm at {fck}: {}", fields.fctm);
+        assert!(
+            close(fields.fctm, fctm, 0.0, 2e-4),
+            "fctm at {fck}: {}",
+            fields.fctm
+        );
         // The origin slope is the parabola's own: n eta fck / |eps_c2|.
         let eta = (30.0_f64 / fck).powf(1.0 / 3.0);
         assert!(close(fields.e0, n * eta * fck / eps_c2.abs(), 0.0, 3e-4));
     }
     let at_c50 = fields_of(50.0);
-    assert_eq!((at_c50.eps_c2, at_c50.eps_cu2, at_c50.n), (EPS_C2, EPS_CU2, 2.0));
-    assert!(close(at_c50.fctm, 0.3 * 50.0_f64.powf(2.0 / 3.0), 0.0, 1e-12));
+    assert_eq!(
+        (at_c50.eps_c2, at_c50.eps_cu2, at_c50.n),
+        (EPS_C2, EPS_CU2, 2.0)
+    );
+    assert!(close(
+        at_c50.fctm,
+        0.3 * 50.0_f64.powf(2.0 / 3.0),
+        0.0,
+        1e-12
+    ));
     let just_above = fields_of(50.000001);
     // The 0.53 power rises steeply from 50 (1e-6 MPa above it is 5.6e-8 in eps_c2), so this is continuity, not smoothness.
-    assert!(close(just_above.eps_c2, EPS_C2, 0.0, 1e-4), "eps_c2 continuous at 50: {}", just_above.eps_c2);
-    assert!(close(just_above.eps_cu2, EPS_CU2, 0.0, 2e-3), "eps_cu2 continuous at 50: {}", just_above.eps_cu2);
-    assert!(close(just_above.n, 2.0, 0.0, 1e-3), "n continuous at 50: {}", just_above.n);
+    assert!(
+        close(just_above.eps_c2, EPS_C2, 0.0, 1e-4),
+        "eps_c2 continuous at 50: {}",
+        just_above.eps_c2
+    );
+    assert!(
+        close(just_above.eps_cu2, EPS_CU2, 0.0, 2e-3),
+        "eps_cu2 continuous at 50: {}",
+        just_above.eps_cu2
+    );
+    assert!(
+        close(just_above.n, 2.0, 0.0, 1e-3),
+        "n continuous at 50: {}",
+        just_above.n
+    );
     // EN 1992-1-1's two fctm formulas differ by 0.2% at C50 (4.072 and 4.064 MPa), as its own table is rounded.
-    assert!(close(just_above.fctm, at_c50.fctm, 0.0, 3e-3), "fctm continuous at 50: {}", just_above.fctm);
-    assert!(PlaneMaterial::csfm_concrete(65.0, None, CsfmConcreteLaw::ParabolaRectangle, false, None).is_ok());
+    assert!(
+        close(just_above.fctm, at_c50.fctm, 0.0, 3e-3),
+        "fctm continuous at 50: {}",
+        just_above.fctm
+    );
+    assert!(PlaneMaterial::csfm_concrete(
+        65.0,
+        None,
+        CsfmConcreteLaw::ParabolaRectangle,
+        false,
+        None
+    )
+    .is_ok());
 }
 
 /// The parabola-rectangle branch at 65 MPa follows `-fc (1 - (1 - eps/eps_c2)^n)` and holds the plateau `-fc` past `eps_c2`;
@@ -748,31 +797,57 @@ fn high_strength_constants_match_hand_values_and_join_continuously_at_c50() {
 #[test]
 fn high_strength_parabola_follows_the_exponent_and_the_crushing_limit_follows_the_strength() {
     let fck = 65.0;
-    let material = PlaneMaterial::csfm_concrete(fck, None, CsfmConcreteLaw::ParabolaRectangle, false, None).unwrap();
-    let PlaneMaterial::CsfmConcrete(fields) = &material else { unreachable!() };
+    let material =
+        PlaneMaterial::csfm_concrete(fck, None, CsfmConcreteLaw::ParabolaRectangle, false, None)
+            .unwrap();
+    let PlaneMaterial::CsfmConcrete(fields) = &material else {
+        unreachable!()
+    };
     let fc = fields.eta_fc * fck;
     // Uniaxial compression along x: the minimum principal strain is eps, so stress[0] is the compression branch.
     for r in [0.25, 0.5, 0.9] {
         let eps = r * fields.eps_c2;
         let (stress, _) = material.trial_stress_tangent(&PlaneVector::new(eps, 0.0, 0.0));
         let expected = -fc * (1.0 - (1.0 - r).powf(fields.n));
-        assert!(close(stress[0], expected, 1e-9, 1e-9), "r = {r}: {} vs {expected}", stress[0]);
+        assert!(
+            close(stress[0], expected, 1e-9, 1e-9),
+            "r = {r}: {} vs {expected}",
+            stress[0]
+        );
     }
-    let (plateau, _) = material.trial_stress_tangent(&PlaneVector::new(1.2 * fields.eps_c2, 0.0, 0.0));
-    assert!(close(plateau[0], -fc, 1e-9, 1e-9), "plateau {} vs {}", plateau[0], -fc);
+    let (plateau, _) =
+        material.trial_stress_tangent(&PlaneVector::new(1.2 * fields.eps_c2, 0.0, 0.0));
+    assert!(
+        close(plateau[0], -fc, 1e-9, 1e-9),
+        "plateau {} vs {}",
+        plateau[0],
+        -fc
+    );
 
-    let at = |eps2: f64| material.csfm_concrete_limit_utilization(&PlaneVector::new(0.0, eps2, 0.0), &LimitStateConfig::default());
+    let at = |eps2: f64| {
+        material.csfm_concrete_limit_utilization(
+            &PlaneVector::new(0.0, eps2, 0.0),
+            &LimitStateConfig::default(),
+        )
+    };
     let (below, kind) = at(fields.eps_cu2 * 0.999);
     let (above, _) = at(fields.eps_cu2 * 1.001);
     assert_eq!(kind, LimitKind::ConcreteCrushing);
-    assert!(below < 1.0 && above > 1.0, "crushing lands at this strength's eps_cu2: {below}, {above}");
+    assert!(
+        below < 1.0 && above > 1.0,
+        "crushing lands at this strength's eps_cu2: {below}, {above}"
+    );
 }
 
 /// The analytic tangent at 55 and 65 MPa against the central-difference checker, on points inside the parabola, on the
 /// plateau and in shear, with softening and regularization on and off (the exponent changes the origin slope and every derivative).
 #[test]
 fn high_strength_tangent_matches_the_central_difference_checker() {
-    let config = FdConfig { tol_abs: 1e-4, tol_rel: 5e-7, ..FdConfig::default() };
+    let config = FdConfig {
+        tol_abs: 1e-4,
+        tol_rel: 5e-7,
+        ..FdConfig::default()
+    };
     let points = [
         [-0.0010, 0.0001, 0.0000],
         [-0.0018, 0.0003, 0.0001],
@@ -785,14 +860,25 @@ fn high_strength_tangent_matches_the_central_difference_checker() {
     let mut checked = 0;
     for fck in [55.0, 65.0] {
         for (softening, gamma) in [(false, None), (true, None), (true, Some(0.001))] {
-            let material = PlaneMaterial::csfm_concrete(fck, None, CsfmConcreteLaw::ParabolaRectangle, softening, gamma).unwrap();
+            let material = PlaneMaterial::csfm_concrete(
+                fck,
+                None,
+                CsfmConcreteLaw::ParabolaRectangle,
+                softening,
+                gamma,
+            )
+            .unwrap();
             for point in points {
                 let strain = PlaneVector::from(point);
-                if assert_plane_material_tangent_matches_fd(&material, &strain, &config, |_| false) {
+                if assert_plane_material_tangent_matches_fd(&material, &strain, &config, |_| false)
+                {
                     checked += 1;
                 }
             }
         }
     }
-    assert!(checked >= 20, "the checker should run on most points, ran on {checked}");
+    assert!(
+        checked >= 20,
+        "the checker should run on most points, ran on {checked}"
+    );
 }

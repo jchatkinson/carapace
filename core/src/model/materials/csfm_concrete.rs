@@ -205,7 +205,11 @@ fn compression(eps: f64, fc: f64, f: &CsfmConcreteFields) -> (f64, f64, f64) {
                 let r = eps / f.eps_c2;
                 let rest = (1.0 - r).max(0.0);
                 let shape = 1.0 - rest.powf(f.n);
-                (-fc * shape, -f.n * fc * rest.powf(f.n - 1.0) / f.eps_c2, -shape)
+                (
+                    -fc * shape,
+                    -f.n * fc * rest.powf(f.n - 1.0) / f.eps_c2,
+                    -shape,
+                )
             } else {
                 (-fc, 0.0, -1.0)
             }
@@ -348,7 +352,8 @@ pub(super) fn limit_utilization(
     config: &LimitStateConfig,
 ) -> (f64, LimitKind) {
     let (eps1, eps2, _theta) = principal(strain);
-    let limit_c = LimitStateConfig::usable(config.concrete_crushing_limit).unwrap_or(f.eps_cu2.abs());
+    let limit_c =
+        LimitStateConfig::usable(config.concrete_crushing_limit).unwrap_or(f.eps_cu2.abs());
     let crushing = (-eps2).max(0.0) / limit_c;
     match LimitStateConfig::usable(config.concrete_tensile_limit) {
         Some(limit_t) => {
