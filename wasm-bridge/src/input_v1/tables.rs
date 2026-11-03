@@ -390,6 +390,27 @@ pub struct EmbeddedBarSpec {
     #[serde(default)]
     #[tsify(optional)]
     pub anchored_end: Option<bool>,
+    /// A force on the first end of the bar (a rod node: needs a `bond` spec or an anchored other end), pulling it outward along the bar.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub start_load: Option<BarEndLoadSpec>,
+    /// A force on the last end of the bar, as `startLoad`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub end_load: Option<BarEndLoadSpec>,
+}
+
+/// A force applied to a bar end through a load pattern: `force` (N) is the tension it puts in the bar (outward along the bar's tangent).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BarEndLoadSpec {
+    /// Index into `LoadPatternTable`.
+    pub pattern: u32,
+    /// Index into `SequenceSpec::stages`, as `NodalLoadTable::stage`; omitted is the first stage.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub stage: Option<u32>,
+    pub force: f64,
 }
 
 /// `embeddedBars[i].bond` (N, mm, MPa). See `core::model::continuum::bond`.

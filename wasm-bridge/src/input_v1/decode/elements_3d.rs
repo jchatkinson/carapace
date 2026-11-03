@@ -186,6 +186,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
         node_ids,
         elements,
         &ModelOutput::default(),
+        Vec::new(),
         |spec| match *spec {
             ElementLoadSpec::Uniform { wx, wy, wz } => {
                 Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.0)))

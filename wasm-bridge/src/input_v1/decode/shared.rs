@@ -519,6 +519,7 @@ pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     node_ids: Vec<NId>,
     elements: ElementIds<E::Id>,
     model_output: &ModelOutput,
+    extra_nodal_loads: Vec<(u32, u32, NId, usize, f64)>,
     make_load: impl Fn(&ElementLoadSpec) -> Option<E::Load>,
 ) -> Result<ModelSession<NDIM, NDOF, NId, E>, DecodeError>
 where
@@ -566,6 +567,17 @@ where
                 dof as usize,
                 nodal.value[i],
             ));
+    }
+
+    // Loads on nodes the decoder created itself (the rod end of a bar): (pattern row, stage, node, dof, value).
+    for (pattern, stage, node, dof, value) in extra_nodal_loads {
+        nodal_loads_by_stage
+            .get_mut(stage as usize)
+            .ok_or(DecodeError::UnknownStageIndex {
+                table: "embedded_bars",
+                row: 0,
+            })?
+            .push((pattern_at(pattern)?, node, dof, value));
     }
 
     let mut element_loads_by_stage: StagedLoads<E::Id, E::Load> = vec![Vec::new(); stage_count];

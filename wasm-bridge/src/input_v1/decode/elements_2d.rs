@@ -171,30 +171,40 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         add_quads(&mut domain, &input.quads, &node_at, &plane_materials)?,
     );
 
+    let mut bar_end_loads = Vec::new();
     let model_output = add_embedded_bars(
         &mut domain,
         &input.embedded_bars,
         &materials,
         &mut elements,
         &node_ids,
+        &mut bar_end_loads,
     )?;
 
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    let mut session = finish(domain, &input, node_ids, elements, &model_output, |spec| {
-        Some(match *spec {
-            ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
-            ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),
-            ElementLoadSpec::EdgeTraction { edge, tx, ty } => {
-                ElementLoad::edge_traction(edge as usize, tx, ty)
-            }
-            ElementLoadSpec::EdgePressure { edge, pressure } => {
-                ElementLoad::edge_pressure(edge as usize, pressure)
-            }
-            ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
-                return None
-            }
-        })
-    })?;
+    let mut session = finish(
+        domain,
+        &input,
+        node_ids,
+        elements,
+        &model_output,
+        bar_end_loads,
+        |spec| {
+            Some(match *spec {
+                ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
+                ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),
+                ElementLoadSpec::EdgeTraction { edge, tx, ty } => {
+                    ElementLoad::edge_traction(edge as usize, tx, ty)
+                }
+                ElementLoadSpec::EdgePressure { edge, pressure } => {
+                    ElementLoad::edge_pressure(edge as usize, pressure)
+                }
+                ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
+                    return None
+                }
+            })
+        },
+    )?;
     session.set_model_output(model_output);
     Ok(session)
 }
@@ -207,6 +217,7 @@ fn add_embedded_bars(
     materials: &[Material],
     elements: &mut ElementIds<ElementId>,
     node_ids: &[NodeId],
+    bar_end_loads: &mut Vec<(u32, u32, NodeId, usize, f64)>,
 ) -> Result<ModelOutput, DecodeError> {
     const TABLE: &str = "embedded_bars";
     let invalid = |row: usize, reason: &'static str| DecodeError::InvalidRow {
@@ -305,6 +316,30 @@ fn add_embedded_bars(
                         error: error.into(),
                     }
                 })?;
+            for (end, load) in [(0, bar.start_load), (built.points.len() - 1, bar.end_load)] {
+                let Some(load) = load else { continue };
+                let point = &built.points[end];
+                let (Some(node), false) = (point.rod, restrained[usize::from(end != 0)]) else {
+                    return Err(invalid(
+                        row,
+                        "a bar end load needs a bond spec or an anchored other end, and an end that is not anchored",
+                    ));
+                };
+                // Positive `force` is tension: outward along the bar, against the tangent at the first end.
+                let sign = if end == 0 { -1.0 } else { 1.0 };
+                let stage = load.stage.unwrap_or(0);
+                for (dof, component) in point.tangent.iter().enumerate() {
+                    if *component != 0.0 {
+                        bar_end_loads.push((
+                            load.pattern,
+                            stage,
+                            node,
+                            dof,
+                            sign * load.force * component,
+                        ));
+                    }
+                }
+            }
             let mut points: Vec<BondPointInfo> = built
                 .points
                 .iter()
