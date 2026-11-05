@@ -367,6 +367,11 @@ handler (the session chooses it when the model has any).
     means 0; a nonzero value in 2D is `invalidRow`). The beam-column kinds accept
     element loads today; any other `elementKind` fails decode with
     `unsupportedElementLoad`. Several rows for the same element and pattern sum.
+  - `load`: `{ kind: "trapezoid", wxI, wyI, wxJ, wyJ }`. Linearly varying force per length in the
+    element's **local** axes: intensity `(wxI, wyI)` at node i varying linearly to `(wxJ, wyJ)` at node j.
+    2D `elasticBeamColumn2d` only (consistent equivalent nodal loads and fixed-end forces are exact);
+    every other kind, including the 3D beam, `dispBeamColumn2d` and `forceBeamColumn2d`, fails decode with
+    `unsupportedElementLoad`. It sums with `uniform` and other `trapezoid` rows on the element.
   - Continuum loads (2D `tri3`/`quad4` only; a beam, truss or spring takes none of them, and a
     continuum element takes no `uniform`, both `unsupportedElementLoad`):
     `{ kind: "body", bx, by }` (force per unit volume, global axes),
@@ -475,7 +480,7 @@ Each recorder is one scalar channel, tagged by `response`. `elementKind` is the
 shared kind enum above. `dof` is bounded by the profile's DOFs per node
 (`invalidDof`). `component` of an `elementForce` recorder indexes the element's
 local force vector (width 6 in 2D, 12 in 3D) and of an `elementLoad` recorder
-the load (3D: `wx, wy, wz`; 2D: 16 components, `[wx, wy, bx, by, t0x, t0y, p0, ..., t3x, t3y, p3]` for beam uniform, body force, then traction and pressure of each edge); one past the width is
+the load (3D: `wx, wy, wz`; 2D: 18 components, `[wx, wy, bx, by, t0x, t0y, p0, ..., t3x, t3y, p3, dwx, dwy]` for beam uniform, body force, traction and pressure of each edge, then the beam taper); one past the width is
 `invalidRecorderComponent`.
 
 | `response` | Fields |

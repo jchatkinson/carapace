@@ -1,3 +1,4 @@
+use crate::model::ElementLoad;
 use nalgebra::{SMatrix, SVector};
 
 use super::super::transform::Corotational2d;
@@ -227,20 +228,19 @@ impl ElasticBeamColumn {
         &self,
         node_i: &Node,
         node_j: &Node,
-        wx: f64,
-        wy: f64,
+        load: &ElementLoad,
     ) -> SVector<f64, 6> {
-        if wx == 0.0 && wy == 0.0 {
+        if !load.has_beam() {
             return SVector::<f64, 6>::zeros();
         }
         if self.transform == GeomTransf::Corotational {
             let transform = Corotational2d::new(node_i, node_j);
             return transform.global_to_local().transpose()
-                * Self::uniform_load_local(transform.initial_length(), wx, wy);
+                * Self::beam_load_local(transform.initial_length(), load);
         }
         let (length, cx, cy) = self.geometry(node_i, node_j);
         let t = self.transformation(cx, cy);
-        t.transpose() * Self::uniform_load_local(length, wx, wy)
+        t.transpose() * Self::beam_load_local(length, load)
     }
 
     /// `form_load_vector`'s equivalent nodal load in the element-local frame
@@ -249,19 +249,22 @@ impl ElasticBeamColumn {
         &self,
         node_i: &Node,
         node_j: &Node,
-        wx: f64,
-        wy: f64,
+        load: &ElementLoad,
     ) -> SVector<f64, 6> {
         if self.transform == GeomTransf::Corotational {
             let length = Corotational2d::new(node_i, node_j).initial_length();
-            return Self::uniform_load_local(length, wx, wy);
+            return Self::beam_load_local(length, load);
         }
         let (length, _cx, _cy) = self.geometry(node_i, node_j);
-        Self::uniform_load_local(length, wx, wy)
+        Self::beam_load_local(length, load)
     }
 
-    fn uniform_load_local(l: f64, wx: f64, wy: f64) -> SVector<f64, 6> {
+    /// The uniform part plus the linear taper (zero at node i, `beam_taper` at node j).
+    fn beam_load_local(l: f64, load: &ElementLoad) -> SVector<f64, 6> {
+        let [wx, wy] = load.beam_uniform;
+        let [dwx, dwy] = load.beam_taper;
         super::uniform_load::planar_local(l, wx, wy)
+            + super::uniform_load::planar_local_taper(l, dwx, dwy)
     }
 
     /// Lumped mass: half the element's total mass (`density * a * length`)

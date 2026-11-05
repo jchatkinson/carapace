@@ -640,6 +640,11 @@ impl ElementKind {
         }
     }
 
+    /// Whether `core` applies a `Trapezoid` load to this kind (the 2D elastic beam-column only).
+    pub fn accepts_trapezoid_load(self) -> bool {
+        matches!(self, ElementKind::ElasticBeamColumn2d)
+    }
+
     /// Whether `core` applies a beam `Uniform` load to this kind (the beam-columns).
     pub fn accepts_uniform_load(self) -> bool {
         matches!(
@@ -677,6 +682,15 @@ pub enum ElementLoadSpec {
         #[serde(default)]
         #[tsify(optional)]
         wz: Option<f64>,
+    },
+    /// Linearly varying (trapezoidal) load in the element's *local* axes, 2D `elasticBeamColumn2d` only:
+    /// intensity `(wxI, wyI)` at node i varying linearly to `(wxJ, wyJ)` at node j (force/length). It adds to
+    /// any `Uniform` rows on the element. The other beam-column kinds and the 3D profile reject it.
+    Trapezoid {
+        wx_i: f64,
+        wy_i: f64,
+        wx_j: f64,
+        wy_j: f64,
     },
     /// Body force per unit volume in global axes (continuum elements, 2D).
     Body { bx: f64, by: f64 },

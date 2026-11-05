@@ -16,3 +16,4 @@ mod section_probe_parity;
 mod shells;
 mod span_beam;
 mod stages;
+mod trapezoid_loads;

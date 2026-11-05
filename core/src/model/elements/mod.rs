@@ -142,9 +142,7 @@ impl Element {
         load: Option<&ElementLoad>,
     ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
-            (Element::ElasticBeamColumn(b), Some(load)) => {
-                b.form_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
-            }
+            (Element::ElasticBeamColumn(b), Some(load)) => b.form_load_vector(node_i, node_j, load),
             (Element::DispBeamColumn(b), Some(load)) => {
                 b.form_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
@@ -164,7 +162,7 @@ impl Element {
     ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
             (Element::ElasticBeamColumn(b), Some(load)) => {
-                b.form_local_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
+                b.form_local_load_vector(node_i, node_j, load)
             }
             (Element::DispBeamColumn(b), Some(load)) => {
                 b.form_local_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
@@ -280,9 +278,11 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
 
     fn accepts_load(&self, load: &ElementLoad) -> bool {
         match self {
-            Element::ElasticBeamColumn(_)
-            | Element::DispBeamColumn(_)
-            | Element::ForceBeamColumn(_) => !load.has_body() && !load.has_edge(),
+            // Only the elastic beam integrates a linearly varying load; the others take uniform loads.
+            Element::ElasticBeamColumn(_) => !load.has_body() && !load.has_edge(),
+            Element::DispBeamColumn(_) | Element::ForceBeamColumn(_) => {
+                !load.has_body() && !load.has_edge() && !load.has_taper()
+            }
             Element::Tri3(_) => !load.has_beam() && !load.has_edge_from(3),
             Element::Quad4(_) => !load.has_beam(),
             Element::Truss(_) | Element::ZeroLength(_) | Element::ZeroLengthSection(_) => {

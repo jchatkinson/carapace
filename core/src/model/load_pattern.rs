@@ -141,6 +141,11 @@ pub struct ElementLoad {
     /// Beam-columns: uniform load (force/length) `[wx, wy]`, `wx` along the
     /// member axis and `wy` transverse in local +y.
     pub beam_uniform: [f64; 2],
+    /// Beam-columns: linear taper on top of `beam_uniform`, as the *change* in intensity from node i to
+    /// node j `[dwx, dwy]`, so the load is `beam_uniform + beam_taper * s / L` at distance `s` from node i.
+    /// A trapezoid with end intensities `wI`, `wJ` is `beam_uniform = wI`, `beam_taper = wJ - wI`.
+    /// Only `ElasticBeamColumn` applies it; other beam-columns reject a nonzero taper.
+    pub beam_taper: [f64; 2],
     /// Continuum elements: body force per unit volume `[bx, by]`.
     pub body: [f64; 2],
     /// Continuum elements: traction `[tx, ty]` per unit edge length on edge
@@ -156,6 +161,15 @@ impl ElementLoad {
     pub fn uniform(wx: f64, wy: f64) -> Self {
         ElementLoad {
             beam_uniform: [wx, wy],
+            ..Default::default()
+        }
+    }
+
+    /// A linearly varying (trapezoidal) beam load: intensity `(wx_i, wy_i)` at node i and `(wx_j, wy_j)` at node j.
+    pub fn trapezoid(wx_i: f64, wy_i: f64, wx_j: f64, wy_j: f64) -> Self {
+        ElementLoad {
+            beam_uniform: [wx_i, wy_i],
+            beam_taper: [wx_j - wx_i, wy_j - wy_i],
             ..Default::default()
         }
     }
@@ -184,7 +198,12 @@ impl ElementLoad {
 
     /// Whether any beam-load field is nonzero.
     pub fn has_beam(&self) -> bool {
-        self.beam_uniform != [0.0; 2]
+        self.beam_uniform != [0.0; 2] || self.has_taper()
+    }
+
+    /// Whether the beam load varies along the member.
+    pub fn has_taper(&self) -> bool {
+        self.beam_taper != [0.0; 2]
     }
 
     /// Whether the body force is nonzero.
@@ -210,6 +229,7 @@ impl std::ops::Add for ElementLoad {
     fn add(self, other: ElementLoad) -> ElementLoad {
         ElementLoad {
             beam_uniform: std::array::from_fn(|i| self.beam_uniform[i] + other.beam_uniform[i]),
+            beam_taper: std::array::from_fn(|i| self.beam_taper[i] + other.beam_taper[i]),
             body: std::array::from_fn(|i| self.body[i] + other.body[i]),
             edge_traction: std::array::from_fn(|k| {
                 std::array::from_fn(|i| self.edge_traction[k][i] + other.edge_traction[k][i])
@@ -232,9 +252,9 @@ pub trait ElementLoadComponents {
 }
 
 /// Component layout: `[wx, wy, bx, by, t0x, t0y, p0, t1x, t1y, p1, t2x, t2y, p2, t3x, t3y, p3]`
-/// (beam uniform, body force, then traction and pressure per edge).
+/// (beam uniform, body force, then traction and pressure per edge), then `[dwx, dwy]` (the beam taper).
 impl ElementLoadComponents for ElementLoad {
-    const COUNT: usize = 16;
+    const COUNT: usize = 18;
 
     fn component(&self, index: usize) -> f64 {
         match index {
@@ -247,6 +267,7 @@ impl ElementLoadComponents for ElementLoad {
                     _ => self.edge_pressure[edge],
                 }
             }
+            16 | 17 => self.beam_taper[index - 16],
             _ => 0.0,
         }
     }
@@ -272,6 +293,7 @@ impl std::ops::Mul<f64> for ElementLoad {
     fn mul(self, factor: f64) -> ElementLoad {
         ElementLoad {
             beam_uniform: self.beam_uniform.map(|v| v * factor),
+            beam_taper: self.beam_taper.map(|v| v * factor),
             body: self.body.map(|v| v * factor),
             edge_traction: self.edge_traction.map(|t| t.map(|v| v * factor)),
             edge_pressure: self.edge_pressure.map(|v| v * factor),

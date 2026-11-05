@@ -593,6 +593,7 @@ where
         let spec = loads.load[i];
         let carried = match spec {
             ElementLoadSpec::Uniform { .. } => kind.accepts_uniform_load(),
+            ElementLoadSpec::Trapezoid { .. } => kind.accepts_trapezoid_load(),
             ElementLoadSpec::Body { .. }
             | ElementLoadSpec::EdgeTraction { .. }
             | ElementLoadSpec::EdgePressure { .. } => kind.is_continuum(),

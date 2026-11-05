@@ -192,6 +192,12 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         |spec| {
             Some(match *spec {
                 ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
+                ElementLoadSpec::Trapezoid {
+                    wx_i,
+                    wy_i,
+                    wx_j,
+                    wy_j,
+                } => ElementLoad::trapezoid(wx_i, wy_i, wx_j, wy_j),
                 ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),
                 ElementLoadSpec::EdgeTraction { edge, tx, ty } => {
                     ElementLoad::edge_traction(edge as usize, tx, ty)
