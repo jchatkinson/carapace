@@ -536,7 +536,14 @@ fn factored_isolines_solve_in_factored_space() {
     assert!(rows[8].is_nan());
     assert_eq!((rows[9], rows[10]), (ecu, ecu));
 
-    p.build_grid(&angles, &profiles, Some(aci)).unwrap();
+    // one sweep gives the same rows as sample_states, for both factorings
+    let (_, one_sweep) = p
+        .build_grid_rows(&angles, &profiles, Some(aci.clone()), true)
+        .unwrap();
+    assert_eq!(one_sweep.len(), rows.len());
+    for (a, b) in one_sweep.iter().zip(&rows) {
+        assert!(a == b || (a.is_nan() && b.is_nan()), "{a} vs {b}");
+    }
     let (lo, hi) = p.grid_axial_range(true).unwrap();
     let (nlo, nhi) = p.grid_axial_range(false).unwrap();
     assert!(

@@ -319,6 +319,19 @@ impl SectionProbe {
         profiles: &[f64],
         factoring: Option<Factoring>,
     ) -> Result<usize, SectionProbeError> {
+        self.build_grid_rows(angles, profiles, factoring, false)
+            .map(|(count, _)| count)
+    }
+
+    /// [`Self::build_grid`] that also returns the [`Self::sample_states`] rows of the same states when
+    /// `with_rows`, from the same single sweep (empty otherwise).
+    pub fn build_grid_rows(
+        &mut self,
+        angles: &[f64],
+        profiles: &[f64],
+        factoring: Option<Factoring>,
+        with_rows: bool,
+    ) -> Result<(usize, Vec<f64>), SectionProbeError> {
         if let Some(f) = &factoring {
             f.validate(self.group_count)
                 .map_err(|reason| SectionProbeError::InvalidRequest { reason })?;
@@ -329,19 +342,24 @@ impl SectionProbe {
                 reason: "a grid needs at least one angle and three profiles".into(),
             });
         }
+        let mut rows = Vec::new();
+        if with_rows {
+            rows.reserve(angles.len() * pairs.len() * STATE_STRIDE);
+        }
         let mut states = Vec::with_capacity(angles.len() * pairs.len());
         let mut by_angle = Vec::with_capacity(angles.len());
         let (mut n_min, mut n_max, mut m_max) = (f64::INFINITY, f64::NEG_INFINITY, 1.0f64);
         let (mut nf_min, mut nf_max, mut mf_max) = (f64::INFINITY, f64::NEG_INFINITY, 1.0f64);
         for &theta in angles {
+            let (lo, hi) = self.extents(theta);
             let mut row = Vec::with_capacity(pairs.len());
             for (pi, p) in pairs.iter().enumerate() {
                 let (e0, kz, ky) = self.profile_state(theta, p[0], p[1])?;
-                let r = self.evaluate(e0, kz, ky);
-                let rf = match &factoring {
-                    Some(f) => self.evaluate_factored(f, e0, kz, ky).response,
-                    None => r,
-                };
+                let (r, fr) = self.evaluate_pair(factoring.as_ref(), e0, kz, ky);
+                let rf = fr.response;
+                if with_rows {
+                    push_state_row(&mut rows, &r, &fr, hi - lo, p);
+                }
                 n_min = n_min.min(r.n);
                 n_max = n_max.max(r.n);
                 m_max = m_max.max(r.m2.hypot(r.m3));
@@ -373,7 +391,7 @@ impl SectionProbe {
             mf_max,
             factoring,
         });
-        Ok(count)
+        Ok((count, rows))
     }
 
     /// `(n_min, n_max)` over the sampled boundary, if a grid is built (factored axial forces with `factored`).
@@ -405,27 +423,8 @@ impl SectionProbe {
             let (lo, hi) = self.extents(theta);
             for p in profiles.chunks_exact(2) {
                 let (e0, kz, ky) = self.profile_state(theta, p[0], p[1])?;
-                let r = self.evaluate(e0, kz, ky);
-                let (rf, phi, eps_t) = match factoring {
-                    Some(f) => {
-                        let x = self.evaluate_factored(f, e0, kz, ky);
-                        (x.response, x.phi, x.eps_t)
-                    }
-                    None => (r, None, None),
-                };
-                out.extend_from_slice(&[
-                    r.n,
-                    r.m2,
-                    r.m3,
-                    rf.n,
-                    rf.m2,
-                    rf.m3,
-                    phi.unwrap_or(f64::NAN),
-                    eps_t.unwrap_or(f64::NAN),
-                    neutral_axis_depth(hi - lo, p[0], p[1]).unwrap_or(f64::NAN),
-                    p[0],
-                    p[1],
-                ]);
+                let (r, fr) = self.evaluate_pair(factoring, e0, kz, ky);
+                push_state_row(&mut out, &r, &fr, hi - lo, p);
             }
         }
         Ok(out)
@@ -941,6 +940,29 @@ impl Solver<'_> {
         }
         found.map(|(_, root)| root)
     }
+}
+
+fn push_state_row(
+    out: &mut Vec<f64>,
+    r: &super::SectionResponse,
+    fr: &super::FactoredResponse,
+    height: f64,
+    p: &[f64],
+) {
+    let rf = &fr.response;
+    out.extend_from_slice(&[
+        r.n,
+        r.m2,
+        r.m3,
+        rf.n,
+        rf.m2,
+        rf.m3,
+        fr.phi.unwrap_or(f64::NAN),
+        fr.eps_t.unwrap_or(f64::NAN),
+        neutral_axis_depth(height, p[0], p[1]).unwrap_or(f64::NAN),
+        p[0],
+        p[1],
+    ]);
 }
 
 /// Numbers per row of [`SectionProbe::sample_states`].

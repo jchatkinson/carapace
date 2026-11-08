@@ -265,6 +265,21 @@ impl WasmSectionProbe {
             .map_err(section_error)
     }
 
+    /// `buildGrid` that also returns the `sampleStates` rows of the same states, from one sweep over the fibers.
+    #[wasm_bindgen(js_name = buildGridSampled)]
+    pub fn build_grid_sampled(
+        &mut self,
+        angles: &[f64],
+        profiles: &[f64],
+        factoring: Option<Ts<Factoring>>,
+    ) -> Result<Vec<f64>, JsValue> {
+        let factoring = read_factoring(factoring)?;
+        self.0
+            .build_grid_rows(angles, profiles, factoring, true)
+            .map(|(_, rows)| rows)
+            .map_err(section_error)
+    }
+
     /// Every (angle, profile) state, angles outermost, as rows of `STATE_STRIDE` (11) numbers: nominal
     /// `n, m2, m3`, factored `n, m2, m3`, `phi`, `epsT`, `c` (NaN where undefined), and the profile's `et, eb`.
     #[wasm_bindgen(js_name = sampleStates)]

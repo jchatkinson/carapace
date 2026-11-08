@@ -127,4 +127,61 @@ impl SectionProbe {
             }
         }
     }
+
+    /// Nominal and factored resultants at `(eps0, kz, ky)` from a single sweep over the fibers (`evaluate` and
+    /// `evaluate_factored` each sweep them once). Without a factoring the factored response is the nominal one.
+    pub fn evaluate_pair(
+        &self,
+        factoring: Option<&Factoring>,
+        eps0: f64,
+        kz: f64,
+        ky: f64,
+    ) -> (SectionResponse, FactoredResponse) {
+        let (mut n, mut mz, mut my) = (0.0, 0.0, 0.0);
+        let (mut fnn, mut fmz, mut fmy) = (0.0, 0.0, 0.0);
+        let mut eps_t = 0.0f64;
+        let bar_group = match factoring {
+            Some(Factoring::Aci { bar_group, .. }) => Some(*bar_group),
+            _ => None,
+        };
+        let factors = match factoring {
+            Some(Factoring::Groups { factors }) => Some(factors),
+            _ => None,
+        };
+        let kmag = kz.hypot(ky);
+        for i in 0..self.y.len() {
+            let force = self.fiber_force_k(i, eps0, kz, ky, kmag);
+            let (dmz, dmy) = (-self.y[i] * force, self.z[i] * force);
+            n += force;
+            mz += dmz;
+            my += dmy;
+            if let Some(factors) = factors {
+                let k = factors[self.group[i] as usize];
+                fnn += k * force;
+                fmz += k * dmz;
+                fmy += k * dmy;
+            }
+            if bar_group == Some(self.group[i]) {
+                eps_t = eps_t.max(eps0 - self.y[i] * kz + self.z[i] * ky);
+            }
+        }
+        let nominal = SectionResponse::new(n, mz, my);
+        let factored = match factoring {
+            None => FactoredResponse { response: nominal, phi: None, eps_t: None },
+            Some(Factoring::Groups { .. }) => FactoredResponse {
+                response: SectionResponse::new(fnn, fmz, fmy),
+                phi: None,
+                eps_t: None,
+            },
+            Some(f @ Factoring::Aci { .. }) => {
+                let phi = f.aci_phi(eps_t);
+                FactoredResponse {
+                    response: SectionResponse::new(phi * n, phi * mz, phi * my),
+                    phi: Some(phi),
+                    eps_t: Some(eps_t),
+                }
+            }
+        };
+        (nominal, factored)
+    }
 }

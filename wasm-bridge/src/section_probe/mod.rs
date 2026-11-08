@@ -255,6 +255,12 @@ impl SectionProbe {
 
     #[inline]
     pub(super) fn fiber_force(&self, i: usize, eps0: f64, kz: f64, ky: f64) -> f64 {
+        self.fiber_force_k(i, eps0, kz, ky, kz.hypot(ky))
+    }
+
+    /// [`Self::fiber_force`] with `kmag = hypot(kz, ky)` hoisted out of the fiber loop.
+    #[inline]
+    pub(super) fn fiber_force_k(&self, i: usize, eps0: f64, kz: f64, ky: f64, kmag: f64) -> f64 {
         let strain = eps0 - self.y[i] * kz + self.z[i] * ky;
         let material = self.material[i] as usize;
         let stress = if self.windowed[material] {
@@ -263,7 +269,7 @@ impl SectionProbe {
                 material,
                 &self.step_points[material],
                 strain,
-                self.half_size[i] * kz.hypot(ky),
+                self.half_size[i] * kmag,
             )
         } else {
             stress(&self.materials, material, strain)
@@ -274,8 +280,9 @@ impl SectionProbe {
     /// Resultants at `(eps0, kz, ky)`.
     pub fn evaluate(&self, eps0: f64, kz: f64, ky: f64) -> SectionResponse {
         let (mut n, mut mz, mut my) = (0.0, 0.0, 0.0);
+        let kmag = kz.hypot(ky);
         for i in 0..self.y.len() {
-            let force = self.fiber_force(i, eps0, kz, ky);
+            let force = self.fiber_force_k(i, eps0, kz, ky, kmag);
             n += force;
             mz -= self.y[i] * force;
             my += self.z[i] * force;
@@ -286,8 +293,9 @@ impl SectionProbe {
     /// Total and per-group resultants: `[n, mz, my]` for the total followed by `[n, mz, my]` for each group.
     pub fn evaluate_grouped(&self, eps0: f64, kz: f64, ky: f64, out: &mut [f64]) {
         out.fill(0.0);
+        let kmag = kz.hypot(ky);
         for i in 0..self.y.len() {
-            let force = self.fiber_force(i, eps0, kz, ky);
+            let force = self.fiber_force_k(i, eps0, kz, ky, kmag);
             let (dn, dmz, dmy) = (force, -self.y[i] * force, self.z[i] * force);
             let g = 3 + 3 * self.group[i] as usize;
             out[0] += dn;
