@@ -96,7 +96,7 @@ impl PlaneMaterial {
     /// # Errors
     ///
     /// [`PlaneMaterialError::InvalidFck`] if `fck` is not in `0 < fck <=
-    /// 65` MPa ([`MAX_FCK`]), or `ecm_override` is given and not finite and positive;
+    /// 65` MPa (`MAX_FCK`), or `ecm_override` is given and not finite and positive;
     /// [`PlaneMaterialError::InvalidRegularizationGamma`] if `gamma` is
     /// given and not in `0 < gamma < 1`.
     pub fn csfm_concrete(

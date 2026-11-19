@@ -17,8 +17,8 @@
 //! Angles: `theta` fixes a direction `r = y cos(theta) + z sin(theta)` across the section. A strain profile
 //! `(et, eb)` at angle `theta` has strain `et` at the largest `r` and `eb` at the smallest, linear between.
 //!
-//! Materials are stateless (see [`materials`]); nothing here commits or remembers history, so every
-//! evaluation is path independent. Probe-only materials live in [`materials`] and are not part of Carapace's
+//! Materials are stateless (see `materials`); nothing here commits or remembers history, so every
+//! evaluation is path independent. Probe-only materials live in `materials` and are not part of Carapace's
 //! `MaterialSpec`.
 
 mod factoring;
