@@ -331,6 +331,14 @@ for a 2D model and parallel to `y` in a 3D model (biaxial bending); a mismatch
 is `invalidRow`. Fiber sections carry no torsion; 3D elements supply it through
 their own `g`/`j`.
 
+`y` (and `z`) are measured from the element axis, which Carapace takes as given.
+OpenSees instead measures a fiber section's coordinates from the area-weighted
+centroid of all its fibers (steel and concrete alike), so a section that is not
+symmetric about the origin it was written against bends differently there under
+an axial load on the element axis. A producer that wants OpenSees' behaviour
+moves the origin to that centroid before filling the table; PySees' compiler
+does.
+
 ## Constraints
 
 All constraints are linear multi-point constraints resolved by the transformation
