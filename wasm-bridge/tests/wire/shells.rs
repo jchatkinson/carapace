@@ -63,6 +63,7 @@ fn tilted_patch(self_weight: bool) -> CarapaceInputV1 {
         nu: 0.25,
         h: 0.4,
         rho: 2e-3,
+        modifiers: None,
     }];
     input.shell4s = Shell4Table {
         node_ids: vec![0, 1, 2, 3, 1, 4, 5, 2],
@@ -197,6 +198,7 @@ fn shell_pressure_loads_through_the_wire() {
         nu: 0.3,
         h: 0.1,
         rho: 0.0,
+        modifiers: None,
     }];
     input.shell4s = Shell4Table {
         node_ids: vec![0, 1, 2, 3],
@@ -260,6 +262,7 @@ fn shell_misuse_is_a_decode_error() {
         nu: 0.3,
         h: 1.0,
         rho: 0.0,
+        modifiers: None,
     }];
     assert!(matches!(
         decode_error(input),
@@ -275,6 +278,7 @@ fn shell_misuse_is_a_decode_error() {
         nu: 0.25,
         h: 0.0,
         rho: 0.0,
+        modifiers: None,
     }];
     assert!(matches!(
         decode_error(input),
@@ -366,6 +370,7 @@ fn a_triangle_patch_runs_end_to_end_and_matches_opensees() {
         nu: 0.25,
         h: 0.4,
         rho: 2e-3,
+        modifiers: None,
     }];
     input.shell3s = Shell3Table {
         node_ids: vec![0, 1, 2, 0, 2, 3, 1, 4, 2],
@@ -467,4 +472,105 @@ fn triangle_misuse_is_a_decode_error() {
             ..
         }
     ));
+}
+
+fn section_with(modifiers: Option<ShellModifiersSpec>, e: f64) -> ShellSectionSpec {
+    ShellSectionSpec::ElasticMembranePlate {
+        e,
+        nu: 0.25,
+        h: 0.4,
+        rho: 2e-3,
+        modifiers,
+    }
+}
+
+/// Runs the tilted patch with the given section and returns the displacements of nodes 4 and 5.
+fn patch_displacements(section: ShellSectionSpec) -> Vec<f64> {
+    let mut input = tilted_patch(false);
+    input.shell_sections = vec![section];
+    input.sequence = one_step(node_disp_recorders(&[4, 5]));
+    let mut session = decode(input).expect("patch decodes");
+    let outcome = session.advance(10);
+    assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");
+    (0..12).map(|k| sample(&outcome, k)).collect()
+}
+
+/// `modifiers` is optional and each factor defaults to 1: omitting it, `{}` and explicit ones all give the
+/// unmodified answer; a uniform factor `c` on every term equals scaling `E` by `c`. Tolerance 1e-9 relative.
+#[test]
+fn shell_modifiers_decode_default_and_scale_through_the_wire() {
+    let plain = patch_displacements(section_with(None, 3e4));
+    let empty = patch_displacements(section_with(Some(ShellModifiersSpec::default()), 3e4));
+    let ones = ShellModifiersSpec {
+        f11: Some(1.0),
+        m22: Some(1.0),
+        v13: Some(1.0),
+        ..ShellModifiersSpec::default()
+    };
+    assert_eq!(plain, empty);
+    assert_eq!(plain, patch_displacements(section_with(Some(ones), 3e4)));
+
+    let c = 0.4;
+    let uniform = ShellModifiersSpec {
+        f11: Some(c),
+        f22: Some(c),
+        f12: Some(c),
+        m11: Some(c),
+        m22: Some(c),
+        m12: Some(c),
+        v13: Some(c),
+        v23: Some(c),
+    };
+    let scaled = patch_displacements(section_with(Some(uniform), 3e4));
+    let reference = patch_displacements(section_with(None, 3e4 * c));
+    let scale = reference.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    for (k, (a, b)) in scaled.iter().zip(&reference).enumerate() {
+        assert!((a - b).abs() < 1e-9 * scale, "dof {k}: {a} vs {b}");
+    }
+}
+
+/// `modifiers` round-trips through serde with camelCase keys and omits absent factors; a section without it
+/// deserializes. Invalid factors are an `InvalidShellSection` decode error.
+#[test]
+fn shell_modifiers_round_trip_and_are_validated() {
+    let mut input = tilted_patch(false);
+    input.shell_sections = vec![section_with(
+        Some(ShellModifiersSpec {
+            m11: Some(0.5),
+            v23: Some(0.25),
+            ..ShellModifiersSpec::default()
+        }),
+        3e4,
+    )];
+    let value = serde_json::to_value(&input).unwrap();
+    let modifiers = &value["shellSections"][0]["modifiers"];
+    assert_eq!(modifiers["m11"], 0.5);
+    assert_eq!(modifiers["v23"], 0.25);
+    let back: CarapaceInputV1 = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&back).unwrap(), value);
+
+    let without = serde_json::json!({
+        "kind": "elasticMembranePlate", "e": 3e4, "nu": 0.25, "h": 0.4, "rho": 0.0
+    });
+    let parsed: ShellSectionSpec = serde_json::from_value(without).unwrap();
+    let ShellSectionSpec::ElasticMembranePlate { modifiers, .. } = parsed;
+    assert_eq!(modifiers, None);
+
+    for bad in [0.0, -1.0, f64::INFINITY] {
+        let mut input = tilted_patch(false);
+        input.shell_sections = vec![section_with(
+            Some(ShellModifiersSpec {
+                f22: Some(bad),
+                ..ShellModifiersSpec::default()
+            }),
+            3e4,
+        )];
+        assert!(
+            matches!(
+                decode_error(input),
+                DecodeError::InvalidShellSection { index: 0, .. }
+            ),
+            "factor {bad}"
+        );
+    }
 }

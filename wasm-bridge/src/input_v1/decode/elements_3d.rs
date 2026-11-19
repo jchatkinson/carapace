@@ -4,7 +4,7 @@
 use carapace_core::model::{
     Axis3, DispBeamColumn3, Domain3, ElasticBeamColumn3, Element3, Element3Id, ElementLoad3,
     Fiber3, FiberSection3, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3,
-    Shell4, ShellSection, Truss3, ZeroLength3, ZeroLengthSection3,
+    Shell4, ShellModifiers, ShellSection, Truss3, ZeroLength3, ZeroLengthSection3,
 };
 
 use super::shared::{
@@ -203,13 +203,30 @@ fn resolve_shell_sections(specs: &[ShellSectionSpec]) -> Result<Vec<ShellSection
         .iter()
         .enumerate()
         .map(|(index, spec)| {
-            let ShellSectionSpec::ElasticMembranePlate { e, nu, h, rho } = *spec;
-            ShellSection::elastic_membrane_plate(e, nu, h, rho).map_err(|error| {
-                DecodeError::InvalidShellSection {
+            let ShellSectionSpec::ElasticMembranePlate {
+                e,
+                nu,
+                h,
+                rho,
+                modifiers,
+            } = *spec;
+            let spec = modifiers.unwrap_or_default();
+            let modifiers = ShellModifiers {
+                f11: spec.f11.unwrap_or(1.0),
+                f22: spec.f22.unwrap_or(1.0),
+                f12: spec.f12.unwrap_or(1.0),
+                m11: spec.m11.unwrap_or(1.0),
+                m22: spec.m22.unwrap_or(1.0),
+                m12: spec.m12.unwrap_or(1.0),
+                v13: spec.v13.unwrap_or(1.0),
+                v23: spec.v23.unwrap_or(1.0),
+            };
+            ShellSection::elastic_membrane_plate_modified(e, nu, h, rho, modifiers).map_err(
+                |error| DecodeError::InvalidShellSection {
                     index: index as u32,
                     reason: error.message(),
-                }
-            })
+                },
+            )
         })
         .collect()
 }

@@ -507,7 +507,31 @@ pub struct QuadTable {
     pub formulation: Vec<Quad4FormulationSpec>,
 }
 
-/// A shell section, referenced by `shell4s` rows through the `shellSections` arena. Generalized
+/// ETABS-style stiffness modifiers on a shell section; each omitted factor is `1`. `f11 f22 f12` scale the
+/// membrane terms, `m11 m22 m12` the bending terms and `v13 v23` the transverse shear (no effect on `shell3s`).
+/// Every factor must be finite and positive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShellModifiersSpec {
+    #[tsify(optional)]
+    pub f11: Option<f64>,
+    #[tsify(optional)]
+    pub f22: Option<f64>,
+    #[tsify(optional)]
+    pub f12: Option<f64>,
+    #[tsify(optional)]
+    pub m11: Option<f64>,
+    #[tsify(optional)]
+    pub m22: Option<f64>,
+    #[tsify(optional)]
+    pub m12: Option<f64>,
+    #[tsify(optional)]
+    pub v13: Option<f64>,
+    #[tsify(optional)]
+    pub v23: Option<f64>,
+}
+
+/// A shell section, referenced by `shell3s` and `shell4s` rows through the `shellSections` arena. Generalized
 /// strain and resultants follow OpenSees' `ElasticMembranePlateSection` ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
@@ -517,8 +541,16 @@ pub struct QuadTable {
 )]
 pub enum ShellSectionSpec {
     /// Isotropic elastic membrane + plate bending + transverse shear: modulus, Poisson ratio,
-    /// thickness and mass density (per unit volume).
-    ElasticMembranePlate { e: f64, nu: f64, h: f64, rho: f64 },
+    /// thickness and mass density (per unit volume), with optional stiffness modifiers.
+    ElasticMembranePlate {
+        e: f64,
+        nu: f64,
+        h: f64,
+        rho: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[tsify(optional)]
+        modifiers: Option<ShellModifiersSpec>,
+    },
 }
 
 /// 3-node DKT/Allman shells (3D models only). `nodeIds` has stride 3 (the node order sets the local normal by the

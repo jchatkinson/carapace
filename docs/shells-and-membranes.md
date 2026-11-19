@@ -10,8 +10,11 @@
 | Continuum element loads (body, edge traction, edge pressure), lumped mass, Gauss-point strain/stress recorders | **Done** |
 | Wire: `planeMaterials`, `triangles`, `quads`; modal and transient verified with membranes; OpenSees cross-check | **Done** |
 | PySees compile of `tri3`/`quad`, export of `quad` | Not done (PySees compiler has no surface support) |
-| 3D shell (MITC4), `ElasticMembranePlateSection`, `Element3` surface variants | **Not started** |
-| Zero-mass DOFs in transient analysis | Not done (modal already condenses them) |
+| 3D shells: `Shell4` (MITC4) and `Shell3` (DKT/Allman triangle), `ShellSection` (`elasticMembranePlate`), `Element3` surface variants | **Done** |
+| Shell loads (`shellPressure`, `shellBody`), lumped mass, 8-component Gauss-point resultant recorders, mixed shell and beam models | **Done** |
+| Wire: `shellSections`, `shell3s`, `shell4s`; OpenSees cross-check (`ShellMITC4`, `ShellDKGT`) | **Done** |
+| Zero-mass DOFs in transient analysis | **Done** (massless rows get zero initial acceleration; no shell-specific transient test yet) |
+| Shell stiffness modifiers (`f11 f22 f12 m11 m22 m12 v13 v23`) on `elasticMembranePlate` | **Done** (core and wire; PySees mirror pending) |
 
 Departures from the original plan: there is no separate `(ndm=2, ndf=2)` profile and no header `ndf`. Membranes run in
 the ordinary 2D `Domain` (`ux, uy, rz`); `dof_mask` leaves `rz` inactive, so membrane-only nodes need no rotation fixed
@@ -31,78 +34,80 @@ Membranes are 2D only: `Domain3` rejects the tables.
   transient stages only. Nodal force recording uses `local_force_width`.
 - Wire layouts: see [input-format.md](input-format.md).
 
-## What a 3D shell needs
+## What exists (shells)
 
-Carapace has no 3D surface element. The pieces, in dependency order:
+3D only. `Domain3` accepts them; the 2D profile rejects the tables.
 
-### 1. Catalog and interface changes
+- **`Shell4`** (`elements/shell4.rs`): the OpenSees `ShellMITC4` formulation, 24 DOFs. Membrane, bending, MITC4
+  assumed transverse shear with the 5/6 correction, and a drilling penalty, reproduced term by term.
+- **`Shell3`** (`elements/shell3.rs`): the OpenSees `ShellDKGT` formulation, 18 DOFs. DKT bending plus Allman membrane,
+  4-point rule `(1/3,1/3,1/3)` with weight `-9/16` and the `(1/5,3/5,1/5)` permutations with `25/48`. No drilling
+  penalty and no transverse shear (`gamma_xz`, `gamma_yz`, `Qx`, `Qy` are zero).
+- **`ShellSection`** (`materials/shell_section.rs`): `elasticMembranePlate` (`e`, `nu`, `h`, `rho`, optional
+  `ShellModifiers`: ETABS-style factors `f11 f22 f12 m11 m22 m12 v13 v23` on the individual terms of the tangent; see
+  [input-format.md](input-format.md) for the rules and the OpenSees equivalence). The trial/commit
+  seam for the section, one copy per Gauss point, with OpenSees' generalized-strain ordering and sign convention.
+  It is not a `PlaneMaterial`, which has no bending.
+- **Local frame** follows OpenSees: `e1` from the edge midpoints, `e3 = e1 x e2` (node order sets the sign). A quad is
+  treated as flat in that frame; warp is tolerated as OpenSees does, so there is no flatness check. A triangle's local
+  x axis is the edge from node 0 to node 1.
+- **Interface**: shells go through the sink path like `Quad4`; `Element3::nodes()` returns a `NodeList`. Every node
+  carries all six DOFs, so a beam can share a shell node with no extra constraint.
+  `ElementOps::shell_responses` reports eight strains and resultants per Gauss point and `gauss_component_count`
+  bounds the recorder component.
+- **Loads**: `shellPressure` (per unit area, along `e3`) and `shellBody` (body acceleration, force per area
+  `rho h b`), both consistent nodal forces on translations only. A shell takes no `uniform` load. Nodal loads and
+  self-weight work as for any element.
+- **Mass**: row-sum lumped translational mass `rho h`; rotations carry none. OpenSees uses a consistent mass, so
+  modal frequencies agree with OpenSees only approximately (closed-form plate frequencies are the check).
+- **Recorders**: `gaussPoint` on a shell has 4 points and 8 components per quantity. Strain is
+  `[eps_x, eps_y, gamma_xy, kappa_x, kappa_y, 2 kappa_xy, gamma_xz, gamma_yz]`; stress is the resultants
+  `[Nx, Ny, Nxy, Mx, My, Mxy, Qx, Qy]` in the local axes, in OpenSees' order and sign. The force recorder returns the
+  24 (quad) or 18 (triangle) global nodal forces and moments. `principalStrain`/`principalStress` record nothing for a
+  shell.
+- **Analysis**: static, modal (massless rotations are condensed) and transient (massless
+  equilibrium rows start at zero acceleration).
+- **Wire**: `shellSections`, `shell3s`, `shell4s`, shell element loads and shell Gauss-point recorders; see
+  [input-format.md](input-format.md).
 
-- Add shell variants to `Element3`. `Element3::nodes()` currently returns `[Node3Id; 2]`; it must return a `NodeList`
-  like `Element::nodes()`, and the two-node `pair()` path must exclude the new variants.
-- `ElementLoad3` is a single-variant enum. Decide whether shells take loads in v1 (recommended: nodal only, reject with
-  `IncompatibleElementLoad` via `accepts_load`).
-- `GaussResponse` is `{ strain: [f64; 3], stress: [f64; 3] }`, which fits plane elements only. A shell reports
-  generalized strains and resultants (membrane `n_xx n_yy n_xy`, bending `m_xx m_yy m_xy`, shear `q_xz q_yz`: 8
-  components). Make the response width element-defined (or add a separate `shell_responses`) and extend
-  `gauss_point_count`/recorder validation to match.
-- `MAX_ELEMENT_NODES = 4` already covers a quad shell; `DofMask::all(6)` and the 24-component `SMatrix` sink path need
-  no interface change.
+### OpenSees differences to know
 
-### 2. Formulation (`ShellMITC4`, 24 DOFs)
+- `ShellMITC4` has no pressure load and applies `-selfWeight` with the opposite sign; `ShellDKGT` applies twice the
+  self-weight (an integration-weight bug). Carapace applies the correct weight, so exporters expand pressure, and a
+  triangle's self-weight, into nodal loads and negate the quad's body vector.
+- Lumped versus consistent mass (above).
+- OpenSees' bending resultants have the opposite sign to `M = D kappa`; Carapace reports them as OpenSees does.
 
-- Reuse the Quad4 shape functions, Gauss rule and `Jacobian`, but evaluate them in a local 2D frame because the nodes
-  are 3D: build an orthonormal local basis from the element geometry (OpenSees `ShellMITC4` convention: normal from the
-  node ordering) and project nodal coordinates into it.
-- Membrane (plane-stress `D`, thickness `h`), bending (`D h^3/12`), MITC4 assumed transverse shear with the 5/6 shear
-  correction, and a drilling (`rz`) stiffness derived from membrane stiffness (OpenSees penalty), all in the local frame;
-  transform with a 24x24 block-diagonal rotation (translations and rotations) to global.
-- Section: `ElasticMembranePlateSection` (`E`, `nu`, `h`, `rho`, optional plate-modulus multiplier). A new wire table; it
-  is not a `PlaneMaterial`, which has no bending.
-- Validation (structured `InvalidElement`): four distinct finite nodes, `h > 0`, `E > 0`, `-1 < nu < 0.5`, density `>=
-  0`, convex, positive Jacobian, and **flatness** (warp tolerance relative to element size). Today's `validate_quad` is
-  2D only; there is no warp check yet.
-- Mass: translational lumped mass from density; rotations carry none.
-- Local-axis conventions and Gauss-point order must be documented because PySees will draw resultants from them.
+### Verification
 
-### 3. Analysis support
+`core/tests/shells/shell4.rs` and `shell3.rs` (tolerance 1e-8 relative to the largest value against OpenSeesPy):
 
-- Modal: already condenses massless DOFs (`modal_analysis` accepts non-negative mass with at least `num_modes` positive
-  entries). Check that returned shapes give the rotational components sensible values, since shells make most
-  rotations massless.
-- Transient: `TransientAnalysis::new` returns `SingularSystem` if any free DOF has `mass <= 0`, and the initial
-  acceleration divides by mass. Shell models fail here unless rotations are fixed or given artificial mass. Needs
-  consistent initialization of the massless equilibrium rows (keep Newmark average acceleration).
+- Distorted, tilted quad and triangle patches: displacements, clamp reactions and Gauss-point resultants.
+- Self-weight against OpenSees (sign and the `ShellDKGT` double weight), and pressure resultant `p A e3`.
+- Simply supported square plate: centre deflection `0.004062 p a^4 / D` and fundamental frequency
+  `2 pi^2 / a^2 sqrt(D / (rho h))` (closed form, since the mass differs from OpenSees).
+- Warped quad against OpenSees, a column framing into a shell corner, and the Scordelis-Lo barrel vault
+  (8x8 mesh against OpenSees; about 0.30 against the published 0.3024).
 
-### 4. Wire and bridge
+`core/tests/shells/modifiers.rs` checks the modified tangent and resultants term by term, the drilling stiffness
+(including extreme factors), validation, and exact element scalings (bending factors on `Shell3`, a uniform factor
+on `Shell4` equal to scaling `E`, the `f11` axial stiffness, shear factors acting on `Shell4` only). There is no
+OpenSees reference for non-uniform modifiers.
 
-- New tables (for example `sectionsShell` and `shells`) in `tables.rs`, decoded in `decode/elements_3d.rs`;
-  `reject_tables` makes the 2D profile refuse them, and `Domain3` already refuses `planeMaterials`/`triangles`/`quads`.
-- Extend `elementKind` and the `gaussPoint` recorder (currently `tri3`/`quad4`, 3 components) for shell resultants;
-  `local_force_width` is 24 for the force recorder.
-- Add the shell to the mask-conformance test in `elements/mod.rs`, update [input-format.md](input-format.md),
-  regenerate TypeScript declarations and rebuild the wasm.
+`wasm-bridge/tests/wire/shells.rs` covers the wire tables end to end, serde round trips and decode errors
+(including `invalidShellSection`).
 
-### 5. PySees
+### PySees
 
-- `compileInputV1.ts` has no surface compilation, for membranes or shells. It needs: node/fix/load compile for 3D shells
-  (Z-up), schema argument names for `ShellMITC4` and the section (the OpenSees schema already contains both),
-  diagnostics for unsupported options, and element-specific recorder labels (the current ones assume beams/trusses).
-- Rendering and result display (surface meshes, contours) are separate work.
-- Export: `ShellMITC4`/`quad` must round-trip through `commands/decode.ts`/`encode.ts` and `tables.ts`, and the exports
-  must be accepted by real OpenSees.
-
-### 6. Verification
-
-- Stiffness symmetry and exactly six rigid-body modes (zero strain energy under rigid translation and rotation).
-- Membrane and bending patch tests; rotated and distorted valid quads; thin-shell locking checks (MITC4 should not
-  lock); cantilever and simply supported plate under **out-of-plane** pressure against closed-form solutions
-  (nodal-equivalent loads first, since element loads are deferred).
-- Drilling DOF: no spurious energy, and the stiffness scale does not affect results.
-- Compare displacements, reactions and Gauss-point resultants with OpenSees `ShellMITC4`; for dynamics, assign matching
-  lumped masses in OpenSees (it uses consistent mass otherwise).
-- Mixed shell and frame models (shared nodes carry all six DOFs).
+`compileInputV1.ts` now has shell support (a `shell` recorder kind with 24 force labels). Treat the PySees repo as the
+source of truth for what it compiles and exports.
 
 ## Deferred
 
-Pressure and body-force loads on shells, triangular shells (`ShellDKGT`), warped or non-convex quads, nonlinear or
-layered sections, geometric nonlinearity, 3D membranes, and surface rendering.
+- Nonlinear or layered shell sections, geometric nonlinearity for shells.
+- Consistent mass for shells.
+- A flatness (warp) check, and non-convex quads.
+- A shell-specific transient test.
+- 3D membranes.
+- The PySees compiler and type for shell stiffness modifiers.
+- 2D surface support in the PySees compiler (`tri3`/`quad`).

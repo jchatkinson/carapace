@@ -202,7 +202,18 @@ Notes:
   six DOFs per node and use 2x2 Gauss points. The local frame follows OpenSees: `e1` from the edge
   midpoints, `e3 = e1 x e2` (the node order sets the sign), and a quad is treated as flat in that
   frame (warp is tolerated as OpenSees does). `ShellSectionSpec` (the `shellSections` arena):
-  `{ kind: "elasticMembranePlate", e, nu, h, rho }` (invalid constants are `invalidShellSection`).
+  `{ kind: "elasticMembranePlate", e, nu, h, rho, modifiers? }` (invalid constants are `invalidShellSection`).
+  `modifiers` are ETABS-style stiffness modifiers, `{ f11?, f22?, f12?, m11?, m22?, m12?, v13?, v23? }`, each
+  defaulting to 1 and required to be finite and positive (otherwise `invalidShellSection`). `f11 f22` scale the
+  membrane normal terms, `f12` the in-plane shear term, `m11 m22` the bending terms, `m12` the twisting term and
+  `v13 v23` the transverse shear. The Poisson coupling terms scale by the geometric mean of the two diagonal
+  factors (`sqrt(f11) sqrt(f22)`, `sqrt(m11) sqrt(m22)`), which keeps the tangent symmetric positive definite. The
+  drilling stiffness of a `shell4s` row follows the modified membrane block. Recorded resultants and element
+  forces include the modifiers, strains do not, and mass and body loads are unchanged. `v13` and `v23` have no
+  effect on `shell3s` (no transverse shear). OpenSees has no such modifiers: a model matches OpenSees only when
+  `f11 = f22 = f12 = f`, `m11 = m22 = m12 = m` and, for `shell4s`, `v13 = v23 = m`, exported as `E' = E f` with
+  `Ep_modifier = m / f` (OpenSees takes the shear from the membrane modulus and multiplies it by `Ep_modifier`, so
+  shear scales by `f (m / f) = m`).
   Mass is a row-sum lumped translational mass `rho h` (OpenSees uses a consistent mass), so modal
   frequencies agree with OpenSees only approximately. A `shell3s` triangle has no drilling penalty and no transverse shear (its `gamma_xz`, `gamma_yz` and `Qx`, `Qy` are zero) and its local x axis is the edge from node 0 to node 1. A triangle has 4 Gauss points `(1/3,1/3,1/3)` with weight `-9/16` and `(1/5,3/5,1/5)` permutations with `25/48`; a Gauss-point recorder on a shell has 4 points
   and 8 components per quantity, in OpenSees' section order and sign: strain `[eps_x, eps_y,

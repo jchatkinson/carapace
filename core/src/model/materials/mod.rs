@@ -85,7 +85,9 @@ pub use plane::{
     CsfmConcreteFields, CsfmConcreteLaw, PlaneMaterial, PlaneMaterialError, PlaneMatrix,
     PlaneVector,
 };
-pub use shell_section::{ShellMatrix, ShellSection, ShellSectionError, ShellVector};
+pub use shell_section::{
+    ShellMatrix, ShellModifiers, ShellSection, ShellSectionError, ShellVector,
+};
 pub use steel01::Steel01Loading;
 pub use steel02::Steel02Kon;
 
