@@ -13,6 +13,7 @@ use super::error::DecodeError;
 /// `decode.rs`'s module doc comment).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum Pinching4DmgCycSpec {
     EnergyBased,
@@ -23,6 +24,7 @@ pub enum Pinching4DmgCycSpec {
 /// `u32` index into the same arena, resolved by [`resolve_materials`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",

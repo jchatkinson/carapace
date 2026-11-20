@@ -694,3 +694,64 @@ fn rejects_invalid_bounded_paths_before_constructing_the_domain() {
         assert!(decode(input).is_err());
     }
 }
+
+/// `Session::run` drives a model to completion in small slices and merges the batches into the same
+/// samples a hand-rolled `advance` loop collects, honors the cancellation flag, and reports a progress
+/// callback per slice.
+#[test]
+fn run_to_completion_matches_a_manual_advance_loop() {
+    use carapace_input::input_v1::RunOptions;
+    use std::sync::atomic::AtomicBool;
+
+    let manual = all_samples(&mut two_stage_bar(false, None, false));
+    let mut session = two_stage_bar(false, None, false);
+    let mut slices = 0;
+    let report = session.run(
+        &RunOptions {
+            step_budget: 1,
+            cancel: None,
+        },
+        |_| slices += 1,
+    );
+    assert!(report.completed && !report.cancelled && report.error.is_none());
+    assert_eq!(report.total_steps, 4);
+    assert!(slices >= 4);
+    let merged: Vec<_> = report
+        .recorders
+        .iter()
+        .filter(|s| s.recorder_index == 0)
+        .flat_map(|s| s.samples.iter().map(|&(t, v)| (s.stage_index, t, v)))
+        .collect();
+    assert_eq!(merged, manual);
+
+    let cancel = AtomicBool::new(true);
+    let report = two_stage_bar(false, None, false).run(
+        &RunOptions {
+            step_budget: 1,
+            cancel: Some(&cancel),
+        },
+        |_| {},
+    );
+    assert!(report.cancelled && !report.completed && report.total_steps == 0);
+}
+
+/// Every model under `examples/models` decodes and runs to completion.
+#[test]
+fn bundled_example_models_run() {
+    use carapace_input::input_v1::{CarapaceInputV1, RunOptions};
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/models");
+    let mut count = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let input: CarapaceInputV1 =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut session = decode(input).unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+        let report = session.run(&RunOptions::default(), |_| {});
+        assert!(report.completed, "{path:?}: {:?}", report.error);
+        count += 1;
+    }
+    assert!(count > 0);
+}

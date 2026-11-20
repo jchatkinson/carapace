@@ -14,6 +14,7 @@ use super::{SectionProbe, SectionResponse};
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -169,7 +170,11 @@ impl SectionProbe {
         }
         let nominal = SectionResponse::new(n, mz, my);
         let factored = match factoring {
-            None => FactoredResponse { response: nominal, phi: None, eps_t: None },
+            None => FactoredResponse {
+                response: nominal,
+                phi: None,
+                eps_t: None,
+            },
             Some(Factoring::Groups { .. }) => FactoredResponse {
                 response: SectionResponse::new(fnn, fmz, fmy),
                 phi: None,

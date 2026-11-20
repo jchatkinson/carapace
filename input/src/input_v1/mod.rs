@@ -17,12 +17,14 @@ pub mod sequence;
 pub mod tables;
 
 mod decode;
+mod run;
 mod session;
 
 pub use decode::decode;
 pub use error::DecodeError;
 pub use materials::MaterialSpec;
 pub use model_output::{EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting};
+pub use run::{RecorderSeries, RunOptions, RunReport};
 pub use session::{
     AnalysisErrorDetail, ArcFailureDetail, ContinuationDetail, ContinuationStopDetail,
     CutbackDetail, LimitKindDetail, LimitSample, ModalResultsReport, ModalStageResult, ModeResult,
@@ -43,6 +45,7 @@ use tables::{
 /// `CarapaceInputV1` is a bulk table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Header {
     /// The wire format's own version, independent of `engine_version`.
@@ -70,6 +73,7 @@ pub struct Header {
 /// which is the same as empty.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CarapaceInputV1 {
     pub header: Header,

@@ -1,6 +1,6 @@
 # Native API and workspace reorganization plan
 
-Status: Phase A (steps 1-2) done: `carapace-input` extracted, `tsify` optional, generated `.d.ts` byte-identical. The rest is plan only.
+Status: Phase A (steps 1-2) done: `carapace-input` extracted, `tsify` optional, generated `.d.ts` byte-identical. Phase B done except accumulating validation errors and result tables (see `docs/native-api.md`): `Session::run`, `carapace` CLI, JSON Schema feature, example models. The rest is plan only.
 
 Goals:
 

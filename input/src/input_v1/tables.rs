@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 /// carry none.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct NodeTable {
     pub coords: Vec<f64>,
@@ -49,6 +50,7 @@ impl NodeTable {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum TransformSpec {
     Linear,
@@ -60,6 +62,7 @@ pub enum TransformSpec {
 /// geometry doesn't exist in `core` yet (`GeomTransf3`'s own doc comment).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -72,6 +75,7 @@ pub enum TransformSpec3 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -85,6 +89,7 @@ pub enum IntegrationSpec {
 /// Same fields in 2D and 3D.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct TrussTable {
     pub node_i: Vec<u32>,
@@ -97,6 +102,7 @@ pub struct TrussTable {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ElasticBeamColumn2dTable {
     pub node_i: Vec<u32>,
@@ -110,6 +116,7 @@ pub struct ElasticBeamColumn2dTable {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ElasticBeamColumn3dTable {
     pub node_i: Vec<u32>,
@@ -130,6 +137,7 @@ pub struct ElasticBeamColumn3dTable {
 /// integration points by `core`'s own element constructors.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct FiberBeamColumn2dTable {
     pub node_i: Vec<u32>,
@@ -150,6 +158,7 @@ pub struct FiberBeamColumn2dTable {
 /// elements only ever use `Linear`-type geometry.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct FiberBeamColumn3dTable {
     pub node_i: Vec<u32>,
@@ -174,6 +183,7 @@ pub struct FiberBeamColumn3dTable {
 /// shear DOFs must not (checked by `core` via `debug_assert`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct FrictionRow {
     pub row: u32,
@@ -192,6 +202,7 @@ pub struct FrictionRow {
 /// Rows without an entry use the global axes; at most one entry per row.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct OrientRow {
     pub row: u32,
@@ -204,6 +215,7 @@ pub struct OrientRow {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ZeroLengthTable {
     pub node_i: Vec<u32>,
@@ -226,6 +238,7 @@ pub struct ZeroLengthTable {
 /// `core::ZeroLengthSection`'s doc comment.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ZeroLengthSectionTable {
     pub node_i: Vec<u32>,
@@ -250,6 +263,7 @@ pub struct ZeroLengthSectionTable {
 /// comment) and supplied instead as each owning table's own `g`/`j` fields.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct FiberTable {
     pub section_offsets: Vec<u32>,
@@ -270,6 +284,7 @@ impl FiberTable {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -294,6 +309,7 @@ pub enum TimeSeriesSpec {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LoadPatternTable {
     pub series: Vec<TimeSeriesSpec>,
@@ -302,6 +318,7 @@ pub struct LoadPatternTable {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct NodalLoadTable {
     /// Index into `LoadPatternTable`.
@@ -326,6 +343,7 @@ pub struct NodalLoadTable {
 /// with engineering shear.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -369,6 +387,7 @@ pub enum PlaneMaterialSpec {
 /// Compression envelope of a `csfmConcrete` plane material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum CsfmConcreteLawSpec {
     ParabolaRectangle,
@@ -377,6 +396,7 @@ pub enum CsfmConcreteLawSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum PlaneStateSpec {
     PlaneStress,
@@ -388,6 +408,7 @@ pub enum PlaneStateSpec {
 /// is the bar's cross-section (mm^2) and `material` indexes `materials` (a `csfmRebar` for CSFM).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedBarSpec {
     pub polyline: Vec<f64>,
@@ -424,6 +445,7 @@ pub struct EmbeddedBarSpec {
 /// A force applied to a bar end through a load pattern: `force` (N) is the tension it puts in the bar (outward along the bar's tangent).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BarEndLoadSpec {
     /// Index into `LoadPatternTable`.
@@ -438,6 +460,7 @@ pub struct BarEndLoadSpec {
 /// `embeddedBars[i].bond` (N, mm, MPa). See `core::model::continuum::bond`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BondSpecWire {
     /// Total bar perimeter `n pi D` (mm).
@@ -469,6 +492,7 @@ pub struct BondSpecWire {
 /// An anchorage end spring: yield force `fau` (N), elastic stiffness `ka` (N/mm), hardening `ksn * ka`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AnchorageSpringWire {
     pub fau: f64,
@@ -481,6 +505,7 @@ pub struct AnchorageSpringWire {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum EmbeddedBarHostsSpec {
     All(AllHosts),
@@ -489,6 +514,7 @@ pub enum EmbeddedBarHostsSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum AllHosts {
     All,
@@ -497,6 +523,7 @@ pub enum AllHosts {
 /// A host element: `kind` is `tri3` or `quad4`, `index` its row in that kind's table.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HostElementSpec {
     pub kind: ElementKind,
@@ -507,6 +534,7 @@ pub struct HostElementSpec {
 /// (counter-clockwise); `material` indexes `planeMaterials`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct TriangleTable {
     pub node_ids: Vec<u32>,
@@ -517,6 +545,7 @@ pub struct TriangleTable {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum Quad4FormulationSpec {
     Full,
@@ -528,6 +557,7 @@ pub enum Quad4FormulationSpec {
 /// (counter-clockwise); `material` indexes `planeMaterials`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct QuadTable {
     pub node_ids: Vec<u32>,
@@ -542,6 +572,7 @@ pub struct QuadTable {
 /// Every factor must be finite and positive.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShellModifiersSpec {
     #[cfg_attr(feature = "tsify", tsify(optional))]
@@ -566,6 +597,7 @@ pub struct ShellModifiersSpec {
 /// strain and resultants follow OpenSees' `ElasticMembranePlateSection` ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -589,6 +621,7 @@ pub enum ShellSectionSpec {
 /// right-hand rule); `section` indexes `shellSections`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Shell3Table {
     pub node_ids: Vec<u32>,
@@ -599,6 +632,7 @@ pub struct Shell3Table {
 /// local normal by the right-hand rule); `section` indexes `shellSections`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct Shell4Table {
     pub node_ids: Vec<u32>,
@@ -609,6 +643,7 @@ pub struct Shell4Table {
 /// model's `ndm` is `DecodeError::ElementKindNotInProfile`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum ElementKind {
     Truss,
@@ -728,6 +763,7 @@ impl ElementKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -784,6 +820,7 @@ pub enum ElementLoadSpec {
 /// dof a node has.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct EqualDofTable {
     pub retained: Vec<u32>,
@@ -798,6 +835,7 @@ pub struct EqualDofTable {
 /// `GeomTransf3` rather than deriving on the `core` type directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum Axis3Spec {
     X,
@@ -815,6 +853,7 @@ pub enum Axis3Spec {
 /// 2D model must leave it empty.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RigidDiaphragmTable {
     pub retained: Vec<u32>,
@@ -829,6 +868,7 @@ pub struct RigidDiaphragmTable {
 /// coordinates.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RigidLinkTable {
     pub master: Vec<u32>,
@@ -842,6 +882,7 @@ pub struct RigidLinkTable {
 /// entries (or none at all for an empty table).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LinearConstraintTable {
     pub slave_node: Vec<u32>,
@@ -854,6 +895,7 @@ pub struct LinearConstraintTable {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ElementLoadTable {
     pub pattern: Vec<u32>,

@@ -16,6 +16,7 @@ use super::{SectionProbe, SectionProbeError};
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MomentCurvatureRequest {
     /// Axial force carried (tension positive).

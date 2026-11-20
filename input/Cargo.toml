@@ -10,10 +10,14 @@ name = "carapace_input"
 # TypeScript definition generation for the wasm boundary (`carapace-wasm` enables it). Off for native users.
 tsify = ["dep:tsify", "dep:wasm-bindgen", "dep:js-sys"]
 
+# JSON Schema for the wire format (`carapace schema`).
+schema = ["dep:schemars"]
+
 [dependencies]
 carapace-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
 slotmap = "1.1"
+schemars = { version = "1", optional = true }
 tsify = { version = "0.5.8", default-features = false, features = ["js"], optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }

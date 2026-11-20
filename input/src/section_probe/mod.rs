@@ -44,6 +44,7 @@ use materials::{material_steps, stress, windowed_stress, ProbeMaterial, WINDOW_S
 /// Fibers as parallel arrays (`y`, `z`, `area`, `material`, optional `group`).
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeFibers {
     pub y: Vec<f64>,
@@ -59,6 +60,7 @@ pub struct ProbeFibers {
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SectionProbeConfig {
     /// Carapace materials that `core` entries of `materials` refer to by index (may be empty).

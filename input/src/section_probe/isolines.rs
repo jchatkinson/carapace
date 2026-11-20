@@ -57,6 +57,7 @@ pub(super) struct Grid {
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct IsolineOptions {
     #[serde(default = "d_seed_stride")]
@@ -128,6 +129,7 @@ impl Default for IsolineOptions {
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct IsolineRequest {
     /// Axial forces to solve at (tension positive), in any order.

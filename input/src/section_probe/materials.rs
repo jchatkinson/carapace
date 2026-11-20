@@ -20,6 +20,7 @@ use serde::Deserialize;
 /// A probe material, referenced by fibers by its position in `SectionProbeConfig::materials`.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -42,6 +43,7 @@ pub enum ProbeMaterialSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum ConcreteModel {
     Elastic,
@@ -56,6 +58,7 @@ pub enum ConcreteModel {
 /// CalcsApp concrete laws (`materialModels.js`). Magnitudes are used; signs of `fc`, `ec`, `ecu` are ignored.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ConcreteSpec {
     pub model: ConcreteModel,
@@ -93,6 +96,7 @@ fn default_alpha() -> f64 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SteelModel {
     Elastic,
@@ -103,6 +107,7 @@ pub enum SteelModel {
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SteelSpec {
     pub model: SteelModel,
@@ -125,6 +130,7 @@ pub struct SteelSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum GeneralModel {
     Elastic,
@@ -133,6 +139,7 @@ pub enum GeneralModel {
 
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralSpec {
     pub model: GeneralModel,

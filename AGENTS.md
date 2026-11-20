@@ -6,7 +6,7 @@ Feature list: `README.md`.
 
 ## Layout
 
-Cargo workspace of three crates:
+Cargo workspace of four crates:
 
 - `core/` (`carapace-core`): the native engine. `model/` (domain, nodes, elements, materials, sections,
   constraints, load patterns) and `analysis/` (solvers, integrators, algorithms, arc-length, modal, transient).
@@ -17,8 +17,10 @@ Cargo workspace of three crates:
   `section_probe/` and result/recorder streaming. The `tsify` feature adds TypeScript derives (only
   `carapace-wasm` enables it). Tests in `input/tests/`.
 - `wasm-bridge/` (`carapace-wasm`): only the wasm-bindgen boundary (`boundary.rs`) over `carapace-input`, plus
-  the TypeScript smoke tests in `wasm-bridge/tests/`. Plan for native frontends (CLI, Python):
+  the TypeScript smoke tests in `wasm-bridge/tests/`. Plan for native frontends:
   `docs/native-api-plan.md`.
+- `cli/` (`carapace-cli`): the `carapace` binary (`validate`, `run`, `schema`; JSON in, JSON out). See
+  `docs/native-api.md`. Example models in `examples/models/`.
 
 Other directories: `docs/` (design and wire-format docs), `comparison/` (Python harness vs real OpenSeesPy,
 uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, gitignored).
