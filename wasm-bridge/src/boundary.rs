@@ -13,11 +13,11 @@
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
-use crate::input_v1::{self, CarapaceInputV1};
-use crate::material_probe::{
+use carapace_input::input_v1::{self, CarapaceInputV1};
+use carapace_input::material_probe::{
     MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse,
 };
-use crate::section_probe::{
+use carapace_input::section_probe::{
     AxialExtremes, Factoring, IsolinePoint, IsolineRequest, IsolineResult, MomentCurvatureRequest,
     MomentCurvatureResult, SectionProbe, SectionProbeConfig, SectionProbeError, SectionResponse,
 };

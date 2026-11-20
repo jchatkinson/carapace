@@ -1,7 +1,7 @@
 // Replays the CSFM span-beam golden model through the built wasm (pkg/) and compares every increment with the native run.
 // Usage: node comparison/wasm_span_beam.mjs [budget]   (advance budget per call, default 1000; exits 1 on a mismatch)
 // Run after: scripts/build-wasm.sh, then
-//   cargo test -p carapace-wasm --test wire export_span_beam -- --ignored
+//   cargo test -p carapace-input --test wire export_span_beam -- --ignored
 // which writes comparison/out/span_beam_{wire,native}.json from the same conversion as wasm-bridge/tests/wire/span_beam.rs.
 import { readFileSync } from "node:fs";
 import { loadCarapace } from "./load_wasm.mjs";

@@ -1,0 +1,22 @@
+[package]
+name = "carapace-input"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "carapace_input"
+
+[features]
+# TypeScript definition generation for the wasm boundary (`carapace-wasm` enables it). Off for native users.
+tsify = ["dep:tsify", "dep:wasm-bindgen", "dep:js-sys"]
+
+[dependencies]
+carapace-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+slotmap = "1.1"
+tsify = { version = "0.5.8", default-features = false, features = ["js"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+
+[dev-dependencies]
+serde_json = "1"

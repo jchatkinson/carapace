@@ -1,11 +1,11 @@
 // Run with Node 22.18+ after scripts/build-wasm.sh (tests the shipped build); also type-check against generated .d.ts.
 // Drives the section probe through the generated JS glue with the CalcsApp-generated fixtures
-// (wasm-bridge/tests/fixtures/section_probe/README.md): typed-array transfer, Ts<T> in and out, error objects, timings.
+// (input/tests/fixtures/section_probe/README.md): typed-array transfer, Ts<T> in and out, error objects, timings.
 import { loadCarapace } from "../../comparison/load_wasm.mjs";
-import sectionFixture from "./fixtures/section_probe/section.json" with { type: "json" };
-import statesFixture from "./fixtures/section_probe/states.json" with { type: "json" };
-import mphiFixture from "./fixtures/section_probe/mphi.json" with { type: "json" };
-import isolinesFixture from "./fixtures/section_probe/isolines.json" with { type: "json" };
+import sectionFixture from "../../input/tests/fixtures/section_probe/section.json" with { type: "json" };
+import statesFixture from "../../input/tests/fixtures/section_probe/states.json" with { type: "json" };
+import mphiFixture from "../../input/tests/fixtures/section_probe/mphi.json" with { type: "json" };
+import isolinesFixture from "../../input/tests/fixtures/section_probe/isolines.json" with { type: "json" };
 import type { IsolineRequest, MomentCurvatureRequest, SectionProbeConfig } from "../../pkg/carapace_wasm.js";
 
 const { createSectionProbe } = await loadCarapace();

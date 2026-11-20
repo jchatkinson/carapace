@@ -1,9 +1,6 @@
 //! JavaScript interface to the Carapace engine.
 //! Binding glue and TypeScript definitions are generated during the wasm build.
-
-pub mod input_v1;
-pub mod material_probe;
-pub mod section_probe;
+//! The model layer itself (wire format, decode, sessions, probes) lives in `carapace-input`.
 
 mod boundary;
 pub use boundary::{

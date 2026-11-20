@@ -1,6 +1,6 @@
 # Native API and workspace reorganization plan
 
-Status: plan only, nothing implemented.
+Status: Phase A (steps 1-2) done: `carapace-input` extracted, `tsify` optional, generated `.d.ts` byte-identical. The rest is plan only.
 
 Goals:
 

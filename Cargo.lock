@@ -74,15 +74,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "carapace-wasm"
+name = "carapace-input"
 version = "0.1.0"
 dependencies = [
  "carapace-core",
  "js-sys",
  "serde",
- "serde-wasm-bindgen",
  "serde_json",
  "slotmap",
+ "tsify",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "carapace-wasm"
+version = "0.1.0"
+dependencies = [
+ "carapace-input",
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
  "tsify",
  "wasm-bindgen",
 ]

@@ -6,14 +6,19 @@ Feature list: `README.md`.
 
 ## Layout
 
-Cargo workspace of two crates:
+Cargo workspace of three crates:
 
 - `core/` (`carapace-core`): the native engine. `model/` (domain, nodes, elements, materials, sections,
   constraints, load patterns) and `analysis/` (solvers, integrators, algorithms, arc-length, modal, transient).
   Plain Rust, no wasm dependencies. Tests in `core/tests/`, benchmarks in `core/examples/`.
-- `wasm-bridge/` (`carapace-wasm`): the wasm-bindgen boundary. `input_v1/` decodes the JSON wire format
-  (`CarapaceInputV1`) into a core `Domain` and analysis sequence; also `material_probe.rs` (unit zero-length
-  spring for PySees' Material Preview) and result/recorder streaming. Tests in `wasm-bridge/tests/`.
+- `input/` (`carapace-input`): the model-from-data layer, native-first with no wasm dependencies. `input_v1/`
+  decodes the JSON wire format (`CarapaceInputV1`) into a core `Domain` and analysis sequence and runs it as a
+  steppable `Session`; also `material_probe.rs` (unit zero-length spring for PySees' Material Preview),
+  `section_probe/` and result/recorder streaming. The `tsify` feature adds TypeScript derives (only
+  `carapace-wasm` enables it). Tests in `input/tests/`.
+- `wasm-bridge/` (`carapace-wasm`): only the wasm-bindgen boundary (`boundary.rs`) over `carapace-input`, plus
+  the TypeScript smoke tests in `wasm-bridge/tests/`. Plan for native frontends (CLI, Python):
+  `docs/native-api-plan.md`.
 
 Other directories: `docs/` (design and wire-format docs), `comparison/` (Python harness vs real OpenSeesPy,
 uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, gitignored).
@@ -47,13 +52,13 @@ uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, 
 ## Commands
 
 ```
-cargo test                                   # all native tests (core + wasm-bridge)
-cargo test -p carapace-core --test elements   # one integration test binary (elements, analysis, dynamics, constraints, continuum, materials; wasm-bridge: wire)
+cargo test                                   # all native tests (core + input)
+cargo test -p carapace-core --test elements   # one integration test binary (elements, analysis, dynamics, constraints, continuum, materials; input: wire)
 cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
 ```
 
 Integration tests are one binary per area (`tests/<area>/main.rs` plus a module per feature):
-`core/tests/{elements,analysis,dynamics,constraints,continuum,materials}` and `wasm-bridge/tests/wire`
+`core/tests/{elements,analysis,dynamics,constraints,continuum,materials}` and `input/tests/wire`
 (shared builders in `wire/common.rs`). Add a test to the module for its feature and give 2D and 3D cases
 to the same module. Each file's `//!` header says what it verifies and against which reference.
 The docs site publishes a test report (`docs-site/gen_tests.py`) built from `cargo test` output plus each test's `///` doc comment

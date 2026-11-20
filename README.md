@@ -155,7 +155,8 @@ decisions, no longer maintained as living specs.
 carapace/
 ├── core/           # carapace-core: all FE logic. No wasm-bindgen dependency —
 │                    compiles and tests identically on native and wasm32 targets.
-├── wasm-bridge/     # carapace-wasm: input decoding, session API, and JS adapter
+├── input/           # carapace-input: wire format, input decoding, session API, probes (native + wasm)
+├── wasm-bridge/     # carapace-wasm: the wasm-bindgen glue over carapace-input
 └── docs/
     ├── architecture.md             # domain model, element interface, how to extend
     ├── algorithms.md               # current solver API and JS configuration
@@ -198,7 +199,7 @@ generated files.
 The application interface is `decodeInput(input)` → `WasmSession`, with
 `advance(stepBudget)` → `StepOutcome` and `currentStageId()` methods.
 
-Wire-format types in `wasm-bridge/src/input_v1/` derive `tsify::Tsify` alongside
+Wire-format types in `input/src/input_v1/` derive `tsify::Tsify` alongside
 Serde, so fields, camelCase names, and tagged enums generate TypeScript
 definitions from the Rust source. The adapter uses `Ts<T>` to connect those
 definitions to function signatures, with explicit fallible conversion inside

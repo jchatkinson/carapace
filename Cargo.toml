@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "wasm-bridge"]
+members = ["core", "input", "wasm-bridge"]
 
 [workspace.package]
 version = "0.1.0"

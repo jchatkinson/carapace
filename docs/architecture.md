@@ -108,9 +108,9 @@ costs more than the roughly 100 duplicated lines it saves, so `Truss`/`Truss3` s
 
 ## Adding a wire table
 
-Add the table struct and an `ElementKind` variant in `wasm-bridge/src/input_v1/tables.rs` (a per-formulation
+Add the table struct and an `ElementKind` variant in `input/src/input_v1/tables.rs` (a per-formulation
 table, optional via `#[serde(default)]`, with a tsify optional marker); decode it in
 `decode/elements_2d.rs` or `elements_3d.rs` and make the other profile reject it through `reject_tables`;
 extend recorder validation if it has new responses; add a `DecodeError` variant for any new failure; add a
-native-vs-wire test in `wasm-bridge/tests/` and a case in `boundary-smoke.ts`; document it in
+native-vs-wire test in `input/tests/` and a case in `boundary-smoke.ts`; document it in
 `input-format.md`.

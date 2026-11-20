@@ -19,7 +19,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PACKAGES = {"carapace_core": ROOT / "core", "carapace_wasm": ROOT / "wasm-bridge"}
+PACKAGES = {"carapace_core": ROOT / "core", "carapace_input": ROOT / "input", "carapace_wasm": ROOT / "wasm-bridge"}
 
 AREAS = {
     "elements": "Element formulations (truss, beams, zero-length) against closed forms and each other.",
