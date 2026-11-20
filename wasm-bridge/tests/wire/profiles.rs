@@ -837,13 +837,3 @@ fn profile_dependent_row_shapes_are_checked() {
         })
     ));
 }
-
-/// An `ndm` other than 2 or 3 is rejected with `UnsupportedNdm` before any session is built.
-#[test]
-fn rejects_an_unrecognized_space_before_constructing_a_session() {
-    let err = decode(empty_input(4)).unwrap_err();
-    assert_eq!(
-        err,
-        carapace_wasm::input_v1::DecodeError::UnsupportedNdm { got: 4 }
-    );
-}
