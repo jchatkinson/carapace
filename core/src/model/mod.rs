@@ -62,3 +62,8 @@ pub const ELEMENT_DOF: usize = 2 * NDF;
 /// (`std` + `sparse-linalg`, dropping `rand`/`rayon`/`npy`, which otherwise
 /// pull in a `getrandom` wasm build failure).
 pub(crate) type SparseMatrix = faer::sparse::SparseColMat<usize, f64>;
+
+/// A node-id key type. `slotmap::Key` plus the thread-safety every key has anyway (they are plain data),
+/// stated so the threaded assembly (`parallel` feature) can share a `Domain` generic over its node id.
+pub trait NodeKey: slotmap::Key + Send + Sync {}
+impl<T: slotmap::Key + Send + Sync> NodeKey for T {}

@@ -26,6 +26,23 @@ cargo run -p carapace-cli -- schema > carapace-input.schema.json
 
 Examples live in `examples/models/` and are run by the `bundled_example_models_run` test, so they stay valid.
 
+## Threads
+
+Native only, behind the `parallel` feature (the CLI and Python package enable it; `carapace-wasm` never does and
+`carapace-core` refuses `parallel` on `wasm32` at compile time). Results are bit-identical for any thread count.
+
+- `carapace run model.json --threads N` (and `run(model, threads=N)` in Python): threads the element loop of
+  the tangent assembly (chunks evaluated in parallel, scattered in element order) and faer's sparse
+  factorization. On a 100x30 fiber-free elastic frame (9,300 DOFs) 4 threads took the solve from 566 ms to
+  330 ms; the factorization alone did not help frames, the assembly did. Small models (< 256 elements) stay serial.
+  The setting is process-wide (`carapace_core::analysis::set_parallelism`).
+- `carapace batch a.json b.json ... [--threads N]` and `carapace.run_many([...], threads=N)`: independent models
+  concurrently, one result per model in order. This is the largest win for sweeps and load cases, and it
+  switches solver threading off while it runs to avoid oversubscription.
+
+Not threaded yet: the first assembly (triplet path), element state update, mass and load assembly, and
+transient/modal solves' own loops.
+
 ## Python
 
 `py/` is the `carapace-fe` package (PyO3, abi3, maturin; its own Cargo workspace so `cargo test` needs no Python):

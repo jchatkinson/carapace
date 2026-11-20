@@ -56,3 +56,37 @@ fn io_errors_and_schema() {
     assert!(output.status.success());
     assert!(json["properties"]["header"].is_object());
 }
+
+/// `batch` returns one result per model in argument order, keeps going past an invalid model, and exits 1.
+#[test]
+fn batch_runs_models_concurrently_in_order() {
+    let missing_field = std::env::temp_dir().join("carapace_cli_test_batch.json");
+    std::fs::write(&missing_field, "{}").unwrap();
+    let (output, json) = run(&[
+        "batch",
+        EXAMPLE,
+        missing_field.to_str().unwrap(),
+        EXAMPLE,
+        "--threads",
+        "2",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["report"]["completed"], true);
+    assert_eq!(results[1]["valid"], false);
+    assert_eq!(results[2]["path"], EXAMPLE);
+    assert_eq!(
+        results[0]["report"]["recorders"],
+        results[2]["report"]["recorders"]
+    );
+}
+
+/// Solver threads do not change the printed results.
+#[test]
+fn run_threads_flag_is_accepted() {
+    let (a, one) = run(&["run", EXAMPLE]);
+    let (b, many) = run(&["run", EXAMPLE, "--threads", "4"]);
+    assert!(a.status.success() && b.status.success());
+    assert_eq!(one, many);
+}

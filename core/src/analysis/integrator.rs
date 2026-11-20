@@ -1,5 +1,5 @@
+use crate::model::NodeKey;
 use nalgebra::DVector;
-use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, NodeId, SparseMatrix};
 
@@ -103,7 +103,7 @@ impl<NId: Copy> Integrator<NId> {
         current_pseudo_time: f64,
     ) -> Result<(f64, Option<DVector<f64>>), AnalysisError>
     where
-        NId: Key,
+        NId: NodeKey,
         E: ElementOps<NDIM, NDOF, NId>,
     {
         match self {
@@ -177,7 +177,7 @@ impl<NId: Copy> Integrator<NId> {
         pseudo_time: f64,
     ) -> Result<(f64, DVector<f64>), AnalysisError>
     where
-        NId: Key,
+        NId: NodeKey,
         E: ElementOps<NDIM, NDOF, NId>,
     {
         match self {

@@ -7,7 +7,7 @@
 //!
 //! Usage: cargo run --release -p carapace-core --example benchmark_scaling -- \
 //!   --stories 20 --bays 4 [--steps 50] [--fibers 20] [--points 5] [--load-base 1.0] \
-//!   [--displacement-increment 30.0] [--json]
+//!   [--displacement-increment 30.0] [--threads N (needs --features parallel)] [--json]
 
 use std::collections::HashMap;
 use std::env;
@@ -63,6 +63,15 @@ fn main() {
     let displacement_increment = get("--displacement-increment")
         .map(|v| v.parse::<f64>().expect("increment must be a number"));
     let json = args.iter().any(|a| a == "--json");
+    let threads = num("--threads", 1.0) as usize;
+    if threads != 1 {
+        assert!(
+            carapace_core::analysis::set_parallelism(
+                carapace_core::analysis::Parallelism::Threads(threads)
+            ),
+            "--threads needs a build with --features parallel"
+        );
+    }
     assert!(stories >= 1 && bays >= 1 && steps >= 1 && fibers >= 2 && points >= 1);
 
     let setup_start = Instant::now();

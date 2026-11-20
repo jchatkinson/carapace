@@ -1,4 +1,4 @@
-use slotmap::Key;
+use crate::model::NodeKey;
 
 use crate::model::{Domain, ElementOps, ModelError, NodeId};
 
@@ -126,7 +126,7 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
         domain: Domain<NDIM, NDOF, NId, E>,
     ) -> Analysis<NDIM, NDOF, NId, E>
     where
-        NId: Key,
+        NId: NodeKey,
         E: ElementOps<NDIM, NDOF, NId>,
     {
         self.try_build(domain)
@@ -142,7 +142,7 @@ impl<NId: Copy> AnalysisBuilder<Ready<NId>> {
         mut domain: Domain<NDIM, NDOF, NId, E>,
     ) -> Result<Analysis<NDIM, NDOF, NId, E>, ModelError>
     where
-        NId: Key,
+        NId: NodeKey,
         E: ElementOps<NDIM, NDOF, NId>,
     {
         assert!(

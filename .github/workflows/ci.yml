@@ -12,6 +12,7 @@ jobs:
         with: { targets: wasm32-unknown-unknown }
       - uses: Swatinem/rust-cache@v2
       - run: mkdir -p target && cargo test --workspace --no-fail-fast 2>&1 | tee target/test.log
+      - run: cargo test -p carapace-core -p carapace-input -p carapace-cli --features carapace-core/parallel,carapace-input/parallel
       # The same build PySees ships (scripts/build-wasm.sh): simd128 + wasm-bindgen.
       - uses: taiki-e/install-action@v2
         with: { tool: "wasm-bindgen@0.2.128" }

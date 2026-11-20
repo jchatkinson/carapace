@@ -1,5 +1,5 @@
+use crate::model::NodeKey;
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
-use slotmap::Key;
 
 use crate::model::{Domain, ElementOps};
 
@@ -64,7 +64,7 @@ pub fn modal_analysis<const NDIM: usize, const NDOF: usize, NId, E>(
     num_modes: usize,
 ) -> Result<Vec<Mode>, AnalysisError>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     domain.validate().map_err(AnalysisError::InvalidModel)?;

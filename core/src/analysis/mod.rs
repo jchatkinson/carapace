@@ -12,6 +12,7 @@ mod krylov;
 mod line_search;
 mod modal;
 mod newton_loop;
+mod parallelism;
 mod solver;
 mod state;
 mod tangent_strategy;
@@ -34,6 +35,9 @@ pub(crate) use krylov::KrylovAccelerator;
 pub use line_search::LineSearch;
 pub use modal::{modal_analysis, Mode};
 pub(crate) use newton_loop::iterate_to_equilibrium;
+#[cfg(feature = "parallel")]
+pub(crate) use parallelism::pool;
+pub use parallelism::{parallelism, set_parallelism, Parallelism};
 pub use solver::{SparseFactorization, SparseSolver};
 pub use state::{Analysis, Analysis3, CutbackInfo, StepResult};
 pub use tangent_strategy::TangentStrategy;

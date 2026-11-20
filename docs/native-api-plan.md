@@ -1,6 +1,6 @@
 # Native API and workspace reorganization plan
 
-Status: Phase A (steps 1-2) done: `carapace-input` extracted, `tsify` optional, generated `.d.ts` byte-identical. Phase B done except accumulating validation errors and result tables (see `docs/native-api.md`): `Session::run`, `carapace` CLI, JSON Schema feature, example models. Phase C done: `py/` Python package (builder, numpy results, tests). The rest is plan only.
+Status: Phase A (steps 1-2) done: `carapace-input` extracted, `tsify` optional, generated `.d.ts` byte-identical. Phase B done except accumulating validation errors and result tables (see `docs/native-api.md`): `Session::run`, `carapace` CLI, JSON Schema feature, example models. Phase C done: `py/` Python package (builder, numpy results, tests). Phase D done for the tangent assembly, sparse factorization and `run_many`/`batch` (see `docs/native-api.md#threads`). The rest is plan only.
 
 Goals:
 

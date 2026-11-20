@@ -41,7 +41,10 @@ uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, 
 - 2D (ndm=2, 3 DOF) and 3D (ndm=3, 6 DOF) share one const-generic implementation (`Domain` / `Domain3`).
   Share assembly, numbering, constraints and the analysis layer; split leaf elements whose kinematics differ.
   See "When to share and when to split" in `architecture.md`.
-- Element catalogs are closed enums: no `dyn`, no heap allocation in the assembly loop.
+- Element catalogs are closed enums: no `dyn`, no heap allocation in the assembly loop. Generic code bounds node ids
+  with `NodeKey` (`slotmap::Key + Send + Sync`), not bare `Key`, so the threaded assembly can share a `Domain`.
+- `parallel` is a native-only feature of `carapace-core`/`carapace-input`; never enable it for wasm. Threaded results must
+  stay bit-identical to serial (scatter in element order).
 - `dof_mask` must declare exactly the slots an element stiffens. Never read state through `equation_of`; use
   `Domain::dof_terms` / `Domain::value_at`.
 - Unsupported or invalid input must surface as an error (`ModelError`, `DecodeError`), never be silently

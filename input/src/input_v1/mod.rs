@@ -18,6 +18,8 @@ pub mod tables;
 
 mod decode;
 mod run;
+#[cfg(feature = "parallel")]
+mod run_many;
 mod session;
 
 pub use decode::decode;
@@ -25,6 +27,8 @@ pub use error::DecodeError;
 pub use materials::MaterialSpec;
 pub use model_output::{EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting};
 pub use run::{RecorderSeries, RunOptions, RunReport};
+#[cfg(feature = "parallel")]
+pub use run_many::run_many;
 pub use session::{
     AnalysisErrorDetail, ArcFailureDetail, ContinuationDetail, ContinuationStopDetail,
     CutbackDetail, LimitKindDetail, LimitSample, ModalResultsReport, ModalStageResult, ModeResult,

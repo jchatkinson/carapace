@@ -1,9 +1,10 @@
+use crate::model::NodeKey;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use faer::sparse::{SparseColMat, SymbolicSparseColMat, Triplet};
 use nalgebra::{DVector, SMatrix, SVector};
-use slotmap::{Key, SlotMap};
+use slotmap::SlotMap;
 
 use super::constraint::{self, LinearConstraint, ResolveError};
 use super::dof_table::{DofEntry, DofTable};
@@ -82,7 +83,7 @@ pub struct Domain<
     NId = NodeId,
     E = Element,
 > where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     nodes: SlotMap<NId, Node<NDIM, NDOF>>,
@@ -178,7 +179,7 @@ pub type Domain3 = Domain<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;
 /// this — see `Domain`'s doc comment.
 impl<const NDIM: usize, const NDOF: usize, NId, E> Clone for Domain<NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -200,7 +201,7 @@ where
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> Default for Domain<NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     fn default() -> Self {
@@ -210,7 +211,7 @@ where
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> Domain<NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     /// A fresh, empty model — already carrying one `LoadPattern`
@@ -767,7 +768,7 @@ where
         }
         struct Probe<'a, const NDIM: usize, const NDOF: usize, NId, E>
         where
-            NId: Key,
+            NId: NodeKey,
             E: ElementOps<NDIM, NDOF, NId>,
         {
             domain: &'a Domain<NDIM, NDOF, NId, E>,
@@ -775,7 +776,7 @@ where
         }
         impl<const NDIM: usize, const NDOF: usize, NId, E> VectorSink<NId> for Probe<'_, NDIM, NDOF, NId, E>
         where
-            NId: Key,
+            NId: NodeKey,
             E: ElementOps<NDIM, NDOF, NId>,
         {
             fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
@@ -1145,9 +1146,15 @@ where
             resistance: DVector::<f64>::zeros(n),
             complete: true,
         };
-        for (element_id, element) in self.elements.iter() {
-            let load = effective_element_load(&active, element_id);
-            element.assemble_tangent(&view, load.as_ref(), &mut sink);
+        #[cfg(feature = "parallel")]
+        let threaded = parallel::fill(self, &active, &view, &mut sink);
+        #[cfg(not(feature = "parallel"))]
+        let threaded = false;
+        if !threaded {
+            for (element_id, element) in self.elements.iter() {
+                let load = effective_element_load(&active, element_id);
+                element.assemble_tangent(&view, load.as_ref(), &mut sink);
+            }
         }
         if !sink.complete {
             return None;
@@ -1477,7 +1484,7 @@ fn accumulate_mass(mass: &mut DVector<f64>, terms: DofTerms<'_>, value: f64) {
 /// free-DOF resistance vector, through each DOF's equation terms.
 struct TripletSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     domain: &'a Domain<NDIM, NDOF, NId, E>,
@@ -1488,7 +1495,7 @@ where
 impl<const NDIM: usize, const NDOF: usize, NId, E> TangentSink<NId>
     for TripletSink<'_, NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     fn add<const N: usize>(
@@ -1519,7 +1526,7 @@ where
 /// the free-DOF resistance vector. Sets `complete` to false if an entry is not in the pattern.
 struct PatternSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     domain: &'a Domain<NDIM, NDOF, NId, E>,
@@ -1529,10 +1536,13 @@ where
     complete: bool,
 }
 
+#[cfg(feature = "parallel")]
+mod parallel;
+
 impl<const NDIM: usize, const NDOF: usize, NId, E> TangentSink<NId>
     for PatternSink<'_, NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     fn add<const N: usize>(
@@ -1564,7 +1574,7 @@ where
 /// Scatters scaled element load vectors into the free-DOF load vector.
 struct LoadSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     domain: &'a Domain<NDIM, NDOF, NId, E>,
@@ -1575,7 +1585,7 @@ where
 impl<const NDIM: usize, const NDOF: usize, NId, E> VectorSink<NId>
     for LoadSink<'_, NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
@@ -1592,7 +1602,7 @@ where
 /// Scatters element lumped masses into the free-DOF mass diagonal.
 struct MassSink<'a, const NDIM: usize, const NDOF: usize, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     domain: &'a Domain<NDIM, NDOF, NId, E>,
@@ -1602,7 +1612,7 @@ where
 impl<const NDIM: usize, const NDOF: usize, NId, E> VectorSink<NId>
     for MassSink<'_, NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
@@ -1635,12 +1645,12 @@ impl<NId> PickDof<NId> {
 
 /// Adds every `(node, dof)` entry of an element's resistance or load vector into `totals`, scaled
 /// by `sign` — `Domain::reactions_all`'s single-pass counterpart of `PickDof`.
-struct AccumulateDofs<'a, NId: Key, const NDOF: usize> {
+struct AccumulateDofs<'a, NId: NodeKey, const NDOF: usize> {
     totals: &'a mut slotmap::SecondaryMap<NId, [f64; NDOF]>,
     sign: f64,
 }
 
-impl<NId: Key, const NDOF: usize> TangentSink<NId> for AccumulateDofs<'_, NId, NDOF> {
+impl<NId: NodeKey, const NDOF: usize> TangentSink<NId> for AccumulateDofs<'_, NId, NDOF> {
     fn add<const N: usize>(
         &mut self,
         dofs: &[DofRef<NId>; N],
@@ -1655,7 +1665,7 @@ impl<NId: Key, const NDOF: usize> TangentSink<NId> for AccumulateDofs<'_, NId, N
     }
 }
 
-impl<NId: Key, const NDOF: usize> VectorSink<NId> for AccumulateDofs<'_, NId, NDOF> {
+impl<NId: NodeKey, const NDOF: usize> VectorSink<NId> for AccumulateDofs<'_, NId, NDOF> {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             if let Some(total) = self.totals.get_mut(node) {
@@ -1665,7 +1675,7 @@ impl<NId: Key, const NDOF: usize> VectorSink<NId> for AccumulateDofs<'_, NId, ND
     }
 }
 
-impl<NId: Key> TangentSink<NId> for PickDof<NId> {
+impl<NId: NodeKey> TangentSink<NId> for PickDof<NId> {
     fn add<const N: usize>(
         &mut self,
         dofs: &[DofRef<NId>; N],
@@ -1680,7 +1690,7 @@ impl<NId: Key> TangentSink<NId> for PickDof<NId> {
     }
 }
 
-impl<NId: Key> VectorSink<NId> for PickDof<NId> {
+impl<NId: NodeKey> VectorSink<NId> for PickDof<NId> {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             if node == self.node && slot == self.dof {

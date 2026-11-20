@@ -755,3 +755,35 @@ fn bundled_example_models_run() {
     }
     assert!(count > 0);
 }
+
+/// `run_many` returns each model's own result, in input order, equal to running them one by one.
+#[cfg(feature = "parallel")]
+#[test]
+fn run_many_matches_sequential_runs_in_order() {
+    use carapace_input::input_v1::{run_many, CarapaceInputV1, RunOptions};
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../examples/models/portal_frame_2d.json"
+    ))
+    .unwrap();
+    let base: CarapaceInputV1 = serde_json::from_str(&text).unwrap();
+    let inputs: Vec<_> = (1..=8)
+        .map(|k| {
+            let mut input = base.clone();
+            input.nodal_loads.value[0] *= k as f64;
+            input
+        })
+        .collect();
+    let sequential: Vec<_> = inputs
+        .iter()
+        .map(|i| {
+            decode(i.clone())
+                .unwrap()
+                .run(&RunOptions::default(), |_| {})
+        })
+        .collect();
+    let parallel = run_many(inputs, 4, &RunOptions::default());
+    for (a, b) in sequential.iter().zip(parallel) {
+        assert_eq!(a, &b.unwrap());
+    }
+}

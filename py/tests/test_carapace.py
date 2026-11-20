@@ -67,3 +67,18 @@ def test_modal_stage():
     m.add_modal_stage(modes=1)
     freq = carapace.run(m).modes()[0]["frequency"]
     assert np.isfinite(freq) and freq > 0
+
+
+def test_run_many_and_threads_do_not_change_results():
+    models = []
+    for k in range(1, 7):
+        m = portal()
+        m._loads["value"][0] *= k
+        models.append(m)
+    models.append({"header": {"schemaVersion": 1, "ndm": "x", "engineVersion": "t"}})
+    out = carapace.run_many(models, threads=3)
+    assert out[-1]["valid"] is False
+    singles = [carapace.run(m).recorder(0)[0, 1] for m in models[:-1]]
+    assert [r.recorder(0)[0, 1] for r in out[:-1]] == singles
+    assert singles[3] == pytest.approx(4 * singles[0], rel=1e-9)
+    assert carapace.run(models[0], threads=4).recorder(0)[0, 1] == singles[0]

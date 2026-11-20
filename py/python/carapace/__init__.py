@@ -15,7 +15,7 @@ import numpy as np
 from . import _carapace
 from .model import Model
 
-__all__ = ["Model", "Results", "ModelError", "validate", "run"]
+__all__ = ["Model", "Results", "ModelError", "validate", "run", "run_many"]
 
 ModelLike = Union["Model", dict, str]
 
@@ -80,13 +80,26 @@ class Results:
         raise KeyError(f"no modal stage {stage}")
 
 
-def run(model: ModelLike, step_budget: int = 64, raise_on_invalid: bool = True) -> Results:
+def run(model: ModelLike, step_budget: int = 64, raise_on_invalid: bool = True, threads: int = 1) -> Results:
     """Decode and run to completion. An invalid model raises :class:`ModelError` (or is returned as the
     ``{"valid": False, ...}`` dict when ``raise_on_invalid=False``). An analysis failure (non-convergence)
-    does not raise: check ``results.completed`` / ``results.error``; results before the failure are kept."""
-    out = json.loads(_carapace.run(_text(model), step_budget))
+    does not raise: check ``results.completed`` / ``results.error``; results before the failure are kept.
+    ``threads`` sets the solver/assembly thread count (``0`` = all cores); it never changes the results.
+    The setting is process-wide."""
+    out = json.loads(_carapace.run(_text(model), step_budget, threads))
     if not out["valid"]:
         if raise_on_invalid:
             raise ModelError(out["errors"])
         return out
     return Results(out["report"])
+
+
+def run_many(models: list[ModelLike], threads: int = 0) -> list[Results | dict]:
+    """Run independent models concurrently (``threads=0`` uses every core), in input order. An invalid model
+    yields its ``{"valid": False, "errors": [...]}`` dict in its slot instead of raising, so one bad model
+    does not lose the others."""
+    out = []
+    for text in _carapace.run_many([_text(m) for m in models], threads):
+        doc = json.loads(text)
+        out.append(Results(doc["report"]) if doc["valid"] else doc)
+    return out

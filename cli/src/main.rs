@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
-use carapace_input::input_v1::{decode, CarapaceInputV1, RunOptions, Session};
+use carapace_core::analysis::{set_parallelism, Parallelism};
+use carapace_input::input_v1::{decode, run_many, CarapaceInputV1, RunOptions, Session};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
@@ -43,6 +44,21 @@ enum Command {
         /// Print one JSON line per slice to stderr.
         #[arg(long)]
         progress: bool,
+        /// Pretty-print the JSON.
+        #[arg(long)]
+        pretty: bool,
+        /// Threads for the solver and element assembly (`0` = all cores). Results do not depend on it.
+        #[arg(long, default_value_t = 1)]
+        threads: usize,
+    },
+    /// Run several independent models concurrently; one result per model, in argument order.
+    Batch {
+        /// Model files.
+        #[arg(required = true)]
+        models: Vec<PathBuf>,
+        /// Models run at once (`0` = all cores).
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
         /// Pretty-print the JSON.
         #[arg(long)]
         pretty: bool,
@@ -137,13 +153,58 @@ fn execute(cli: Cli) -> std::io::Result<bool> {
                 Ok(false)
             }
         },
+        Command::Batch {
+            models,
+            threads,
+            pretty,
+        } => {
+            let mut results = vec![serde_json::Value::Null; models.len()];
+            let mut inputs = Vec::new();
+            let mut slots = Vec::new();
+            for (at, path) in models.iter().enumerate() {
+                let text = read_source(path)?;
+                let mut de = serde_json::Deserializer::from_str(&text);
+                match serde_path_to_error::deserialize::<_, CarapaceInputV1>(&mut de) {
+                    Ok(input) => {
+                        inputs.push(input);
+                        slots.push(at);
+                    }
+                    Err(e) => {
+                        results[at] = serde_json::json!({ "valid": false, "errors": [Diagnostic {
+                            stage: "parse", path: Some(e.path().to_string()), detail: e.inner().to_string().into(),
+                        }] })
+                    }
+                }
+            }
+            let options = RunOptions::default();
+            for (at, outcome) in slots.into_iter().zip(run_many(inputs, threads, &options)) {
+                results[at] = match outcome {
+                    Ok(report) => serde_json::json!({ "valid": true, "report": report }),
+                    Err(e) => serde_json::json!({ "valid": false, "errors": [Diagnostic {
+                        stage: "decode", path: None, detail: serde_json::to_value(&e).unwrap_or_default(),
+                    }] }),
+                };
+            }
+            for (result, path) in results.iter_mut().zip(&models) {
+                result["path"] = path.display().to_string().into();
+            }
+            let ok = results
+                .iter()
+                .all(|r| r["valid"] == true && r["report"]["completed"] == true);
+            emit(&serde_json::json!({ "results": results }), pretty, None)?;
+            Ok(ok)
+        }
         Command::Run {
             model,
             out,
             step_budget,
             progress,
             pretty,
+            threads,
         } => {
+            if threads != 1 {
+                set_parallelism(Parallelism::Threads(threads));
+            }
             let mut session = match load(&model)? {
                 Ok(session) => session,
                 Err(diagnostic) => {

@@ -4,13 +4,13 @@
 //! grouping, load patterns, nodal and element loads, and recorder resolution
 //! through an `(ElementKind, row) -> E::Id` map ([`ElementIds`]).
 
+use carapace_core::model::NodeKey;
 use std::collections::HashMap;
 
 use carapace_core::model::{
     BeamIntegration, Domain, ElementLoadComponents, ElementOps, LoadPatternId, Material, Node,
     Orientation,
 };
-use slotmap::Key;
 
 use super::stages::{compile_stages, load_series_of};
 use crate::input_v1::error::DecodeError;
@@ -100,7 +100,7 @@ pub(super) fn add_nodes<const NDIM: usize, const NDOF: usize, NId, E>(
     table: &NodeTable,
 ) -> Result<Vec<NId>, DecodeError>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -163,7 +163,7 @@ pub(super) fn add_equal_dofs<const NDIM: usize, const NDOF: usize, NId, E>(
     node_at: &impl Fn(u32, &'static str) -> Result<NId, DecodeError>,
 ) -> Result<(), DecodeError>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -251,7 +251,7 @@ pub(super) fn add_linear_constraints<const NDIM: usize, const NDOF: usize, NId, 
     node_at: &impl Fn(u32, &'static str) -> Result<NId, DecodeError>,
 ) -> Result<(), DecodeError>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -495,7 +495,7 @@ fn add_load_patterns<const NDIM: usize, const NDOF: usize, NId, E>(
     table: &LoadPatternTable,
 ) -> Vec<LoadPatternId>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -523,7 +523,7 @@ pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     make_load: impl Fn(&ElementLoadSpec) -> Option<E::Load>,
 ) -> Result<ModelSession<NDIM, NDOF, NId, E>, DecodeError>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {

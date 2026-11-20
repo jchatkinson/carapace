@@ -16,8 +16,8 @@
 //! [ 2 dq^T W   2 beta^2 dlambda    ] [delta lambda] = [-g ]
 //! ```
 
+use crate::model::NodeKey;
 use nalgebra::DVector;
-use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, LimitStateConfig, NodeId, SparseMatrix};
 
@@ -513,7 +513,7 @@ fn all_finite(v: &DVector<f64>) -> bool {
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> Analysis<NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -1280,7 +1280,7 @@ fn attempt<const NDIM: usize, const NDOF: usize, NId, E>(
     factorizations: &mut usize,
 ) -> Result<Accepted, ArcFailure>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     let n = context.q_n.len();

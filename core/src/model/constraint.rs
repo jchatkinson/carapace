@@ -4,9 +4,8 @@
 //! these. Constraints are homogeneous (no offset term), so an increment of a
 //! slave follows its masters' increments exactly.
 
+use crate::model::NodeKey;
 use std::collections::{HashMap, HashSet};
-
-use slotmap::Key;
 
 use super::dof_table::{DofEntry, DofTable};
 
@@ -20,7 +19,7 @@ pub(crate) struct LinearConstraint<NId> {
 /// Merges repeated masters (summing their coefficients) and drops terms
 /// that vanish, exactly or relative to the largest coefficient. The order
 /// of first appearance is kept so resolved terms are reproducible.
-pub(crate) fn normalize<NId: Key>(terms: &[(NId, usize, f64)]) -> Vec<(NId, usize, f64)> {
+pub(crate) fn normalize<NId: NodeKey>(terms: &[(NId, usize, f64)]) -> Vec<(NId, usize, f64)> {
     let mut merged: Vec<(NId, usize, f64)> = Vec::with_capacity(terms.len());
     for &(node, dof, coeff) in terms {
         match merged.iter_mut().find(|(n, d, _)| *n == node && *d == dof) {
@@ -50,7 +49,7 @@ pub(crate) enum ResolveError<NId> {
 /// resolves to exactly `1 * u_eq` becomes an alias of that equation
 /// (`DofEntry::Free`), which is also what an identity tie always was; one that
 /// resolves to nothing is `Fixed`; anything else is `Affine`.
-pub(crate) fn resolve<NId: Key, const NDOF: usize>(
+pub(crate) fn resolve<NId: NodeKey, const NDOF: usize>(
     constraints: &[LinearConstraint<NId>],
     table: &mut DofTable<NId, NDOF>,
 ) -> Result<(), ResolveError<NId>> {
@@ -82,7 +81,7 @@ pub(crate) fn resolve<NId: Key, const NDOF: usize>(
     Ok(())
 }
 
-fn resolve_slave<NId: Key, const NDOF: usize>(
+fn resolve_slave<NId: NodeKey, const NDOF: usize>(
     slave: (NId, usize),
     constraints: &[LinearConstraint<NId>],
     index: &HashMap<(NId, usize), usize>,

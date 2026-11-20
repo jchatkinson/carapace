@@ -18,12 +18,12 @@ use carapace_core::analysis::{
     ConstraintHandler, ConvergenceTest, GroundMotion, Integrator, Mode, RayleighDamping,
     StopReason, TransientAnalysis,
 };
+use carapace_core::model::NodeKey;
 use carapace_core::model::{
     Domain, Element, Element3, ElementOps, LimitKind, LimitStateConfig, LoadPatternId, Node3Id,
     NodeId, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 use serde::Serialize;
-use slotmap::Key;
 use std::collections::HashMap;
 
 use super::error::ModelErrorDetail;
@@ -46,7 +46,7 @@ fn fiber_value<const NDIM: usize, const NDOF: usize, NId, E>(
     response: FiberResponseKind,
 ) -> Option<f64>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     let responses = domain.element_fiber_responses(element)?;
@@ -80,7 +80,7 @@ fn gauss_value<const NDIM: usize, const NDOF: usize, NId, E>(
     component: u8,
 ) -> Option<f64>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     if let Some(responses) = domain.element_shell_responses(element) {
@@ -121,7 +121,7 @@ fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
     reactions: &dyn Fn(&[NId]) -> Vec<f64>,
     out: &mut Vec<f64>,
 ) where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     use super::sequence::BulkQuantity;
@@ -184,7 +184,7 @@ fn embedded_bar_value<const NDIM: usize, const NDOF: usize, NId, E>(
     quantity: EmbeddedBarQuantity,
 ) -> Option<f64>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     let (force, strain, stress, ruptured) = domain.element_embedded_bar_response(element)?;
@@ -552,7 +552,7 @@ pub(super) enum CompiledStageKind<NId> {
 
 enum StageRunner<const NDIM: usize, const NDOF: usize, NId, E>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -812,7 +812,7 @@ pub type Session3 = ModelSession<SPATIAL_NDIM, SPATIAL_NDF, Node3Id, Element3>;
 
 pub struct ModelSession<const NDIM: usize, const NDOF: usize, NId, E>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -855,7 +855,7 @@ where
 impl<const NDIM: usize, const NDOF: usize, NId, E> std::fmt::Debug
     for ModelSession<NDIM, NDOF, NId, E>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
@@ -873,7 +873,7 @@ where
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> ModelSession<NDIM, NDOF, NId, E>
 where
-    NId: Key + Copy,
+    NId: NodeKey + Copy,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
