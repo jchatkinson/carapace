@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# The Python extension builds with maturin and needs a Python toolchain, so it is its own workspace.
+exclude = ["py"]
 members = ["core", "input", "wasm-bridge", "cli"]
 
 [workspace.package]

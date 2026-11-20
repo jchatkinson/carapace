@@ -6,7 +6,7 @@ Feature list: `README.md`.
 
 ## Layout
 
-Cargo workspace of four crates:
+Cargo workspace of four crates (plus `py/`):
 
 - `core/` (`carapace-core`): the native engine. `model/` (domain, nodes, elements, materials, sections,
   constraints, load patterns) and `analysis/` (solvers, integrators, algorithms, arc-length, modal, transient).
@@ -21,6 +21,8 @@ Cargo workspace of four crates:
   `docs/native-api-plan.md`.
 - `cli/` (`carapace-cli`): the `carapace` binary (`validate`, `run`, `schema`; JSON in, JSON out). See
   `docs/native-api.md`. Example models in `examples/models/`.
+- `py/` (`carapace-fe`): the Python package (PyO3 + maturin, its own Cargo workspace, excluded from `cargo test`).
+  Tests: `cd py && maturin develop && pytest tests`.
 
 Other directories: `docs/` (design and wire-format docs), `comparison/` (Python harness vs real OpenSeesPy,
 uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, gitignored).

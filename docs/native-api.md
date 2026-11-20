@@ -26,6 +26,31 @@ cargo run -p carapace-cli -- schema > carapace-input.schema.json
 
 Examples live in `examples/models/` and are run by the `bundled_example_models_run` test, so they stay valid.
 
+## Python
+
+`py/` is the `carapace-fe` package (PyO3, abi3, maturin; its own Cargo workspace so `cargo test` needs no Python):
+
+```bash
+cd py && python -m venv .venv && .venv/bin/pip install maturin numpy pytest
+.venv/bin/maturin develop --release && .venv/bin/python -m pytest tests
+```
+
+```python
+import carapace
+m = carapace.Model(ndm=2)
+a = m.add_node(0, 0, fixed="all"); b = m.add_node(0, 3000)
+m.add_elastic_beam(a, b, e=200000, a=8000, iz=1e8)
+m.add_static_stage(); m.add_nodal_load(b, 0, 10000)
+r = m.record_node_disp(b, 0)
+print(carapace.validate(m))                 # {"valid": True, "ndm": 2} or structured errors with a path
+print(carapace.run(m).recorder(r))          # (n, 2) numpy array of (load factor, displacement)
+```
+
+`Model` covers nodes, trusses, elastic beams (2D/3D), nodal loads, static and modal stages and node recorders;
+anything else goes in `model.raw` (a dict merged over the output) or pass a plain `CarapaceInputV1` dict or JSON
+text to `validate`/`run`. Invalid models raise `ModelError` (with `.errors`); an analysis failure does not raise:
+check `results.completed` / `results.error`. The GIL is released while the engine runs.
+
 ## Rust: `Session::run`
 
 ```rust

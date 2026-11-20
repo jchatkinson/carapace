@@ -6,3 +6,7 @@
 /comparison/__pycache__
 /docs-site/__pycache__
 .claude/
+/py/target
+/py/.venv
+__pycache__
+*.so
