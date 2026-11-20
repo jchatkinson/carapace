@@ -44,8 +44,9 @@ example payload.
   `elementKindNotInProfile`. The decoder picks the profile once from `ndm`.
 - **Every table is optional.** An omitted table is an empty one, so a model
   lists only what it uses.
-- **Plain JS values.** The boundary accepts ordinary objects and arrays. A
-  transferable typed-array format is planned but not implemented.
+- **Plain JS values in, typed arrays for bulk out.** The boundary accepts ordinary objects and arrays
+  as input (a typed-array input format is not implemented). The large per-step output, the `bulk`
+  recorders' `progress` and `values`, comes back as transferable `Float64Array`s.
 
 ## Entry points
 
@@ -53,6 +54,7 @@ example payload.
 decodeInput(value: CarapaceInputV1): WasmSession   // throws DecodeError
 session.advance(stepBudget: number): StepOutcome
 session.currentStageId(): string | undefined       // undefined once all stages done
+session.modelOutput(): ModelOutput                 // resolved embedded-bar segments, routing, sr
 session.free()
 ```
 
@@ -78,6 +80,7 @@ Only `header` is required.
 | `planeMaterials` | `PlaneMaterialSpec[]` | 2D (arena for `triangles`/`quads`) |
 | `triangles` | `TriangleTable` | 2D |
 | `quads` | `QuadTable` | 2D |
+| `embeddedBars` | `EmbeddedBarSpec[]` | 2D (rebar polylines embedded in `triangles`/`quads`) |
 | `shellSections` | `ShellSectionSpec[]` | 3D (arena for `shell4s`) |
 | `shell3s` | `Shell3Table` | 3D |
 | `shell4s` | `Shell4Table` | 3D |
@@ -138,6 +141,7 @@ to other arena entries; cycles are rejected (`cyclicMaterialReference`).
 | `series` | `children: materialIndex[]` |
 | `minMax` | `inner`, `minStrain`, `maxStrain` |
 | `hysteretic` | `mom1p`/`rot1p`..`mom3p`/`rot3p`, `mom1n`/`rot1n`..`mom3n`/`rot3n`, `pinchX`, `pinchY`, `damfc1`, `damfc2`, `beta` |
+| `csfmRebar` | `es`, `fy`, `ft`, `epsU`, `fctm`, `ecm`, `diameter`, `rhoEff`, `lambda`, `tensionStiffening`. The CSFM embedded-rebar law; see [CSFM](#csfm-concrete-and-embedded-rebar). |
 | `pinching4` | `stress1p`/`strain1p`..`4p`, `…1n`..`4n`, `rDispP/N`, `rForceP/N`, `uForceP/N`, `gammaKParams`/`gammaDParams`/`gammaFParams` (4-tuples) with `gammaKLimit`/`gammaDLimit`/`gammaFLimit`, `gammaE`, `dmgCyc: "energyBased" \| "cycleBased"` |
 
 ## Elements
@@ -198,14 +202,125 @@ Notes:
   six DOFs per node and use 2x2 Gauss points. The local frame follows OpenSees: `e1` from the edge
   midpoints, `e3 = e1 x e2` (the node order sets the sign), and a quad is treated as flat in that
   frame (warp is tolerated as OpenSees does). `ShellSectionSpec` (the `shellSections` arena):
-  `{ kind: "elasticMembranePlate", e, nu, h, rho }` (invalid constants are `invalidShellSection`).
+  `{ kind: "elasticMembranePlate", e, nu, h, rho, modifiers? }` (invalid constants are `invalidShellSection`).
+  `modifiers` are ETABS-style stiffness modifiers, `{ f11?, f22?, f12?, m11?, m22?, m12?, v13?, v23? }`, each
+  defaulting to 1 and required to be finite and positive (otherwise `invalidShellSection`). `f11 f22` scale the
+  membrane normal terms, `f12` the in-plane shear term, `m11 m22` the bending terms, `m12` the twisting term and
+  `v13 v23` the transverse shear. The Poisson coupling terms scale by the geometric mean of the two diagonal
+  factors (`sqrt(f11) sqrt(f22)`, `sqrt(m11) sqrt(m22)`), which keeps the tangent symmetric positive definite. The
+  drilling stiffness of a `shell4s` row follows the modified membrane block. Recorded resultants and element
+  forces include the modifiers, strains do not, and mass and body loads are unchanged. `v13` and `v23` have no
+  effect on `shell3s` (no transverse shear). OpenSees has no such modifiers: a model matches OpenSees only when
+  `f11 = f22 = f12 = f`, `m11 = m22 = m12 = m` and, for `shell4s`, `v13 = v23 = m`, exported as `E' = E f` with
+  `Ep_modifier = m / f` (OpenSees takes the shear from the membrane modulus and multiplies it by `Ep_modifier`, so
+  shear scales by `f (m / f) = m`).
   Mass is a row-sum lumped translational mass `rho h` (OpenSees uses a consistent mass), so modal
   frequencies agree with OpenSees only approximately. A `shell3s` triangle has no drilling penalty and no transverse shear (its `gamma_xz`, `gamma_yz` and `Qx`, `Qy` are zero) and its local x axis is the edge from node 0 to node 1. A triangle has 4 Gauss points `(1/3,1/3,1/3)` with weight `-9/16` and `(1/5,3/5,1/5)` permutations with `25/48`; a Gauss-point recorder on a shell has 4 points
   and 8 components per quantity, in OpenSees' section order and sign: strain `[eps_x, eps_y,
   gamma_xy, kappa_x, kappa_y, 2 kappa_xy, gamma_xz, gamma_yz]`, `stress` the resultants `[Nx, Ny, Nxy,
   Mx, My, Mxy, Qx, Qy]` in the local axes (OpenSees' bending resultants have the opposite sign to
   `M = D kappa`). An `elementForce` recorder reports the 24 global nodal forces.
+- `PlaneMaterialSpec` also has `{ kind: "csfmConcrete", fck, ecm?, law, softening, tensileRegularization? }`
+  (see [CSFM](#csfm-concrete-and-embedded-rebar)).
 - 3D fiber elements have no `corotational` flag and no `transform` field.
+
+### CSFM concrete and embedded rebar
+
+The Compatible Stress Field Method pieces: a rotating principal-strain concrete, the CSFM rebar
+law, and rebar polylines embedded in a 2D continuum mesh. Units are N, mm, MPa throughout.
+
+**`csfmConcrete`** (a `planeMaterials` entry; 2D only):
+
+| Field | Meaning |
+|---|---|
+| `fck` | Characteristic strength, `0 < fck <= 65` MPa. Above 50 the EN 1992-1-1 Table 3.1 strength constants apply (`eps_c2`, `eps_cu2`, the parabola exponent `n` and `fctm`); up to 50 they are `-0.002`, `-0.0035`, `2` and `0.3 fck^(2/3)`. |
+| `ecm?` | Replaces the derived `Ecm = 22000 ((fck + 8) / 10)^0.3`. Finite and positive. |
+| `law` | `"parabolaRectangle"` (parabola `1 - (1 - eps/eps_c2)^n` to `eps_c2` (`-0.002`, `n = 2` up to C50/60), then a plateau) or `"elasticIdeallyPlastic"`. |
+| `softening` | Kaufmann compression softening `kc2 = min(1, 1 / (0.8 + 140 eps_1))` on or off. |
+| `tensileRegularization?` | `gamma`, `0 < gamma < 1`. Omitted gives the exact zero-tension law. |
+
+It is a stateless rotating principal-strain law with `nu = 0`: stress depends on the current
+principal strains only, and unloading retraces loading. The tangent is the analytic consistent
+tangent, which is nonsymmetric when softening is on (the solver uses LU for it). Concrete has no
+tensile strength. `tensileRegularization` is a **numerical regularization**, not a material
+property: it adds a small tension stiffness `gamma * fctm (1 - exp(-eps / eps_reg))` so a cracked
+element does not make the stiffness singular, and results (especially bar stress between cracks)
+depend on it slightly. Choose it deliberately and report it with the results. `fck` outside the
+range, a bad `ecm` or a bad `gamma` is `invalidPlaneMaterial`. The enhanced quad accepts linear
+materials only, so `csfmConcrete` with `formulation: "enhanced"` is `invalidModel`
+(`invalidElement`).
+
+**`csfmRebar`** (a `materials` entry):
+
+| Field | Meaning |
+|---|---|
+| `es`, `fy`, `ft`, `epsU` | Bare-steel bilinear properties; `ft > fy` and `epsU > fy / es`. |
+| `fctm`, `ecm` | The host concrete's tensile strength and modulus, given explicitly (not referenced). |
+| `diameter` | Bar diameter (mm). |
+| `rhoEff` | Effective reinforcement ratio, `0 < rhoEff < 1`. |
+| `lambda` | Crack-spacing calibration factor. |
+| `tensionStiffening` | `true`: tension follows the TCM/POM average-strain relation. `false`: symmetric bare bilinear steel. Compression is always bare steel. |
+
+With tension stiffening, `rhoEff` at or above `rho_crit = fctm / (fy - (es / ecm - 1) fctm)` routes to
+the Tension Chord Model (TCM, crack spacing `sr`), below it to the Pull-Out Model (POM). The law is
+stateless and nonlinear-elastic: unloading retraces the loading curve. Invalid steel, ratio or
+bond inputs, and a TCM startup bridge with `2 sigma_min > fy`, are `invalidMaterial`
+(`index`, `reason`). A bar is rupture-flagged strictly past `eps_m(ft)` (tension stiffening) or
+`|eps| > epsU` (bare steel or compression).
+
+**`embeddedBars`**: `{ polyline: [x0, y0, x1, y1, ...], area, material, hosts? }[]`, one row per
+bar; `material` indexes `materials` (a `csfmRebar` for CSFM, but any uniaxial material works) and
+`area` is the bar cross-section (mm^2). The polyline is split at every mesh-edge crossing so each
+piece lies in one `triangles`/`quads` host, and each piece becomes an `embeddedBar` element whose
+strain is the host displacement field projected on the piece (each piece is bound to the host
+containing its midpoint). `hosts` is `"all"` (default) or `{ kind: "tri3" | "quad4", index }[]`,
+which restricts the elements that may host the bar. Errors: fewer than two vertices, a bad area
+or a non-finite coordinate is `invalidRow` (`embedded_bars`); an unknown material is
+`unknownMaterialIndex`; an unknown host element is `unknownElementIndex`; a piece whose midpoint
+is in no allowed host (outside the mesh, or across a hole) is `invalidModel` with
+`embeddedBarOutsideMesh`, one in several overlapping hosts is `embeddedBarAmbiguousHost`, and a
+path with no length is `embeddedBarDegeneratePath`. The table in a 3D model is `tableNotInProfile`.
+
+**Bond slip** (`embeddedBars[i].bond`, ULS; omit for the perfect-bond bar above). The bar slips against the concrete
+through bond springs; N, mm, MPa:
+
+| Field | Meaning |
+|---|---|
+| `perimeter` | Total bar perimeter `n·π·Ø` (mm). |
+| `fbd` | Design bond strength (MPa). |
+| `gb` | Elastic bond stiffness `kG·Ec/Ø` (MPa per mm of slip). |
+| `rf` | Plastic slope as a fraction of `gb`; default `1e-5`. |
+| `slipLimit` | Stop slip `α·δumax` (mm) of the bond and anchorage springs. |
+| `lockAngle` | Turn angle (degrees) above which a vertex is slip-locked; default 15. |
+| `start`, `end` | Optional anchorage spring at the first/last point: `{ fau, ka, ksn? }` (N, N/mm, default `1e-2`). Omitted: a straight end. |
+
+Each bar point gets a **concrete image** node (no DOFs of its own: the host's shape functions at the point) and a **rod node**
+(free, with the motion normal to the bar tied to the image). The rod segments are `embeddedBar` elements between rod nodes (the
+same law, rupture flag and recorders as a perfect-bond segment); an oriented `zeroLength` per rod node carries the bond law
+(`steel01`: stiffness `Gb·P·l`, yield `fbd·P·l`, `l` the tributary length), and an end spring carries `Fau`, `Ka`. At a slip-locked
+vertex the segments attach to the image node and no spring acts. The springs are appended to the `zeroLengths` table after its own
+rows; `modelOutput().embeddedBars[i].bond.points[k]` gives each point's position, tangent, tributary length and the row of its
+`spring` and `endSpring`. The springs report `bondSlip` / `anchorageSlip` utilization `|slip|/slipLimit` (location
+`elementKind: "zeroLength"`, `elementIndex` that row), so `stop.materialLimit` and the limit history see them. The slip stays in the
+spring's state (`steel01` is hysteretic): after plastic slip the bar unloads elastically with a permanent offset. Bulk recorder
+`{ table: "zeroLengths", quantity: "deformation" | "force" }` records every `zeroLength` row (one value per row, along its first material
+direction): the slip in mm and the spring force in N. Errors: a non-finite or non-positive `perimeter`, `fbd`, `gb`, `slipLimit`, an
+`rf` outside [0, 1], or a bad end spring is `invalidRow` (`embedded_bars`).
+
+**Anchored ends** (`embeddedBars[i].anchoredStart` / `anchoredEnd`, booleans, default `false`; with or without `bond`). The bar end is
+anchored beyond the mesh: its rod node follows the concrete only normal to the bar, `u_R = (n·u_C) n`, and is held along the bar, so the
+end force of the bar goes to that restraint and not into the concrete (a bar that runs into a foundation or a region that is not
+modelled). No bond or anchorage spring acts at an anchored end. A perfectly bonded bar with an anchored end is built from the same
+nodes, with every interior point slip-locked, and reports no `bond` group in `modelOutput()`. The bar must still start or end inside the
+mesh (`embeddedBarOutsideMesh`); the anchored end point is the last point of the bar in the concrete.
+
+**`modelOutput()`** is available right after `decodeInput`:
+`{ embeddedBars: { firstSegment, segments, routing?, sr?, bond? }[] }`, one group per `embeddedBars` row.
+`segments[s]` is `{ start, end, length, hostKind, hostNodes }` (undeformed end points in drawing
+order; the host's nodes as `nodes` rows). Results are indexed `(bar, segment)`; the flat
+`embeddedBar` element index of segment `s` of bar `b` is `groups[b].firstSegment + s`. For a
+`csfmRebar` bar, `routing` (`"tcm"` or `"pom"`) and `sr` (crack spacing, mm; `0` for POM) report
+what the material resolved to.
 
 ### Fiber sections
 
@@ -215,6 +330,14 @@ is an arena index parallel to the coordinate arrays. `z` is omitted (or empty)
 for a 2D model and parallel to `y` in a 3D model (biaxial bending); a mismatch
 is `invalidRow`. Fiber sections carry no torsion; 3D elements supply it through
 their own `g`/`j`.
+
+`y` (and `z`) are measured from the element axis, which Carapace takes as given.
+OpenSees instead measures a fiber section's coordinates from the area-weighted
+centroid of all its fibers (steel and concrete alike), so a section that is not
+symmetric about the origin it was written against bends differently there under
+an axial load on the element axis. A producer that wants OpenSees' behaviour
+moves the origin to that centroid before filling the table; PySees' compiler
+does.
 
 ## Constraints
 
@@ -263,6 +386,11 @@ handler (the session chooses it when the model has any).
     means 0; a nonzero value in 2D is `invalidRow`). The beam-column kinds accept
     element loads today; any other `elementKind` fails decode with
     `unsupportedElementLoad`. Several rows for the same element and pattern sum.
+  - `load`: `{ kind: "trapezoid", wxI, wyI, wxJ, wyJ }`. Linearly varying force per length in the
+    element's **local** axes: intensity `(wxI, wyI)` at node i varying linearly to `(wxJ, wyJ)` at node j.
+    2D `elasticBeamColumn2d` only (consistent equivalent nodal loads and fixed-end forces are exact);
+    every other kind, including the 3D beam, `dispBeamColumn2d` and `forceBeamColumn2d`, fails decode with
+    `unsupportedElementLoad`. It sums with `uniform` and other `trapezoid` rows on the element.
   - Continuum loads (2D `tri3`/`quad4` only; a beam, truss or spring takes none of them, and a
     continuum element takes no `uniform`, both `unsupportedElementLoad`):
     `{ kind: "body", bx, by }` (force per unit volume, global axes),
@@ -320,6 +448,16 @@ load factor/time `0`: the stage's initial conditions, i.e. step 0 of that analys
 ### Integrators
 
 - `{ kind: "loadControl", increment }`
+- `{ kind: "loadControlCutbacks", increment, minIncrement }`: load control with adaptive
+  substepping, `0 < minIncrement <= increment`. A step that fails to converge is reverted and
+  retried at half its size, down to `minIncrement`, after which the stage fails with
+  `loadControlExhausted`. The stage's `steps` counts **nominal** increments: it ends when
+  `steps * increment` of load factor has been accepted, however many substeps that took, and the
+  uncovered remainder of a cut-back step is requested again by the next substep. Every accepted
+  substep counts against an `advance` budget and records one sample of every recorder. This is a
+  Carapace extension, not OpenSees' `LoadControl dLambda numIter minLambda maxLambda`, which
+  rescales the next step by iteration count without ever reverting a failed one; a plain
+  `loadControl` stays exactly OpenSees' fixed-increment semantics.
 - `{ kind: "displacementControl", node, dof, increment }`
 - `{ kind: "arcLength", ...ArcLengthSpec }`. See [arclength.md](arclength.md)
   for behavior. Fields: `initialRadius`, `minRadius?`, `maxRadius?` (both default
@@ -330,7 +468,14 @@ load factor/time `0`: the stage's initial conditions, i.e. step 0 of that analys
   - `scales`: `{ kind: "explicit", displacement, rotation?, load }` or
     `{ kind: "auto", load }`.
   - `seed`: `{ components: { node, dof, value }[], load? }`.
-  - `stop`: `{ displacement?: { node, dof, value, exact? }, loadFactor?: { value, exact? }, loadFactorZeroCrossing?, maxChordLength? }`.
+  - `stop`: `{ displacement?: { node, dof, value, exact? }, loadFactor?: { value, exact? }, loadFactorZeroCrossing?, maxChordLength?, materialLimit? }`.
+  - `stop.materialLimit`: `{ exact?, concreteCrushingLimit?, concreteTensileLimit?, rebarStrainLimit? }`
+    stops when the controlling CSFM material-limit utilization reaches `1` (crushing at
+    `|eps_cu2| = 0.0035` and rebar rupture are always checked; the optional positive strain limits
+    replace the crushing limit or add a concrete tensile-strain / user rebar-strain limit). With
+    `exact` the bracketing step is retaken so the stage ends on the limit
+    (`continuation.stop.reason = "materialLimit"`). A non-positive or non-finite limit is
+    `invalidAnalysisOption` with field `integrator.stop.materialLimit`.
 
 ### Algorithms and convergence
 
@@ -354,7 +499,7 @@ Each recorder is one scalar channel, tagged by `response`. `elementKind` is the
 shared kind enum above. `dof` is bounded by the profile's DOFs per node
 (`invalidDof`). `component` of an `elementForce` recorder indexes the element's
 local force vector (width 6 in 2D, 12 in 3D) and of an `elementLoad` recorder
-the load (3D: `wx, wy, wz`; 2D: 16 components, `[wx, wy, bx, by, t0x, t0y, p0, ..., t3x, t3y, p3]` for beam uniform, body force, then traction and pressure of each edge); one past the width is
+the load (3D: `wx, wy, wz`; 2D: 18 components, `[wx, wy, bx, by, t0x, t0y, p0, ..., t3x, t3y, p3, dwx, dwy]` for beam uniform, body force, traction and pressure of each edge, then the beam taper); one past the width is
 `invalidRecorderComponent`.
 
 | `response` | Fields |
@@ -363,7 +508,9 @@ the load (3D: `wx, wy, wz`; 2D: 16 components, `[wx, wy, bx, by, t0x, t0y, p0, .
 | `elementForce`, `elementLoad` | `elementKind`, `elementIndex`, `component` |
 | `modeShape` | `mode`, `node`, `dof` |
 | `fiber` | `elementKind`, `elementIndex`, `point`, `fiber`, `quantity: "strain" \| "stress"` |
-| `gaussPoint` | `elementKind` (`tri3`/`quad4`), `elementIndex`, `point` (`tri3`: 0; `quad4`: 0..4 in node order of the 2x2 rule), `quantity: "strain" \| "stress"`, `component` (0..3 = x, y, xy; engineering shear for strain). The enhanced quad reports the recovered values including the internal modes. Static and transient stages only. |
+| `gaussPoint` | `elementKind` (`tri3`/`quad4`), `elementIndex`, `point` (`tri3`: 0; `quad4`: 0..4 in node order of the 2x2 rule), `quantity: "strain" \| "stress" \| "principalStrain" \| "principalStress" \| "kc2"`, `component` (0..3 = x, y, xy; engineering shear for strain). The enhanced quad reports the recovered values including the internal modes. Static and transient stages only. For `principalStrain`/`principalStress`, components `0, 1, 2` are `eps_1 >= eps_2` (`sigma_1 >= sigma_2`) and `theta`, the counter-clockwise angle in radians from global x to the first principal direction; a shell records nothing for them. `kc2` has one component (`0`) and needs a `csfmConcrete` point (`recorderNotApplicable` otherwise). `elementKind: "embeddedBar"` addresses a segment by its flat index and reports axial strain/stress in component 0. |
+| `embeddedBar` | `bar`, `segment`, `quantity: "axialForce" \| "strain" \| "stress" \| "ruptured"` (`axialForce = stress * area`, tension positive; `ruptured` is 1 past the rupture strain, else 0). Static and transient stages only. |
+| `bulk` | `table: "triangles" \| "quads" \| "embeddedBars" \| "nodes"`, `quantity: "strain" \| "stress" \| "principalStrain" \| "principalStress" \| "kc2" \| "axialForce" \| "ruptured" \| "displacement" \| "reaction"`. Records every element and Gauss point of the table at every accepted step as flat arrays, in `StepOutcome.bulkBatches` instead of `recorderBatches` (this recorder's slot in `recorderBatches` stays empty). `axialForce`/`ruptured` belong to `embeddedBars` (`strain`/`stress` work on all three element tables, one value per segment); principal values and `kc2` belong to the continuum tables, and `kc2` needs every point to be `csfmConcrete`. `nodes` takes `displacement` or `reaction` only (and they take only `nodes`): every node in input node-table order, one point, `ndf` components (`ux, uy, rz` in 2D; the six DOFs in 3D), a fixed DOF reporting its prescribed displacement (`0` at a support), and a free DOF's reaction being only the convergence residual. A reaction frame costs one pass over the model, not one per DOF; in a `transient` stage it includes the ground-motion inertial load, as the scalar `reaction` recorder does, and costs a sweep per DOF. Static and transient stages only. |
 
 ## Results: `StepOutcome`
 
@@ -378,6 +525,9 @@ Returned by `advance`:
 | `error` | `AnalysisErrorDetail \| undefined`; sticky once set. |
 | `continuation` | Arc-length diagnostics for the last accepted step, or `undefined`. |
 | `recorderBatches` | `RecorderBatch[]`: only the samples produced by this call. |
+| `bulkBatches` | `BulkBatch[]`: this call's `bulk` recorder output. |
+| `stepDiagnostics` | `StepDiagnostic[]`: the solver work of each `static` step this call took (see below). |
+| `limitHistory` | `LimitSample[]`: the controlling CSFM material-limit utilization at each sample (see below). |
 
 `RecorderBatch`: `{ recorderIndex, stageIndex, firstSample, samples: [pseudoTime, value][] }`.
 `firstSample` plus `samples.length` gives the sample range, so a failed persist
@@ -385,11 +535,39 @@ can be retried without renumbering. With arc length the load factor can
 decrease and repeat, so order samples by sample index, never by load factor.
 The caller accumulates batches; there is no "history so far" accessor.
 
-`ContinuationDetail`: `radius`, `nextRadius`, `retries`, `correctorSolves`,
+`BulkBatch`: `{ recorderIndex, stageIndex, firstSample, elements, points, components, progress, values }`.
+`progress` and `values` are `Float64Array`s, not `number[]`: each is a fresh buffer of its own (not a view of
+wasm memory), so a worker can list `values.buffer` in `postMessage`'s transfer list and hand the frames to the
+main thread without a copy. `values` holds `progress.length` consecutive frames of `elements * points * components` numbers,
+in element, then point, then component order (element = table row, or the flat segment index for
+`embeddedBars`); `progress[i]` is frame `i`'s load factor or time. `firstSample` continues across
+`advance` calls like `RecorderBatch`'s.
+
+`LimitSample`: `{ progress, utilization, kind, elementKind, elementIndex }` for each sample a
+`static` stage recorded in the call (every accepted step, plus the initial state with
+`header.recordInitial`). `utilization >= 1` means a limit is reached. `kind` is
+`"concreteCrushing" | "concreteTensileStrain" | "rebarRupture" | "rebarStrainLimit" | "bondSlip" | "anchorageSlip"` (the default
+report checks crushing at `|eps_cu2| = 0.0035` and rupture only; the other two appear only through
+`stop.materialLimit`). The location is element-level: `elementIndex` is the row in the table of
+`elementKind` (the flat segment index for `embeddedBar`, mapped to `(bar, segment)` by
+`modelOutput()`). The list is empty for a model with no `csfmConcrete` or `csfmRebar`, and for
+`transient` and `modal` stages.
+
+`StepDiagnostic`: `{ progress, iterations, factorizations, cutback? }` for each step a `static` stage took in
+the call, in order, so entry `k` belongs with frame `k` of every `bulkBatches` entry and with `limitHistory[k]`
+(`header.recordInitial`'s initial sample has a frame and a limit entry but no step, so it shifts them by one).
+`progress` is the load factor the step ended at; `iterations` the Newton iterations (corrector solves under arc
+length) of the accepted attempt; `factorizations` the tangent factorizations over the step, failed attempts
+included. Under `loadControlCutbacks`, `cutback` is `{ nominalIncrement, acceptedIncrement, retries }`: the step
+asked for `nominalIncrement`, halved `retries` times, and landed `acceptedIncrement`, the rest being asked again
+by the next step. `cutback` is absent for any other integrator. The list is empty for `transient` and `modal`
+stages.
+
+`ContinuationDetail`: `radius, `nextRadius`, `retries`, `correctorSolves`,
 `factorizations`, `forceMeasure`, `arcError`, `chordLength`, `detSign`,
 `bifurcationSuspected`, `displacementScale`, `rotationScale`, `stop`
 (`{ reason, landedExactly, overshoot }`, where `reason` is
-`"displacementTarget" | "loadFactorTarget" | "loadFactorZeroCrossing" | "chordLength" | "stepCount"`).
+`"displacementTarget" | "loadFactorTarget" | "loadFactorZeroCrossing" | "chordLength" | "stepCount" | "materialLimit"`).
 
 ### Modal results: `modalResults()`
 
@@ -419,7 +597,9 @@ condensed; at least `modes` DOFs must carry mass.
 `invalidModeCount {requested, freeDofs}`, `invalidOption {field}`,
 `unsupportedLoadSeries`, `zeroLoadSensitivity`,
 `initialStateNotInEquilibrium {measure}`, `missingSeedDirection`,
-`cutbacksExhausted {step, attempts, radius, lastFailure}`, `continuationComplete`.
+`cutbacksExhausted {step, attempts, radius, lastFailure}`, `continuationComplete`,
+`loadControlExhausted {step, acceptedLoadFactor}` (a `loadControlCutbacks` stage halved down to
+`minIncrement` and still failed; `acceptedLoadFactor` is the last committed load factor).
 
 `lastFailure` is one of `"notConverged" | "stagnated" | "noDescent" | "nonFinite" | "singularSystem" | "inaccurateSolve" | "branchOrientation" | "degenerateConstraint"`.
 
@@ -441,6 +621,9 @@ condensed; at least `modes` DOFs must carry mass.
 | `elementKindNotInProfile` | `table` (an element kind of the other profile in a load or recorder) |
 | `invalidGaussPoint` | `recorder`, `point`, `count` (the element's Gauss-point count, 0 for a kind without any) |
 | `invalidPlaneMaterial` | `index`, `reason` |
+| `invalidMaterial` | `index`, `reason` (a `materials` entry with unusable constants, today a `csfmRebar`) |
+| `invalidEmbeddedBarSegment` | `recorder`, `bar`, `segment`, `count` (an `embeddedBar` recorder past the bar's piece count) |
+| `recorderNotApplicable` | `recorder`, `reason` (a quantity the target cannot produce: `kc2` off a `csfmConcrete` point, an empty `bulk` table, a `bulk` quantity the table does not have) |
 | `invalidRecorderComponent` | `recorder` (index), `component`, `width` |
 | `invalidRow` | `table`, `row`, `reason` (a row shape that is wrong for the profile or its sparse encoding) |
 | `invalidOrientation` | `table`, `row` |

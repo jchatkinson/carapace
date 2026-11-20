@@ -52,6 +52,17 @@ pub enum AnalysisError {
     /// The model failed `Domain::validate` (for example a nodal load on a
     /// DOF no element stiffens).
     InvalidModel(crate::model::ModelError),
+    /// `Integrator::LoadControlCutbacks` halved its attempted increment
+    /// down to (and including) `min_increment` and still failed to
+    /// converge. The last *committed* state (from a previous successful
+    /// call, if any) is untouched — this call accepted nothing — and
+    /// `accepted_load_factor` reports that committed pseudo-time, matching
+    /// TS's aborted `solveLoadPath` runs, which still report their last
+    /// accepted fraction.
+    LoadControlExhausted {
+        step: usize,
+        accepted_load_factor: f64,
+    },
 }
 
 /// Why one arc-length attempt was rejected. Attempts are retried with a

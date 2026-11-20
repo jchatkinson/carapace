@@ -20,6 +20,18 @@ pub enum IntegratorSpec {
     LoadControl {
         increment: f64,
     },
+    /// `loadControl` with adaptive substepping (`core::Integrator::LoadControlCutbacks`): a step
+    /// that fails to converge is reverted and retried at half its size, down to `minIncrement`
+    /// (`0 < minIncrement <= increment`), after which the stage fails with
+    /// `loadControlExhausted`. The stage's `steps` counts **nominal** increments: it ends once
+    /// `steps * increment` of load factor has been accepted, however many substeps that took. Each
+    /// accepted substep counts against an `advance` budget and records one sample of every
+    /// recorder; the uncovered remainder of a cut-back step is requested again by the next
+    /// substep.
+    LoadControlCutbacks {
+        increment: f64,
+        min_increment: f64,
+    },
     /// `node`/`dof` index into `NodeTable`; the compiler is responsible for
     /// having registered a reference load with nonzero sensitivity on that
     /// DOF — decode does not re-derive that check.
@@ -166,6 +178,34 @@ pub struct ArcStopSpec {
     pub load_factor_zero_crossing: bool,
     #[tsify(optional)]
     pub max_chord_length: Option<f64>,
+    /// Stop when the controlling material-limit utilization reaches `1` (CSFM crushing or rebar
+    /// rupture, optionally tightened by user strain limits).
+    #[tsify(optional)]
+    pub material_limit: Option<MaterialLimitSpec>,
+}
+
+/// Wire form of `core::MaterialLimitTarget`. The target is always utilization `1`. With
+/// `exact` the bracketing step is retaken so the stage ends on it. The optional strain limits
+/// (positive, finite) are `core::LimitStateConfig`'s: without them only the always-on limits
+/// are checked, i.e. concrete crushing at `|eps_cu2| = 0.0035` and rebar rupture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialLimitSpec {
+    #[serde(default)]
+    #[tsify(optional)]
+    pub exact: bool,
+    /// Replaces the default crushing strain limit `0.0035`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub concrete_crushing_limit: Option<f64>,
+    /// Enables the concrete tensile-strain limit (`eps_1 / limit`).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub concrete_tensile_limit: Option<f64>,
+    /// Enables a user rebar strain limit (`|eps| / limit`).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub rebar_strain_limit: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
@@ -204,7 +244,9 @@ pub enum LineSearchSpec {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[derive(Default)]
 pub enum AlgorithmSpec {
+    #[default]
     Linear,
     Newton {
         #[serde(default)]
@@ -216,12 +258,6 @@ pub enum AlgorithmSpec {
         tangent: TangentStrategySpec,
         max_dimension: u32,
     },
-}
-
-impl Default for AlgorithmSpec {
-    fn default() -> Self {
-        Self::Linear
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
@@ -412,6 +448,70 @@ pub enum FiberResponseKind {
 pub enum GaussQuantity {
     Strain,
     Stress,
+    /// Principal strains of a plane point: components `0`, `1`, `2` are `eps_1 >= eps_2` and the
+    /// angle `theta` (radians, counter-clockwise from global x to the `eps_1` direction). Records
+    /// nothing for a shell.
+    PrincipalStrain,
+    /// Principal stresses `sigma_1 >= sigma_2` and `theta`, as `PrincipalStrain`.
+    PrincipalStress,
+    /// Kaufmann's compression-softening coefficient `kc2` of a `csfmConcrete` point (component `0`
+    /// only; `1` with softening off or without principal tension). Any other point is
+    /// `DecodeError::RecorderNotApplicable`.
+    Kc2,
+}
+
+/// Which element table a [`RecorderSpec::Bulk`] records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum BulkTable {
+    Triangles,
+    Quads,
+    /// Every embedded-bar segment, in the flat order of `modelOutput`'s segment table.
+    EmbeddedBars,
+    /// Every node, in input node-table order; one point per node and one component per DOF.
+    Nodes,
+    /// Every `zeroLength` element, in table order and then the bond and anchorage springs of bonded
+    /// bars (`modelOutput` lists those rows); one value per element, along its first material direction.
+    ZeroLengths,
+}
+
+/// What a [`RecorderSpec::Bulk`] reads. `strain`/`stress`/`principalStrain`/`principalStress`/`kc2`
+/// mean the same as [`GaussQuantity`] (on `triangles`/`quads`; `strain` and `stress` also on
+/// `embeddedBars`, one value per segment); `axialForce` and `ruptured` are
+/// [`EmbeddedBarQuantity`]'s and belong to `embeddedBars` only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum BulkQuantity {
+    Strain,
+    Stress,
+    PrincipalStrain,
+    PrincipalStress,
+    Kc2,
+    AxialForce,
+    Ruptured,
+    /// `nodes` only: the node's displacement, `ndf` components (the fixed DOFs report their
+    /// prescribed value, `0` for a support).
+    Displacement,
+    /// `nodes` only: the support reaction, `ndf` components (`0` on a free DOF).
+    Reaction,
+    /// `zeroLengths` only: the relative displacement along the element's first material direction (mm for a
+    /// bond or anchorage spring: the slip).
+    Deformation,
+    /// `zeroLengths` only: the force the material returns for that deformation (N).
+    Force,
+}
+
+/// What a [`RecorderSpec::EmbeddedBar`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum EmbeddedBarQuantity {
+    /// `stress * area` (N, tension positive).
+    AxialForce,
+    Strain,
+    Stress,
+    /// `1` when a `csfmRebar` segment is past its rupture strain, else `0` (always `0` for any other
+    /// material).
+    Ruptured,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
@@ -503,6 +603,27 @@ pub enum RecorderSpec {
         point: u32,
         quantity: GaussQuantity,
         component: u8,
+    },
+    /// One quantity of one embedded-bar segment (`bar` is an `embeddedBars` row, `segment` its
+    /// piece in `modelOutput`'s segment table). Valid during `Static` and `Transient` stages.
+    /// A `bar` past the table is `UnknownElementIndex`, a `segment` past the bar's piece count
+    /// `InvalidEmbeddedBarSegment`, and the recorder in a 3D model `ElementKindNotInProfile`.
+    EmbeddedBar {
+        bar: u32,
+        segment: u32,
+        quantity: EmbeddedBarQuantity,
+    },
+    /// Every element (and Gauss point) of a table, every accepted step, as flat arrays: the
+    /// plotting form, since one scalar recorder per point would make batches enormous. Results
+    /// come back in `StepOutcome::bulkBatches`, not `recorderBatches`; this recorder's slot in
+    /// `recorderBatches` stays empty. Valid during `Static` and `Transient` stages. An empty
+    /// table, a quantity the table cannot produce (`axialForce`/`ruptured` on a continuum
+    /// table, principal values or `kc2` on `embeddedBars`), or `kc2` where a point is not
+    /// `csfmConcrete` is `DecodeError::RecorderNotApplicable`; a table of the other profile is
+    /// `ElementKindNotInProfile`.
+    Bulk {
+        table: BulkTable,
+        quantity: BulkQuantity,
     },
 }
 

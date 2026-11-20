@@ -4,7 +4,7 @@
 use carapace_core::model::{
     Axis3, DispBeamColumn3, Domain3, ElasticBeamColumn3, Element3, Element3Id, ElementLoad3,
     Fiber3, FiberSection3, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3,
-    Shell4, ShellSection, Truss3, ZeroLength3, ZeroLengthSection3,
+    Shell4, ShellModifiers, ShellSection, Truss3, ZeroLength3, ZeroLengthSection3,
 };
 
 use super::shared::{
@@ -14,6 +14,7 @@ use super::shared::{
 };
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
+use crate::input_v1::model_output::ModelOutput;
 use crate::input_v1::session::Session3;
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, Shell3Table, Shell4Table, ShellSectionSpec,
@@ -38,6 +39,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
             input.force_beam_columns_2d.node_i.is_empty(),
         ),
         ("plane_materials", input.plane_materials.is_empty()),
+        ("embedded_bars", input.embedded_bars.is_empty()),
         (
             "triangles",
             input.triangles.thickness.is_empty() && input.triangles.node_ids.is_empty(),
@@ -178,14 +180,22 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
     );
 
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    finish(domain, &input, node_ids, elements, |spec| match *spec {
-        ElementLoadSpec::Uniform { wx, wy, wz } => {
-            Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.0)))
-        }
-        ElementLoadSpec::ShellPressure { pressure } => Some(ElementLoad3::pressure(pressure)),
-        ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
-        _ => None,
-    })
+    finish(
+        domain,
+        &input,
+        node_ids,
+        elements,
+        &ModelOutput::default(),
+        Vec::new(),
+        |spec| match *spec {
+            ElementLoadSpec::Uniform { wx, wy, wz } => {
+                Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.0)))
+            }
+            ElementLoadSpec::ShellPressure { pressure } => Some(ElementLoad3::pressure(pressure)),
+            ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
+            _ => None,
+        },
+    )
 }
 
 fn resolve_shell_sections(specs: &[ShellSectionSpec]) -> Result<Vec<ShellSection>, DecodeError> {
@@ -193,13 +203,30 @@ fn resolve_shell_sections(specs: &[ShellSectionSpec]) -> Result<Vec<ShellSection
         .iter()
         .enumerate()
         .map(|(index, spec)| {
-            let ShellSectionSpec::ElasticMembranePlate { e, nu, h, rho } = *spec;
-            ShellSection::elastic_membrane_plate(e, nu, h, rho).map_err(|error| {
-                DecodeError::InvalidShellSection {
+            let ShellSectionSpec::ElasticMembranePlate {
+                e,
+                nu,
+                h,
+                rho,
+                modifiers,
+            } = *spec;
+            let spec = modifiers.unwrap_or_default();
+            let modifiers = ShellModifiers {
+                f11: spec.f11.unwrap_or(1.0),
+                f22: spec.f22.unwrap_or(1.0),
+                f12: spec.f12.unwrap_or(1.0),
+                m11: spec.m11.unwrap_or(1.0),
+                m22: spec.m22.unwrap_or(1.0),
+                m12: spec.m12.unwrap_or(1.0),
+                v13: spec.v13.unwrap_or(1.0),
+                v23: spec.v23.unwrap_or(1.0),
+            };
+            ShellSection::elastic_membrane_plate_modified(e, nu, h, rho, modifiers).map_err(
+                |error| DecodeError::InvalidShellSection {
                     index: index as u32,
                     reason: error.message(),
-                }
-            })
+                },
+            )
         })
         .collect()
 }

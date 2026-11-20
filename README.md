@@ -33,9 +33,8 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
   `PlaneMaterial`s, body, edge-traction and edge-pressure loads, and Gauss-point recorders
 - [x] Shell4 (MITC4 flat shell) and Shell3 (DKT/Allman flat triangle), `ElasticMembranePlate` section; 3D: nodal, pressure and self-weight
   loads, static and modal (lumped mass), resultant recorders; match OpenSees `ShellMITC4` / `ShellDKGT`
-- [ ] Shell stiffness modifiers (ETABS-style `f11 f22 f12 m11 m22 m12 v13 v23`) on `ElasticMembranePlate`, scaling the
-  individual terms of the section `D`. Breaks OpenSees compatibility except in the uniform case (see
-  `../pysees/docs/shell-plan.md`).
+- [x] Shell stiffness modifiers (ETABS-style `f11 f22 f12 m11 m22 m12 v13 v23`) on `ElasticMembranePlate`, scaling the
+  individual terms of the section `D`. Matches OpenSees only in the uniform case (see `docs/input-format.md`)
 - [x] ZeroLengthSection — fiber section with optional independent springs (2D + 3D)
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)
@@ -179,10 +178,11 @@ scripts/build-wasm.sh
 
 # check the generated package through its application API (Node 22.18+)
 node wasm-bridge/tests/boundary-smoke.ts
+node wasm-bridge/tests/section-probe-smoke.ts   # section probe, against the CalcsApp-generated fixtures
 
 # check the generated declarations and their use by the smoke test
 npm exec --package=typescript -- tsc --strict --noEmit --target es2022 --lib esnext,dom \
-  --module nodenext wasm-bridge/tests/boundary-smoke.ts
+  --module nodenext --resolveJsonModule wasm-bridge/tests/boundary-smoke.ts wasm-bridge/tests/section-probe-smoke.ts
 ```
 
 The build is `--target web` (ES modules). A browser or worker initializes the module with the default

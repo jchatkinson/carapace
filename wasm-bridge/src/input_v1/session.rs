@@ -19,14 +19,17 @@ use carapace_core::analysis::{
     StopReason, TransientAnalysis,
 };
 use carapace_core::model::{
-    Domain, Element, Element3, ElementOps, LoadPatternId, Node3Id, NodeId, NDF, PLANAR_NDIM,
-    SPATIAL_NDF, SPATIAL_NDIM,
+    Domain, Element, Element3, ElementOps, LimitKind, LimitStateConfig, LoadPatternId, Node3Id,
+    NodeId, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 use serde::Serialize;
 use slotmap::Key;
+use std::collections::HashMap;
 
 use super::error::ModelErrorDetail;
-use super::sequence::{FiberResponseKind, GaussQuantity, ModalDampingAnchors};
+use super::model_output::ModelOutput;
+use super::sequence::{EmbeddedBarQuantity, FiberResponseKind, GaussQuantity, ModalDampingAnchors};
+use super::tables::ElementKind;
 
 /// Shared by `record_sample`'s `Static`/`Transient` arms: resolves a
 /// `ResolvedRecorder::Fiber` against whatever `element`'s current fiber
@@ -54,6 +57,21 @@ where
     })
 }
 
+/// Principal values `(v1, v2, theta)` of a plane tensor `[x, y, xy]`, `v1 >= v2`, with `theta` the
+/// counter-clockwise angle from global x to the `v1` direction. `shear_is_engineering` is true for
+/// strain, whose `xy` is `gamma = 2 * eps_xy`.
+fn principal(values: [f64; 3], shear_is_engineering: bool) -> [f64; 3] {
+    let half_shear = if shear_is_engineering {
+        values[2] / 2.0
+    } else {
+        values[2]
+    };
+    let average = (values[0] + values[1]) / 2.0;
+    let radius = ((values[0] - values[1]) / 2.0).hypot(half_shear);
+    let theta = 0.5 * (2.0 * half_shear).atan2(values[0] - values[1]);
+    [average + radius, average - radius, theta]
+}
+
 fn gauss_value<const NDIM: usize, const NDOF: usize, NId, E>(
     domain: &Domain<NDIM, NDOF, NId, E>,
     element: E::Id,
@@ -70,8 +88,16 @@ where
         let values = match quantity {
             GaussQuantity::Strain => response.strain,
             GaussQuantity::Stress => response.resultant,
+            GaussQuantity::PrincipalStrain
+            | GaussQuantity::PrincipalStress
+            | GaussQuantity::Kc2 => return None,
         };
         return values.get(component as usize).copied();
+    }
+    if quantity == GaussQuantity::Kc2 {
+        return (component == 0)
+            .then(|| domain.element_gauss_kc2(element, point as usize))
+            .flatten();
     }
     let response = *domain
         .element_gauss_responses(element)?
@@ -79,8 +105,95 @@ where
     let values = match quantity {
         GaussQuantity::Strain => response.strain,
         GaussQuantity::Stress => response.stress,
+        GaussQuantity::PrincipalStrain => principal(response.strain, true),
+        GaussQuantity::PrincipalStress => principal(response.stress, false),
+        GaussQuantity::Kc2 => unreachable!("handled above"),
     };
     values.get(component as usize).copied()
+}
+
+/// Appends one frame of `bulk`'s values (element, then point, then component order). A value the
+/// model cannot produce (it never happens for a decoded recorder) is `NaN`, so frames keep their
+/// width.
+fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    bulk: &ResolvedBulk<NId, E::Id>,
+    reactions: &dyn Fn(&[NId]) -> Vec<f64>,
+    out: &mut Vec<f64>,
+) where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    use super::sequence::BulkQuantity;
+    if !bulk.nodes.is_empty() {
+        if bulk.quantity == BulkQuantity::Reaction {
+            out.extend(reactions(&bulk.nodes));
+        } else {
+            for &node in &bulk.nodes {
+                out.extend_from_slice(&domain.node(node).displacement);
+            }
+        }
+        return;
+    }
+    for &element in &bulk.elements {
+        if bulk.zero_lengths {
+            let value = domain
+                .element_zero_length_response(element)
+                .map(|(deformation, force)| {
+                    if bulk.quantity == BulkQuantity::Deformation {
+                        deformation
+                    } else {
+                        force
+                    }
+                });
+            out.push(value.unwrap_or(f64::NAN));
+        } else if bulk.bars {
+            let quantity = match bulk.quantity {
+                BulkQuantity::AxialForce => EmbeddedBarQuantity::AxialForce,
+                BulkQuantity::Strain => EmbeddedBarQuantity::Strain,
+                BulkQuantity::Stress => EmbeddedBarQuantity::Stress,
+                _ => EmbeddedBarQuantity::Ruptured,
+            };
+            out.push(embedded_bar_value(domain, element, quantity).unwrap_or(f64::NAN));
+        } else if bulk.quantity == BulkQuantity::Kc2 {
+            for point in 0..bulk.points as usize {
+                out.push(domain.element_gauss_kc2(element, point).unwrap_or(f64::NAN));
+            }
+        } else {
+            let responses = domain.element_gauss_responses(element);
+            for point in 0..bulk.points as usize {
+                let frame = responses
+                    .as_ref()
+                    .and_then(|r| r.get(point))
+                    .map(|response| match bulk.quantity {
+                        BulkQuantity::Stress => response.stress,
+                        BulkQuantity::PrincipalStrain => principal(response.strain, true),
+                        BulkQuantity::PrincipalStress => principal(response.stress, false),
+                        _ => response.strain,
+                    })
+                    .unwrap_or([f64::NAN; 3]);
+                out.extend_from_slice(&frame);
+            }
+        }
+    }
+}
+
+fn embedded_bar_value<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    element: E::Id,
+    quantity: EmbeddedBarQuantity,
+) -> Option<f64>
+where
+    NId: Key,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    let (force, strain, stress, ruptured) = domain.element_embedded_bar_response(element)?;
+    Some(match quantity {
+        EmbeddedBarQuantity::AxialForce => force,
+        EmbeddedBarQuantity::Strain => strain,
+        EmbeddedBarQuantity::Stress => stress,
+        EmbeddedBarQuantity::Ruptured => f64::from(ruptured),
+    })
 }
 
 /// `AnalysisError`'s fields, restated so `advance`'s result doesn't need to
@@ -134,6 +247,14 @@ pub enum AnalysisErrorDetail {
     /// uses.
     InvalidModel {
         error: ModelErrorDetail,
+    },
+    /// `core::AnalysisError::LoadControlExhausted`: a `loadControlCutbacks`
+    /// stage halved its increment down to `minIncrement` and still failed
+    /// to converge. `acceptedLoadFactor` is the last *committed* pseudo-time
+    /// (from an earlier successful step, if any).
+    LoadControlExhausted {
+        step: usize,
+        accepted_load_factor: f64,
     },
 }
 
@@ -202,6 +323,9 @@ pub enum StopReasonDetail {
     LoadFactorZeroCrossing,
     ChordLength,
     StepCount,
+    /// `core::analysis::StopReason::MaterialLimit` (CSFM plan §2.5 point
+    /// 3), requested by `stop.materialLimit`.
+    MaterialLimit,
 }
 
 impl From<ArcStepInfo> for ContinuationDetail {
@@ -226,6 +350,7 @@ impl From<ArcStepInfo> for ContinuationDetail {
                     StopReason::LoadFactorZeroCrossing => StopReasonDetail::LoadFactorZeroCrossing,
                     StopReason::ChordLength => StopReasonDetail::ChordLength,
                     StopReason::StepCount => StopReasonDetail::StepCount,
+                    StopReason::MaterialLimit => StopReasonDetail::MaterialLimit,
                 },
                 landed_exactly: stop.landed_exactly,
                 overshoot: stop.overshoot,
@@ -270,6 +395,13 @@ impl From<AnalysisError> for AnalysisErrorDetail {
             AnalysisError::ContinuationComplete => AnalysisErrorDetail::ContinuationComplete,
             AnalysisError::InvalidModel(error) => AnalysisErrorDetail::InvalidModel {
                 error: error.into(),
+            },
+            AnalysisError::LoadControlExhausted {
+                step,
+                accepted_load_factor,
+            } => AnalysisErrorDetail::LoadControlExhausted {
+                step,
+                accepted_load_factor,
             },
         }
     }
@@ -334,6 +466,51 @@ pub enum ResolvedRecorder<NId, EId> {
         quantity: super::sequence::GaussQuantity,
         component: u8,
     },
+    /// Valid during `Static`/`Transient` (`RecorderSpec::EmbeddedBar`'s doc comment); `element`
+    /// is the segment's `EmbeddedBar` element.
+    EmbeddedBar {
+        element: EId,
+        quantity: super::sequence::EmbeddedBarQuantity,
+    },
+    /// Index into `ModelSession::bulks`; contributes no scalar sample.
+    Bulk {
+        bulk: u32,
+    },
+}
+
+impl From<LimitKind> for LimitKindDetail {
+    fn from(kind: LimitKind) -> Self {
+        match kind {
+            LimitKind::ConcreteCrushing => LimitKindDetail::ConcreteCrushing,
+            LimitKind::ConcreteTensileStrain => LimitKindDetail::ConcreteTensileStrain,
+            LimitKind::RebarRupture => LimitKindDetail::RebarRupture,
+            LimitKind::RebarStrainLimit => LimitKindDetail::RebarStrainLimit,
+            LimitKind::BondSlip => LimitKindDetail::BondSlip,
+            LimitKind::AnchorageSlip => LimitKindDetail::AnchorageSlip,
+        }
+    }
+}
+
+/// A decoded `RecorderSpec::Bulk`.
+pub(super) struct ResolvedBulk<NId, EId> {
+    pub recorder_index: usize,
+    pub elements: Vec<EId>,
+    /// The `nodes` table's rows (empty for an element table).
+    pub nodes: Vec<NId>,
+    pub points: u32,
+    pub components: u32,
+    pub quantity: super::sequence::BulkQuantity,
+    pub bars: bool,
+    /// A `zeroLengths` table.
+    pub zero_lengths: bool,
+    pub emitted: u32,
+}
+
+impl<NId, EId> ResolvedBulk<NId, EId> {
+    /// Rows per frame: the nodes of a `nodes` table, else the elements.
+    pub fn count(&self) -> usize {
+        self.nodes.len().max(self.elements.len())
+    }
 }
 
 pub(super) struct CompiledStage<NId, EId, Load> {
@@ -433,6 +610,92 @@ pub struct StepOutcome {
     /// (`src/app/types/resultsStorage.ts`); the caller assigns `blockIndex` and packs `data`,
     /// since neither concept exists on this side of the wasm boundary.
     pub recorder_batches: Vec<RecorderBatch>,
+    /// This call's `bulk` recorder output, one entry per bulk recorder that recorded a step.
+    pub bulk_batches: Vec<BulkBatch>,
+    /// For a `Static` stage whose model has a CSFM limit state (any `csfmConcrete` or `csfmRebar`):
+    /// one entry per sample the stage recorded this call (every accepted step, plus the initial
+    /// state with `header.recordInitial`), naming the controlling material-limit utilization and
+    /// where it is. Always empty for a model with no limit state or for other stage kinds.
+    pub limit_history: Vec<LimitSample>,
+    /// For a `Static` stage: one entry per step this call took, in order, with the solver work it
+    /// cost. They line up with the frames of `bulkBatches` and the entries of `limitHistory`,
+    /// except that the initial sample `header.recordInitial` adds has no step. Empty for other
+    /// stage kinds.
+    pub step_diagnostics: Vec<StepDiagnostic>,
+}
+
+/// What one accepted `Static` step cost.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct StepDiagnostic {
+    /// The load factor (or arc-length continuation parameter) the step ended at.
+    pub progress: f64,
+    /// Newton iterations of the accepted attempt (corrector solves under arc length).
+    pub iterations: u32,
+    /// Tangent factorizations over the step, failed attempts included.
+    pub factorizations: u32,
+    /// Present under `loadControlCutbacks` only.
+    pub cutback: Option<CutbackDetail>,
+}
+
+/// `loadControlCutbacks` substepping of one step: it asked for `nominalIncrement` and halved
+/// `retries` times to land on `acceptedIncrement`; the uncovered remainder is requested again by
+/// the next step.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct CutbackDetail {
+    pub nominal_increment: f64,
+    pub accepted_increment: f64,
+    pub retries: u32,
+}
+
+/// Which material limit controls (`core::LimitKind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum LimitKindDetail {
+    ConcreteCrushing,
+    ConcreteTensileStrain,
+    RebarRupture,
+    RebarStrainLimit,
+    BondSlip,
+    AnchorageSlip,
+}
+
+/// The controlling material-limit utilization at one recorded sample, under the always-on limits
+/// (concrete crushing at `|eps_cu2| = 0.0035` and rebar rupture; the optional strain limits are
+/// only applied by `stop.materialLimit`). `utilization >= 1` means the limit is reached. The
+/// location is element-level: `elementKind` and `elementIndex` are the row in that kind's table
+/// (the flat segment index for `embeddedBar`; `modelOutput` maps it to `(bar, segment)`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitSample {
+    pub progress: f64,
+    pub utilization: f64,
+    pub kind: LimitKindDetail,
+    pub element_kind: ElementKind,
+    pub element_index: u32,
+}
+
+/// One bulk recorder's output over the accepted steps of one `advance` call. `values` holds
+/// `progress.len()` consecutive frames of `elements * points * components` numbers each, in
+/// element, then point, then component order (element = table row, or flat segment index for
+/// `embeddedBars`); `progress[i]` is frame `i`'s load factor or time.
+#[derive(Debug, Clone, PartialEq, Serialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkBatch {
+    pub recorder_index: usize,
+    pub stage_index: usize,
+    pub first_sample: u32,
+    pub elements: u32,
+    pub points: u32,
+    pub components: u32,
+    /// A `Float64Array` across the wasm boundary (the `advance` binding moves it, not a
+    /// `number[]`), so a worker can transfer its buffer.
+    #[tsify(type = "Float64Array")]
+    pub progress: Vec<f64>,
+    /// A `Float64Array` across the wasm boundary, like `progress`.
+    #[tsify(type = "Float64Array")]
+    pub values: Vec<f64>,
 }
 
 /// One computed mode of a finished `Modal` stage. `shape` is node-major over every node in the
@@ -501,6 +764,14 @@ impl Session {
         }
     }
 
+    /// What decoding resolved about the model (embedded-bar segment table and routing).
+    pub fn model_output(&self) -> &ModelOutput {
+        match self {
+            Session::D2(session) => session.model_output(),
+            Session::D3(session) => session.model_output(),
+        }
+    }
+
     /// Every `Modal` stage finished so far (see `ModalStageResult`).
     pub fn modal_results(&self) -> ModalResultsReport {
         match self {
@@ -555,6 +826,15 @@ where
     // Total samples emitted so far per recorder, so the next batch's `first_sample` is correct
     // without retaining the samples themselves.
     recorder_sample_counts: Vec<u32>,
+    model_output: ModelOutput,
+    bulks: Vec<ResolvedBulk<NId, E::Id>>,
+    // Per bulk recorder, per-advance only: (progress per frame, flat values).
+    current_bulk: Vec<(Vec<f64>, Vec<f64>)>,
+    // Per-advance only: one entry per `Static` step taken.
+    current_steps: Vec<StepDiagnostic>,
+    locations: HashMap<E::Id, (ElementKind, u32)>,
+    // Per-advance only, like `current_batch`.
+    current_limits: Vec<LimitSample>,
 }
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> std::fmt::Debug
@@ -582,11 +862,21 @@ where
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {
+    pub fn model_output(&self) -> &ModelOutput {
+        &self.model_output
+    }
+
+    pub(super) fn set_model_output(&mut self, model_output: ModelOutput) {
+        self.model_output = model_output;
+    }
+
     pub(super) fn new(
         domain: Domain<NDIM, NDOF, NId, E>,
         node_ids: Vec<NId>,
         stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
         recorders: Vec<ResolvedRecorder<NId, E::Id>>,
+        bulks: Vec<ResolvedBulk<NId, E::Id>>,
+        locations: HashMap<E::Id, (ElementKind, u32)>,
         record_initial: bool,
     ) -> Self {
         let pristine = stages
@@ -611,6 +901,12 @@ where
             continuation: None,
             current_batch,
             recorder_sample_counts,
+            model_output: ModelOutput::default(),
+            current_bulk: vec![(Vec::new(), Vec::new()); bulks.len()],
+            bulks,
+            locations,
+            current_limits: Vec::new(),
+            current_steps: Vec::new(),
         }
     }
 
@@ -635,6 +931,12 @@ where
         for batch in &mut self.current_batch {
             batch.clear();
         }
+        for (progress, values) in &mut self.current_bulk {
+            progress.clear();
+            values.clear();
+        }
+        self.current_limits.clear();
+        self.current_steps.clear();
         self.continuation = None;
 
         if self.error.is_none() && self.runner.is_none() && self.current_stage < self.stages.len() {
@@ -649,6 +951,9 @@ where
                 error: self.error,
                 continuation: None,
                 recorder_batches: Vec::new(),
+                bulk_batches: Vec::new(),
+                limit_history: Vec::new(),
+                step_diagnostics: Vec::new(),
             };
         }
 
@@ -703,6 +1008,27 @@ where
             })
             .collect();
 
+        let bulk_batches = self
+            .bulks
+            .iter_mut()
+            .zip(&self.current_bulk)
+            .filter(|(_, (progress, _))| !progress.is_empty())
+            .map(|(bulk, (progress, values))| {
+                let first_sample = bulk.emitted;
+                bulk.emitted += progress.len() as u32;
+                BulkBatch {
+                    recorder_index: bulk.recorder_index,
+                    stage_index: stage_index_for_batch,
+                    first_sample,
+                    elements: bulk.count() as u32,
+                    points: bulk.points,
+                    components: bulk.components,
+                    progress: progress.clone(),
+                    values: values.clone(),
+                }
+            })
+            .collect();
+
         StepOutcome {
             done: self.error.is_some() || self.current_stage >= self.stages.len(),
             stage_complete,
@@ -711,6 +1037,9 @@ where
             error: self.error,
             continuation: self.continuation,
             recorder_batches,
+            bulk_batches,
+            limit_history: self.current_limits.clone(),
+            step_diagnostics: self.current_steps.clone(),
         }
     }
 
@@ -729,7 +1058,7 @@ where
                     domain.add_nodal_load(pattern, node, dof, value);
                 }
                 for (pattern, element, load) in &earlier.pending_element_loads {
-                    domain.add_element_load(*pattern, *element, load.clone());
+                    domain.add_element_load(*pattern, *element, *load);
                 }
             }
             for &(pattern, factor) in &self.holds {
@@ -746,7 +1075,7 @@ where
             domain.add_nodal_load(pattern, node, dof, value);
         }
         for (pattern, element, load) in &stage.pending_element_loads {
-            domain.add_element_load(*pattern, *element, load.clone());
+            domain.add_element_load(*pattern, *element, *load);
         }
         // `Transformation` resolves `equal_dof`/`rigid_diaphragm` ties;
         // `Plain` is a strictly cheaper no-op for a domain with none (and
@@ -886,7 +1215,24 @@ where
             } => {
                 let result = analysis.step()?;
                 self.load_factor = result.load_factor;
-                *steps_remaining -= 1;
+                self.current_steps.push(StepDiagnostic {
+                    progress: result.load_factor,
+                    iterations: result.iterations as u32,
+                    factorizations: result.factorizations as u32,
+                    cutback: result.cutbacks.map(|info| CutbackDetail {
+                        nominal_increment: info.nominal_increment,
+                        accepted_increment: info.accepted_increment,
+                        retries: info.retries,
+                    }),
+                });
+                // Under `loadControlCutbacks` a call accepts one substep; the nominal increment
+                // only counts as done once its uncovered remainder has been taken too.
+                let nominal_done = result
+                    .cutbacks
+                    .is_none_or(|info| info.accepted_increment >= info.nominal_increment);
+                if nominal_done {
+                    *steps_remaining -= 1;
+                }
                 if let Some(info) = result.arc {
                     self.continuation = Some(info.into());
                     // A met stop criterion ends the stage early.
@@ -1062,12 +1408,41 @@ where
                             quantity,
                             component,
                         } => gauss_value(analysis.domain(), element, point, quantity, component),
+                        ResolvedRecorder::EmbeddedBar { element, quantity } => {
+                            embedded_bar_value(analysis.domain(), element, quantity)
+                        }
                         ResolvedRecorder::NodeVel { .. }
                         | ResolvedRecorder::NodeAccel { .. }
-                        | ResolvedRecorder::ModeShape { .. } => None,
+                        | ResolvedRecorder::ModeShape { .. }
+                        | ResolvedRecorder::Bulk { .. } => None,
                     };
                     if let Some(value) = value {
                         batch.push((progress, value));
+                    }
+                }
+                for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
+                {
+                    frames.push(progress);
+                    let domain = analysis.domain();
+                    // One pass over the model, not a sweep per DOF.
+                    let reactions = |nodes: &[NId]| {
+                        let all = domain.reactions_all(progress);
+                        nodes.iter().flat_map(|&node| all[node]).collect()
+                    };
+                    append_bulk_values(domain, bulk, &reactions, values);
+                }
+                if let Some((element, utilization, kind)) = analysis
+                    .domain()
+                    .controlling_limit_utilization(&LimitStateConfig::default())
+                {
+                    if let Some(&(element_kind, element_index)) = self.locations.get(&element) {
+                        self.current_limits.push(LimitSample {
+                            progress,
+                            utilization,
+                            kind: kind.into(),
+                            element_kind,
+                            element_index,
+                        });
                     }
                 }
             }
@@ -1110,11 +1485,26 @@ where
                             quantity,
                             component,
                         } => gauss_value(analysis.domain(), element, point, quantity, component),
-                        ResolvedRecorder::ModeShape { .. } => None,
+                        ResolvedRecorder::EmbeddedBar { element, quantity } => {
+                            embedded_bar_value(analysis.domain(), element, quantity)
+                        }
+                        ResolvedRecorder::ModeShape { .. } | ResolvedRecorder::Bulk { .. } => None,
                     };
                     if let Some(value) = value {
                         batch.push((progress, value));
                     }
+                }
+                for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
+                {
+                    frames.push(progress);
+                    let reactions = |nodes: &[NId]| {
+                        nodes
+                            .iter()
+                            .flat_map(|&node| (0..NDOF).map(move |dof| (node, dof)))
+                            .map(|(node, dof)| analysis.reaction(node, dof))
+                            .collect()
+                    };
+                    append_bulk_values(analysis.domain(), bulk, &reactions, values);
                 }
             }
             StageRunner::Reset { .. } => {}

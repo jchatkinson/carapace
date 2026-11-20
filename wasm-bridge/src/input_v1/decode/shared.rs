@@ -14,8 +14,9 @@ use slotmap::Key;
 
 use super::stages::{compile_stages, load_series_of};
 use crate::input_v1::error::DecodeError;
-use crate::input_v1::sequence::RecorderSpec;
-use crate::input_v1::session::{ModelSession, ResolvedRecorder};
+use crate::input_v1::model_output::ModelOutput;
+use crate::input_v1::sequence::{BulkQuantity, BulkTable, GaussQuantity, RecorderSpec};
+use crate::input_v1::session::{ModelSession, ResolvedBulk, ResolvedRecorder};
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, EqualDofTable, FiberTable, FrictionRow,
     IntegrationSpec, LinearConstraintTable, LoadPatternTable, NodeTable, OrientRow,
@@ -440,6 +441,41 @@ impl<EId: Copy> ElementIds<EId> {
         self.by_kind[kind as usize] = ids;
     }
 
+    /// Appends rows to `kind` after the ones its table registered.
+    pub(super) fn extend(&mut self, kind: ElementKind, ids: impl IntoIterator<Item = EId>) {
+        self.by_kind[kind as usize].extend(ids);
+    }
+
+    /// The number of rows registered for `kind`.
+    pub(super) fn count(&self, kind: ElementKind) -> usize {
+        self.by_kind[kind as usize].len()
+    }
+
+    /// Reverse map: each element id to its `(kind, row)` in the wire tables.
+    pub(super) fn locations(&self) -> HashMap<EId, (ElementKind, u32)>
+    where
+        EId: std::hash::Hash + Eq,
+    {
+        let mut map = HashMap::new();
+        for kind in ElementKind::ALL {
+            for (row, &id) in self.by_kind[kind as usize].iter().enumerate() {
+                map.insert(id, (kind, row as u32));
+            }
+        }
+        map
+    }
+
+    /// Every element id of `kind`, in table order (`ElementKindNotInProfile` for a kind of the
+    /// other profile).
+    pub(super) fn all(&self, kind: ElementKind, ndm: u8) -> Result<&[EId], DecodeError> {
+        if !kind.in_profile(ndm) {
+            return Err(DecodeError::ElementKindNotInProfile {
+                table: kind.table(),
+            });
+        }
+        Ok(&self.by_kind[kind as usize])
+    }
+
     /// `ElementKindNotInProfile` for a kind of the other profile (`ndm`),
     /// `UnknownElementIndex` for a row past the end of the kind's table.
     pub(super) fn get(&self, kind: ElementKind, row: u32, ndm: u8) -> Result<EId, DecodeError> {
@@ -474,11 +510,16 @@ where
 /// loads, stage compilation, recorder resolution, model validation, and the
 /// session. `make_load(spec)` builds the profile's element load from a wire load, or
 /// `None` when the profile has no such load (a 3D model's continuum loads).
+/// Per stage, the `(pattern, element, load)` triples that stage adds.
+type StagedLoads<I, L> = Vec<Vec<(LoadPatternId, I, L)>>;
+
 pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     mut domain: Domain<NDIM, NDOF, NId, E>,
     input: &CarapaceInputV1,
     node_ids: Vec<NId>,
     elements: ElementIds<E::Id>,
+    model_output: &ModelOutput,
+    extra_nodal_loads: Vec<(u32, u32, NId, usize, f64)>,
     make_load: impl Fn(&ElementLoadSpec) -> Option<E::Load>,
 ) -> Result<ModelSession<NDIM, NDOF, NId, E>, DecodeError>
 where
@@ -528,8 +569,18 @@ where
             ));
     }
 
-    let mut element_loads_by_stage: Vec<Vec<(LoadPatternId, E::Id, E::Load)>> =
-        vec![Vec::new(); stage_count];
+    // Loads on nodes the decoder created itself (the rod end of a bar): (pattern row, stage, node, dof, value).
+    for (pattern, stage, node, dof, value) in extra_nodal_loads {
+        nodal_loads_by_stage
+            .get_mut(stage as usize)
+            .ok_or(DecodeError::UnknownStageIndex {
+                table: "embedded_bars",
+                row: 0,
+            })?
+            .push((pattern_at(pattern)?, node, dof, value));
+    }
+
+    let mut element_loads_by_stage: StagedLoads<E::Id, E::Load> = vec![Vec::new(); stage_count];
     let loads = &input.element_loads;
     for i in 0..loads.element_index.len() {
         let pattern = pattern_at(loads.pattern[i])?;
@@ -542,6 +593,7 @@ where
         let spec = loads.load[i];
         let carried = match spec {
             ElementLoadSpec::Uniform { .. } => kind.accepts_uniform_load(),
+            ElementLoadSpec::Trapezoid { .. } => kind.accepts_trapezoid_load(),
             ElementLoadSpec::Body { .. }
             | ElementLoadSpec::EdgeTraction { .. }
             | ElementLoadSpec::EdgePressure { .. } => kind.is_continuum(),
@@ -600,6 +652,7 @@ where
         element_loads_by_stage,
     )?;
 
+    let mut bulks = Vec::new();
     let recorders = input
         .sequence
         .recorders
@@ -701,12 +754,164 @@ where
                             count: count as u32,
                         });
                     }
-                    component_within(component, domain.element_gauss_component_count(element))?;
+                    if quantity == GaussQuantity::Kc2 {
+                        component_within(component, 1)?;
+                        if domain.element_gauss_kc2(element, point as usize).is_none() {
+                            return Err(DecodeError::RecorderNotApplicable {
+                                recorder: index as u32,
+                                reason: "kc2 needs a csfmConcrete element",
+                            });
+                        }
+                    } else {
+                        component_within(component, domain.element_gauss_component_count(element))?;
+                    }
                     ResolvedRecorder::GaussPoint {
                         element,
                         point,
                         quantity,
                         component,
+                    }
+                }
+                RecorderSpec::Bulk { table, quantity } => {
+                    let not_applicable = |reason| DecodeError::RecorderNotApplicable {
+                        recorder: index as u32,
+                        reason,
+                    };
+                    if table == BulkTable::Nodes {
+                        if !matches!(
+                            quantity,
+                            BulkQuantity::Displacement | BulkQuantity::Reaction
+                        ) {
+                            return Err(not_applicable(
+                                "the nodes table records displacement or reaction",
+                            ));
+                        }
+                        if node_ids.is_empty() {
+                            return Err(not_applicable("the table is empty"));
+                        }
+                        bulks.push(ResolvedBulk {
+                            recorder_index: index,
+                            elements: Vec::new(),
+                            nodes: node_ids.to_vec(),
+                            points: 1,
+                            components: ndof as u32,
+                            quantity,
+                            bars: false,
+                            zero_lengths: false,
+                            emitted: 0,
+                        });
+                        return Ok(ResolvedRecorder::Bulk {
+                            bulk: bulks.len() as u32 - 1,
+                        });
+                    }
+                    if matches!(
+                        quantity,
+                        BulkQuantity::Displacement | BulkQuantity::Reaction
+                    ) {
+                        return Err(not_applicable(
+                            "displacement and reaction belong to the nodes table",
+                        ));
+                    }
+                    let zero_lengths = table == BulkTable::ZeroLengths;
+                    if zero_lengths
+                        != matches!(quantity, BulkQuantity::Deformation | BulkQuantity::Force)
+                    {
+                        return Err(not_applicable(
+                            "deformation and force belong to the zeroLengths table, and only they",
+                        ));
+                    }
+                    let kind = match table {
+                        BulkTable::ZeroLengths => ElementKind::ZeroLength,
+                        BulkTable::Triangles => ElementKind::Tri3,
+                        BulkTable::Quads => ElementKind::Quad4,
+                        _ => ElementKind::EmbeddedBar,
+                    };
+                    let bars = table == BulkTable::EmbeddedBars;
+                    match quantity {
+                        BulkQuantity::AxialForce | BulkQuantity::Ruptured if !bars => {
+                            return Err(not_applicable(
+                                "axialForce and ruptured belong to the embeddedBars table",
+                            ))
+                        }
+                        BulkQuantity::PrincipalStrain
+                        | BulkQuantity::PrincipalStress
+                        | BulkQuantity::Kc2
+                            if bars =>
+                        {
+                            return Err(not_applicable(
+                                "principal values and kc2 belong to the triangles and quads tables",
+                            ))
+                        }
+                        _ => {}
+                    }
+                    let ids = elements.all(kind, ndm)?.to_vec();
+                    let Some(&first) = ids.first() else {
+                        return Err(not_applicable("the table is empty"));
+                    };
+                    let points = if zero_lengths {
+                        1
+                    } else {
+                        domain.element_gauss_point_count(first) as u32
+                    };
+                    if quantity == BulkQuantity::Kc2 {
+                        let csfm = ids.iter().all(|&id| {
+                            (0..points as usize).all(|p| domain.element_gauss_kc2(id, p).is_some())
+                        });
+                        if !csfm {
+                            return Err(not_applicable("kc2 needs a csfmConcrete element"));
+                        }
+                    }
+                    let components = if bars || zero_lengths || quantity == BulkQuantity::Kc2 {
+                        1
+                    } else {
+                        3
+                    };
+                    bulks.push(ResolvedBulk {
+                        recorder_index: index,
+                        elements: ids,
+                        nodes: Vec::new(),
+                        points,
+                        components,
+                        quantity,
+                        bars,
+                        zero_lengths,
+                        emitted: 0,
+                    });
+                    ResolvedRecorder::Bulk {
+                        bulk: bulks.len() as u32 - 1,
+                    }
+                }
+                RecorderSpec::EmbeddedBar {
+                    bar,
+                    segment,
+                    quantity,
+                } => {
+                    if ndm == 3 {
+                        return Err(DecodeError::ElementKindNotInProfile {
+                            table: ElementKind::EmbeddedBar.table(),
+                        });
+                    }
+                    let group = model_output.embedded_bars.get(bar as usize).ok_or(
+                        DecodeError::UnknownElementIndex {
+                            table: ElementKind::EmbeddedBar.table(),
+                            row: bar,
+                        },
+                    )?;
+                    if segment as usize >= group.segments.len() {
+                        return Err(DecodeError::InvalidEmbeddedBarSegment {
+                            recorder: index as u32,
+                            bar,
+                            segment,
+                            count: group.segments.len() as u32,
+                        });
+                    }
+                    ResolvedRecorder::EmbeddedBar {
+                        element: elements.get(
+                            ElementKind::EmbeddedBar,
+                            group.first_segment + segment,
+                            ndm,
+                        )?,
+                        quantity,
                     }
                 }
             })
@@ -725,6 +930,8 @@ where
         node_ids,
         stages,
         recorders,
+        bulks,
+        elements.locations(),
         input.header.record_initial,
     ))
 }

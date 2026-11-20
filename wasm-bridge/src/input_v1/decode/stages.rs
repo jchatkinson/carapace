@@ -7,9 +7,9 @@
 use carapace_core::analysis::{
     Algorithm, AnalysisError, ArcDirection, ArcLength, ArcPredictor, ArcScales, ArcSeed,
     Backtracking, ConvergenceTest, DisplacementTarget, GroundMotion, Integrator, LineSearch,
-    LoadFactorTarget, RayleighDamping, TangentStrategy,
+    LoadFactorTarget, MaterialLimitTarget, RayleighDamping, TangentStrategy,
 };
-use carapace_core::model::{LoadPatternId, LoadSeries};
+use carapace_core::model::{LimitStateConfig, LoadPatternId, LoadSeries};
 
 use super::shared::check_dof_within;
 use crate::input_v1::error::DecodeError;
@@ -78,6 +78,24 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                         IntegratorSpec::LoadControl { increment } => Integrator::LoadControl {
                             increment: *increment,
                         },
+                        IntegratorSpec::LoadControlCutbacks {
+                            increment,
+                            min_increment,
+                        } => {
+                            if !(increment.is_finite() && *increment > 0.0) {
+                                return Err(invalid_option(stage.id(), "integrator.increment"));
+                            }
+                            if !(min_increment.is_finite()
+                                && *min_increment > 0.0
+                                && min_increment <= increment)
+                            {
+                                return Err(invalid_option(stage.id(), "integrator.minIncrement"));
+                            }
+                            Integrator::LoadControlCutbacks {
+                                increment: *increment,
+                                min_increment: *min_increment,
+                            }
+                        }
                         IntegratorSpec::DisplacementControl {
                             node,
                             dof,
@@ -392,6 +410,16 @@ fn arc_length_of<NId: Copy>(
         });
         config.stop.load_factor_zero_crossing = stop.load_factor_zero_crossing;
         config.stop.max_chord_length = stop.max_chord_length;
+        config.stop.material_limit = stop.material_limit.map(|target| {
+            Box::new(MaterialLimitTarget {
+                limits: LimitStateConfig {
+                    concrete_crushing_limit: target.concrete_crushing_limit,
+                    concrete_tensile_limit: target.concrete_tensile_limit,
+                    rebar_strain_limit: target.rebar_strain_limit,
+                },
+                exact: target.exact,
+            })
+        });
     }
     Ok(config)
 }

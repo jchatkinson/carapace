@@ -332,6 +332,28 @@ pub enum PlaneMaterialSpec {
     /// A symmetric positive-definite `D`, packed upper triangle row by row:
     /// `[d11, d12, d13, d22, d23, d33]`.
     ElasticMatrix { d: [f64; 6] },
+    /// The CSFM rotating principal-strain concrete (units N, mm, MPa; `nu = 0`). `fck` must
+    /// satisfy `0 < fck <= 65` (EN 1992-1-1 Table 3.1 strength constants above 50); `ecm` overrides the derived `Ecm`; `tensile_regularization` is
+    /// the numerical regularization factor `gamma` (`0 < gamma < 1`), not a material property.
+    CsfmConcrete {
+        fck: f64,
+        #[serde(default)]
+        #[tsify(optional)]
+        ecm: Option<f64>,
+        law: CsfmConcreteLawSpec,
+        softening: bool,
+        #[serde(default)]
+        #[tsify(optional)]
+        tensile_regularization: Option<f64>,
+    },
+}
+
+/// Compression envelope of a `csfmConcrete` plane material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum CsfmConcreteLawSpec {
+    ParabolaRectangle,
+    ElasticIdeallyPlastic,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
@@ -339,6 +361,119 @@ pub enum PlaneMaterialSpec {
 pub enum PlaneStateSpec {
     PlaneStress,
     PlaneStrain,
+}
+
+/// One embedded rebar (2D models only): a polyline `[x0, y0, x1, y1, ...]` (mm) discretized
+/// against the `triangles`/`quads` it runs through, one `embeddedBar` element per piece. `area`
+/// is the bar's cross-section (mm^2) and `material` indexes `materials` (a `csfmRebar` for CSFM).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedBarSpec {
+    pub polyline: Vec<f64>,
+    pub area: f64,
+    pub material: u32,
+    /// The continuum elements the bar may embed in; omitted is `"all"`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub hosts: Option<EmbeddedBarHostsSpec>,
+    /// Bond-slip model (ULS): the bar slips against the concrete through bond springs at its discretization
+    /// points. Omitted: perfect bond (the bar strain is the host displacement field projected on it).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub bond: Option<BondSpecWire>,
+    /// The first point of the polyline is anchored beyond the mesh: the bar is held along its tangent there (its force goes to
+    /// that restraint, not into the concrete) and follows the concrete normal to it. No bond or anchorage spring acts at that end.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub anchored_start: Option<bool>,
+    /// The last point of the polyline is anchored beyond the mesh, as `anchoredStart`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub anchored_end: Option<bool>,
+    /// A force on the first end of the bar (a rod node: needs a `bond` spec or an anchored other end), pulling it outward along the bar.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub start_load: Option<BarEndLoadSpec>,
+    /// A force on the last end of the bar, as `startLoad`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub end_load: Option<BarEndLoadSpec>,
+}
+
+/// A force applied to a bar end through a load pattern: `force` (N) is the tension it puts in the bar (outward along the bar's tangent).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BarEndLoadSpec {
+    /// Index into `LoadPatternTable`.
+    pub pattern: u32,
+    /// Index into `SequenceSpec::stages`, as `NodalLoadTable::stage`; omitted is the first stage.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub stage: Option<u32>,
+    pub force: f64,
+}
+
+/// `embeddedBars[i].bond` (N, mm, MPa). See `core::model::continuum::bond`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct BondSpecWire {
+    /// Total bar perimeter `n pi D` (mm).
+    pub perimeter: f64,
+    /// Design bond strength `fbd` (MPa).
+    pub fbd: f64,
+    /// Elastic bond stiffness `kG Ec / D` (MPa per mm of slip).
+    pub gb: f64,
+    /// Plastic slope as a fraction of `gb`; omitted is the book's `1e-5`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub rf: Option<f64>,
+    /// Stop slip `alpha delta_u_max` (mm) of the bond and anchorage springs.
+    pub slip_limit: f64,
+    /// Turn angle (degrees) above which a vertex is slip-locked; omitted is 15.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub lock_angle: Option<f64>,
+    /// Anchorage spring at the first point of the polyline (omitted: a straight end).
+    #[serde(default)]
+    #[tsify(optional)]
+    pub start: Option<AnchorageSpringWire>,
+    /// Anchorage spring at the last point.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub end: Option<AnchorageSpringWire>,
+}
+
+/// An anchorage end spring: yield force `fau` (N), elastic stiffness `ka` (N/mm), hardening `ksn * ka`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct AnchorageSpringWire {
+    pub fau: f64,
+    pub ka: f64,
+    /// Omitted is the book's `1e-2`.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub ksn: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(untagged)]
+pub enum EmbeddedBarHostsSpec {
+    All(AllHosts),
+    List(Vec<HostElementSpec>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub enum AllHosts {
+    All,
+}
+
+/// A host element: `kind` is `tri3` or `quad4`, `index` its row in that kind's table.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase")]
+pub struct HostElementSpec {
+    pub kind: ElementKind,
+    pub index: u32,
 }
 
 /// 3-node constant-strain triangles (2D models only). `nodeIds` has stride 3
@@ -372,7 +507,31 @@ pub struct QuadTable {
     pub formulation: Vec<Quad4FormulationSpec>,
 }
 
-/// A shell section, referenced by `shell4s` rows through the `shellSections` arena. Generalized
+/// ETABS-style stiffness modifiers on a shell section; each omitted factor is `1`. `f11 f22 f12` scale the
+/// membrane terms, `m11 m22 m12` the bending terms and `v13 v23` the transverse shear (no effect on `shell3s`).
+/// Every factor must be finite and positive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, tsify::Tsify)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ShellModifiersSpec {
+    #[tsify(optional)]
+    pub f11: Option<f64>,
+    #[tsify(optional)]
+    pub f22: Option<f64>,
+    #[tsify(optional)]
+    pub f12: Option<f64>,
+    #[tsify(optional)]
+    pub m11: Option<f64>,
+    #[tsify(optional)]
+    pub m22: Option<f64>,
+    #[tsify(optional)]
+    pub m12: Option<f64>,
+    #[tsify(optional)]
+    pub v13: Option<f64>,
+    #[tsify(optional)]
+    pub v23: Option<f64>,
+}
+
+/// A shell section, referenced by `shell3s` and `shell4s` rows through the `shellSections` arena. Generalized
 /// strain and resultants follow OpenSees' `ElasticMembranePlateSection` ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, tsify::Tsify)]
 #[serde(
@@ -382,8 +541,16 @@ pub struct QuadTable {
 )]
 pub enum ShellSectionSpec {
     /// Isotropic elastic membrane + plate bending + transverse shear: modulus, Poisson ratio,
-    /// thickness and mass density (per unit volume).
-    ElasticMembranePlate { e: f64, nu: f64, h: f64, rho: f64 },
+    /// thickness and mass density (per unit volume), with optional stiffness modifiers.
+    ElasticMembranePlate {
+        e: f64,
+        nu: f64,
+        h: f64,
+        rho: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[tsify(optional)]
+        modifiers: Option<ShellModifiersSpec>,
+    },
 }
 
 /// 3-node DKT/Allman shells (3D models only). `nodeIds` has stride 3 (the node order sets the local normal by the
@@ -422,10 +589,11 @@ pub enum ElementKind {
     Quad4,
     Shell3,
     Shell4,
+    EmbeddedBar,
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 13] = [
+    pub const ALL: [ElementKind; 14] = [
         ElementKind::Truss,
         ElementKind::ElasticBeamColumn2d,
         ElementKind::ElasticBeamColumn3d,
@@ -439,6 +607,7 @@ impl ElementKind {
         ElementKind::Quad4,
         ElementKind::Shell3,
         ElementKind::Shell4,
+        ElementKind::EmbeddedBar,
     ];
 
     /// The kind's table name as `DecodeError`s report it (snake_case).
@@ -457,6 +626,7 @@ impl ElementKind {
             ElementKind::Quad4 => "quads",
             ElementKind::Shell3 => "shell3s",
             ElementKind::Shell4 => "shell4s",
+            ElementKind::EmbeddedBar => "embedded_bars",
         }
     }
 
@@ -469,7 +639,8 @@ impl ElementKind {
             | ElementKind::DispBeamColumn2d
             | ElementKind::ForceBeamColumn2d
             | ElementKind::Tri3
-            | ElementKind::Quad4 => Some(2),
+            | ElementKind::Quad4
+            | ElementKind::EmbeddedBar => Some(2),
             ElementKind::ElasticBeamColumn3d
             | ElementKind::DispBeamColumn3d
             | ElementKind::ForceBeamColumn3d
@@ -499,6 +670,11 @@ impl ElementKind {
             ElementKind::Quad4 => 4,
             _ => 0,
         }
+    }
+
+    /// Whether `core` applies a `Trapezoid` load to this kind (the 2D elastic beam-column only).
+    pub fn accepts_trapezoid_load(self) -> bool {
+        matches!(self, ElementKind::ElasticBeamColumn2d)
     }
 
     /// Whether `core` applies a beam `Uniform` load to this kind (the beam-columns).
@@ -538,6 +714,15 @@ pub enum ElementLoadSpec {
         #[serde(default)]
         #[tsify(optional)]
         wz: Option<f64>,
+    },
+    /// Linearly varying (trapezoidal) load in the element's *local* axes, 2D `elasticBeamColumn2d` only:
+    /// intensity `(wxI, wyI)` at node i varying linearly to `(wxJ, wyJ)` at node j (force/length). It adds to
+    /// any `Uniform` rows on the element. The other beam-column kinds and the 3D profile reject it.
+    Trapezoid {
+        wx_i: f64,
+        wy_i: f64,
+        wx_j: f64,
+        wy_j: f64,
     },
     /// Body force per unit volume in global axes (continuum elements, 2D).
     Body { bx: f64, by: f64 },

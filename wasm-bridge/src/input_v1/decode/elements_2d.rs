@@ -4,10 +4,12 @@
 //! strategy as `elements_3d.rs`; only the element constructors and table
 //! shapes differ (see `tables.rs`).
 
+use carapace_core::model::continuum::{bond_polyline, embed_polyline_in, BondSpec, EndSpring};
 use carapace_core::model::{
-    DispBeamColumn, Domain, ElasticBeamColumn, Element, ElementId, ElementLoad, Fiber,
-    FiberSection, ForceBeamColumn, Friction, GeomTransf, Material, NodeId, PlaneMaterial, Quad4,
-    Quad4Formulation, Tri3, Truss, ZeroLength, ZeroLengthSection,
+    CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain, ElasticBeamColumn, Element,
+    ElementId, ElementLoad, EmbeddedBar, EmbeddedBarHost, Fiber, FiberSection, ForceBeamColumn,
+    Friction, GeomTransf, Material, NodeId, PlaneMaterial, Quad4, Quad4Formulation, Tri3, Truss,
+    ZeroLength, ZeroLengthSection,
 };
 
 use super::shared::{
@@ -17,10 +19,14 @@ use super::shared::{
 };
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
+use crate::input_v1::model_output::{
+    BondGroup, BondPointInfo, EmbeddedBarGroup, EmbeddedBarSegment, ModelOutput, RebarRouting,
+};
 use crate::input_v1::session::Session2;
 use crate::input_v1::tables::{
-    ElementKind, ElementLoadSpec, PlaneMaterialSpec, PlaneStateSpec, Quad4FormulationSpec,
-    QuadTable, TransformSpec, TriangleTable, ZeroLengthSectionTable, ZeroLengthTable,
+    CsfmConcreteLawSpec, ElementKind, ElementLoadSpec, EmbeddedBarHostsSpec, EmbeddedBarSpec,
+    PlaneMaterialSpec, PlaneStateSpec, Quad4FormulationSpec, QuadTable, TransformSpec,
+    TriangleTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -165,21 +171,263 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         add_quads(&mut domain, &input.quads, &node_at, &plane_materials)?,
     );
 
+    let mut bar_end_loads = Vec::new();
+    let model_output = add_embedded_bars(
+        &mut domain,
+        &input.embedded_bars,
+        &materials,
+        &mut elements,
+        &node_ids,
+        &mut bar_end_loads,
+    )?;
+
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
-    finish(domain, &input, node_ids, elements, |spec| {
-        Some(match *spec {
-            ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
-            ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),
-            ElementLoadSpec::EdgeTraction { edge, tx, ty } => {
-                ElementLoad::edge_traction(edge as usize, tx, ty)
+    let mut session = finish(
+        domain,
+        &input,
+        node_ids,
+        elements,
+        &model_output,
+        bar_end_loads,
+        |spec| {
+            Some(match *spec {
+                ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
+                ElementLoadSpec::Trapezoid {
+                    wx_i,
+                    wy_i,
+                    wx_j,
+                    wy_j,
+                } => ElementLoad::trapezoid(wx_i, wy_i, wx_j, wy_j),
+                ElementLoadSpec::Body { bx, by } => ElementLoad::body(bx, by),
+                ElementLoadSpec::EdgeTraction { edge, tx, ty } => {
+                    ElementLoad::edge_traction(edge as usize, tx, ty)
+                }
+                ElementLoadSpec::EdgePressure { edge, pressure } => {
+                    ElementLoad::edge_pressure(edge as usize, pressure)
+                }
+                ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
+                    return None
+                }
+            })
+        },
+    )?;
+    session.set_model_output(model_output);
+    Ok(session)
+}
+
+/// Discretizes each `embeddedBars` row through `embed_polyline_in` and registers its segments
+/// as `EmbeddedBar` elements, in row order (segment indices are flat across bars).
+fn add_embedded_bars(
+    domain: &mut Domain,
+    table: &[EmbeddedBarSpec],
+    materials: &[Material],
+    elements: &mut ElementIds<ElementId>,
+    node_ids: &[NodeId],
+    bar_end_loads: &mut Vec<(u32, u32, NodeId, usize, f64)>,
+) -> Result<ModelOutput, DecodeError> {
+    const TABLE: &str = "embedded_bars";
+    let invalid = |row: usize, reason: &'static str| DecodeError::InvalidRow {
+        table: TABLE,
+        row: row as u32,
+        reason,
+    };
+    let node_row = |id: NodeId| node_ids.iter().position(|&n| n == id).unwrap_or(0) as u32;
+    let mut all_segments = Vec::new();
+    let mut groups = Vec::with_capacity(table.len());
+    for (row, bar) in table.iter().enumerate() {
+        if bar.polyline.len() < 4 || bar.polyline.len() % 2 != 0 {
+            return Err(invalid(
+                row,
+                "polyline must hold at least two (x, y) vertices",
+            ));
+        }
+        if !(bar.area.is_finite() && bar.area > 0.0) || bar.polyline.iter().any(|v| !v.is_finite())
+        {
+            return Err(invalid(
+                row,
+                "area must be finite and positive, and the polyline finite",
+            ));
+        }
+        let material =
+            materials
+                .get(bar.material as usize)
+                .ok_or(DecodeError::UnknownMaterialIndex {
+                    table: TABLE,
+                    row: bar.material,
+                })?;
+        let allowed = match &bar.hosts {
+            None | Some(EmbeddedBarHostsSpec::All(_)) => None,
+            Some(EmbeddedBarHostsSpec::List(list)) => Some(
+                list.iter()
+                    .map(|host| {
+                        if !matches!(host.kind, ElementKind::Tri3 | ElementKind::Quad4) {
+                            return Err(invalid(row, "a host must be a tri3 or quad4 element"));
+                        }
+                        elements.get(host.kind, host.index, NDM)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+        };
+        let polyline: Vec<[f64; 2]> = bar.polyline.chunks(2).map(|v| [v[0], v[1]]).collect();
+        let segments = embed_polyline_in(domain, &polyline, bar.area, material, allowed.as_deref())
+            .map_err(|error| DecodeError::InvalidModel {
+                error: error.into(),
+            })?;
+
+        let first_segment = all_segments.len() as u32;
+        let mut reported = Vec::with_capacity(segments.len());
+        let mut bond_group = None;
+        let mut rods: Vec<EmbeddedBar> = Vec::new();
+        let restrained = [
+            bar.anchored_start.unwrap_or(false),
+            bar.anchored_end.unwrap_or(false),
+        ];
+        // A bar with a bond law, or perfectly bonded with an end anchored beyond the mesh, is built from rod nodes.
+        let rebuilt = bar.bond.is_some() || restrained.iter().any(|&r| r);
+        if rebuilt {
+            let spec = match &bar.bond {
+                Some(wire) => BondSpec {
+                    perimeter: wire.perimeter,
+                    fbd: wire.fbd,
+                    gb: wire.gb,
+                    rf: wire.rf.unwrap_or(1e-5),
+                    slip_limit: wire.slip_limit,
+                    lock_angle: wire.lock_angle.unwrap_or(15.0).to_radians(),
+                    ends: [wire.start, wire.end].map(|end| {
+                        end.map(|e| EndSpring {
+                            fau: e.fau,
+                            ka: e.ka,
+                            ksn: e.ksn.unwrap_or(1e-2),
+                        })
+                    }),
+                    perfect: false,
+                    restrained,
+                },
+                None => BondSpec {
+                    perimeter: 1.0,
+                    fbd: 1.0,
+                    gb: 1.0,
+                    rf: 1e-5,
+                    slip_limit: 1.0,
+                    lock_angle: 15f64.to_radians(),
+                    ends: [None, None],
+                    perfect: true,
+                    restrained,
+                },
+            };
+            spec.validate().map_err(|reason| invalid(row, reason))?;
+            let built =
+                bond_polyline(domain, &segments, bar.area, material, &spec).map_err(|error| {
+                    DecodeError::InvalidModel {
+                        error: error.into(),
+                    }
+                })?;
+            for (end, load) in [(0, bar.start_load), (built.points.len() - 1, bar.end_load)] {
+                let Some(load) = load else { continue };
+                let point = &built.points[end];
+                let (Some(node), false) = (point.rod, restrained[usize::from(end != 0)]) else {
+                    return Err(invalid(
+                        row,
+                        "a bar end load needs a bond spec or an anchored other end, and an end that is not anchored",
+                    ));
+                };
+                // Positive `force` is tension: outward along the bar, against the tangent at the first end.
+                let sign = if end == 0 { -1.0 } else { 1.0 };
+                let stage = load.stage.unwrap_or(0);
+                for (dof, component) in point.tangent.iter().enumerate() {
+                    if *component != 0.0 {
+                        bar_end_loads.push((
+                            load.pattern,
+                            stage,
+                            node,
+                            dof,
+                            sign * load.force * component,
+                        ));
+                    }
+                }
             }
-            ElementLoadSpec::EdgePressure { edge, pressure } => {
-                ElementLoad::edge_pressure(edge as usize, pressure)
+            let mut points: Vec<BondPointInfo> = built
+                .points
+                .iter()
+                .map(|p| BondPointInfo {
+                    position: p.coords,
+                    tangent: p.tangent,
+                    locked: p.rod.is_none(),
+                    tributary: 0.0,
+                    spring: None,
+                    end_spring: None,
+                })
+                .collect();
+            let first_row = elements.count(ElementKind::ZeroLength) as u32;
+            let mut ids = Vec::with_capacity(built.springs.len());
+            for (offset, spring) in built.springs.into_iter().enumerate() {
+                let point = &mut points[spring.point];
+                if spring.end {
+                    point.end_spring = Some(first_row + offset as u32);
+                } else {
+                    point.spring = Some(first_row + offset as u32);
+                    point.tributary = spring.tributary;
+                }
+                ids.push(domain.add_element(Element::ZeroLength(spring.element)));
             }
-            ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
-                return None
+            elements.extend(ElementKind::ZeroLength, ids);
+            if bar.bond.is_some() {
+                bond_group = Some(BondGroup { points });
             }
-        })
+            rods = built.rods;
+        }
+        for (index, segment) in segments.into_iter().enumerate() {
+            let [start, end] = segment
+                .end_points()
+                .expect("embed_polyline sets end points");
+            let (host_kind, host_nodes) = match segment.host() {
+                EmbeddedBarHost::Tri3 { nodes, .. } => (
+                    ElementKind::Tri3,
+                    nodes.iter().map(|&n| node_row(n)).collect(),
+                ),
+                EmbeddedBarHost::Quad4 { nodes, .. } => (
+                    ElementKind::Quad4,
+                    nodes.iter().map(|&n| node_row(n)).collect(),
+                ),
+                EmbeddedBarHost::Rod { .. } => {
+                    unreachable!("embed_polyline binds every segment to a host")
+                }
+            };
+            reported.push(EmbeddedBarSegment {
+                start,
+                end,
+                length: segment.length(),
+                host_kind,
+                host_nodes,
+            });
+            let element = if rebuilt {
+                rods[index].clone()
+            } else {
+                segment
+            };
+            all_segments.push(domain.add_element(Element::EmbeddedBar(element)));
+        }
+        let (routing, sr) = match material {
+            Material::CsfmRebar(fields) => (
+                Some(match fields.routing {
+                    CsfmRebarRouting::Tcm => RebarRouting::Tcm,
+                    CsfmRebarRouting::Pom => RebarRouting::Pom,
+                }),
+                Some(fields.sr),
+            ),
+            _ => (None, None),
+        };
+        groups.push(EmbeddedBarGroup {
+            first_segment,
+            segments: reported,
+            routing,
+            sr,
+            bond: bond_group,
+        });
+    }
+    elements.set(ElementKind::EmbeddedBar, all_segments);
+    Ok(ModelOutput {
+        embedded_bars: groups,
     })
 }
 
@@ -207,6 +455,26 @@ fn resolve_plane_materials(specs: &[PlaneMaterialSpec]) -> Result<Vec<PlaneMater
                     angle,
                 } => PlaneMaterial::orthotropic(ex, ey, nu_xy, g_xy, angle),
                 PlaneMaterialSpec::ElasticMatrix { d } => PlaneMaterial::elastic_matrix(d),
+                PlaneMaterialSpec::CsfmConcrete {
+                    fck,
+                    ecm,
+                    law,
+                    softening,
+                    tensile_regularization,
+                } => PlaneMaterial::csfm_concrete(
+                    fck,
+                    ecm,
+                    match law {
+                        CsfmConcreteLawSpec::ParabolaRectangle => {
+                            CsfmConcreteLaw::ParabolaRectangle
+                        }
+                        CsfmConcreteLawSpec::ElasticIdeallyPlastic => {
+                            CsfmConcreteLaw::ElasticIdeallyPlastic
+                        }
+                    },
+                    softening,
+                    tensile_regularization,
+                ),
             }
             .map_err(|error| DecodeError::InvalidPlaneMaterial {
                 index: index as u32,

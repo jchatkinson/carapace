@@ -6,19 +6,19 @@ use carapace_core::model::{
     GeomTransf, Material, Node, Node3, SpatialDof,
 };
 
-/// Every check here is derived from plain nodal-equilibrium statics (sum of
-/// forces/moments = 0), independent of any element's internal formulation —
-/// not by re-deriving the element's own formula and checking it agrees with
-/// itself. A single-element cantilever is statically determinate, so this
-/// pins down `local_force` exactly, not just approximately: at a free,
-/// directly-loaded dof, the element's local nodal force must equal the
-/// applied load (that's what "solved" means); at a fixed dof, it must equal
-/// the reaction the rest of the free body's equilibrium requires.
-///
-/// Each member below is aligned with global `x`, so its local axes coincide
-/// with global — isolating the per-element-type `local_force` logic itself
-/// from the separate rotation logic a skew member would also exercise (see
-/// `elastic_beam_column_local_force_decomposes_purely_axially_...` below).
+// Every check here is derived from plain nodal-equilibrium statics (sum of
+// forces/moments = 0), independent of any element's internal formulation —
+// not by re-deriving the element's own formula and checking it agrees with
+// itself. A single-element cantilever is statically determinate, so this
+// pins down `local_force` exactly, not just approximately: at a free,
+// directly-loaded dof, the element's local nodal force must equal the
+// applied load (that's what "solved" means); at a fixed dof, it must equal
+// the reaction the rest of the free body's equilibrium requires.
+//
+// Each member below is aligned with global `x`, so its local axes coincide
+// with global — isolating the per-element-type `local_force` logic itself
+// from the separate rotation logic a skew member would also exercise (see
+// `elastic_beam_column_local_force_decomposes_purely_axially_...` below).
 
 /// `Truss` local forces for an axially loaded bar equal the applied load with opposite signs at the
 /// two nodes, `[-N, 0, 0, N, 0, 0]`.

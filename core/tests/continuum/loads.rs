@@ -28,7 +28,7 @@ fn material() -> PlaneMaterial {
 }
 
 /// `ElementLoad` values add and scale field by field (beam uniform, body force, edge traction, edge
-/// pressure), and expose a fixed 16-component layout via `component(i)`, which is what element-load
+/// pressure), and expose a fixed 18-component layout via `component(i)`, which is what element-load
 /// recorders index into.
 #[test]
 fn loads_accumulate_field_by_field_and_expose_a_fixed_component_layout() {
@@ -44,13 +44,31 @@ fn loads_accumulate_field_by_field_and_expose_a_fixed_component_layout() {
     assert_eq!((scaled.beam_uniform, scaled.body), ([2.0, 4.0], [6.0, 8.0]));
 
     // [wx, wy, bx, by, t0x, t0y, p0, t1x, t1y, p1, ...]
-    assert_eq!(ElementLoad::COUNT, 16);
+    assert_eq!(ElementLoad::COUNT, 18);
     let load = both + summed;
     let expect = [1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 5.0, 6.0, 8.0];
     for (i, e) in expect.into_iter().enumerate() {
         assert_eq!(load.component(i), e, "component {i}");
     }
     assert_eq!(load.component(16), 0.0);
+
+    // The beam taper is the change in intensity from node i to node j and occupies the last two slots.
+    let trapezoid = ElementLoad::trapezoid(1.0, 2.0, 4.0, -2.0);
+    assert_eq!(
+        (trapezoid.beam_uniform, trapezoid.beam_taper),
+        ([1.0, 2.0], [3.0, -4.0])
+    );
+    assert!(trapezoid.has_beam() && trapezoid.has_taper());
+    let doubled = (trapezoid + trapezoid * 0.5) * 2.0;
+    assert_eq!(
+        (
+            doubled.component(1),
+            doubled.component(16),
+            doubled.component(17)
+        ),
+        (6.0, 9.0, -12.0)
+    );
+    assert_eq!(doubled.component(18), 0.0);
 }
 
 /// Body-force loads from several patterns on the same Quad4 add up with each pattern's load factor
@@ -315,9 +333,9 @@ fn edge_load_patch(quads: bool, formulation: Quad4Formulation) {
     analysis.step().unwrap();
     for id in elements {
         for point in analysis.domain().element_gauss_responses(id).unwrap() {
-            for c in 0..3 {
+            for (stress, expected) in point.stress.iter().zip(sigma.iter()) {
                 assert!(
-                    (point.stress[c] - sigma[c]).abs() < 1e-9,
+                    (stress - expected).abs() < 1e-9,
                     "quads {quads} {formulation:?}: {point:?}"
                 );
             }

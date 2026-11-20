@@ -12,6 +12,7 @@ use carapace_core::model::{
 
 /// Adds the nodes of an `nx` by `ny` grid over `[0, l] x [0, h]` (row-major) with `setup`
 /// customizing each node, then the Quad4 elements.
+#[allow(clippy::too_many_arguments)]
 fn quad_grid(
     domain: &mut Domain,
     (nx, ny): (usize, usize),

@@ -11,9 +11,10 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LoadPatternId,
-    LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView, ShellResponse, SparseMatrix,
-    TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LimitKind,
+    LimitStateConfig, LoadPatternId, LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView,
+    ShellResponse, SparseMatrix, TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF,
+    SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -267,6 +268,13 @@ where
         &self.elements[id]
     }
 
+    /// Every element, with its key — e.g. for `embed_polyline` to find
+    /// which continuum elements a point lies in without `Domain` having
+    /// to know anything about embedding itself.
+    pub fn elements(&self) -> impl Iterator<Item = (E::Id, &E)> {
+        self.elements.iter()
+    }
+
     fn node_view(&self) -> NodeView<'_, NDIM, NDOF, NId> {
         NodeView::new(&self.nodes)
     }
@@ -325,6 +333,23 @@ where
         self.elements[id].gauss_point_count()
     }
 
+    /// Kaufmann's `kc2` at Gauss point `point` of `id` (`CsfmConcrete` points only, else `None`).
+    pub fn element_gauss_kc2(&self, id: E::Id, point: usize) -> Option<f64> {
+        self.elements[id].gauss_kc2(&self.node_view(), point)
+    }
+
+    /// `(axial force, strain, stress, ruptured)` of the embedded bar `id` (`None` for any other
+    /// element kind).
+    pub fn element_embedded_bar_response(&self, id: E::Id) -> Option<(f64, f64, f64, bool)> {
+        self.elements[id].embedded_bar_response(&self.node_view())
+    }
+
+    /// `(deformation, force)` of the zero-length element `id` along its first material direction (`None` for any
+    /// other element kind).
+    pub fn element_zero_length_response(&self, id: E::Id) -> Option<(f64, f64)> {
+        self.elements[id].zero_length_response(&self.node_view())
+    }
+
     /// Components per Gauss-point strain/stress vector of `id` (3 for plane elements, 8 for shells).
     pub fn element_gauss_component_count(&self, id: E::Id) -> usize {
         self.elements[id].gauss_component_count()
@@ -340,6 +365,30 @@ where
     /// for every element kind that is not a shell.
     pub fn element_shell_responses(&self, id: E::Id) -> Option<Vec<ShellResponse>> {
         self.elements[id].shell_responses(&self.node_view())
+    }
+
+    /// The controlling (worst, highest-utilization) `(element, utilization,
+    /// kind)` over every element's `ElementOps::limit_utilization` (plan
+    /// `docs/csfm-plan.md` §2.5 point 3), evaluated at the current *trial*
+    /// state — `None` when no element in the model reports a limit state at
+    /// all (e.g. no CSFM materials). `limits` is forwarded to every
+    /// element unchanged; pass `&LimitStateConfig::default()` for the
+    /// always-on crushing/rupture criteria alone.
+    pub fn controlling_limit_utilization(
+        &self,
+        limits: &LimitStateConfig,
+    ) -> Option<(E::Id, f64, LimitKind)> {
+        let view = self.node_view();
+        let mut worst: Option<(E::Id, f64, LimitKind)> = None;
+        for (id, element) in self.elements.iter() {
+            let Some((utilization, kind)) = element.limit_utilization(&view, limits) else {
+                continue;
+            };
+            if worst.is_none_or(|(_, best, _)| utilization > best) {
+                worst = Some((id, utilization, kind));
+            }
+        }
+        worst
     }
 
     /// Support/equilibrium reaction at `(node, dof)`: net internal element
@@ -397,6 +446,51 @@ where
         }
 
         resistance.total - applied
+    }
+
+    /// `reaction` for every node and DOF in one pass over the elements and patterns. The per-DOF
+    /// `reaction` sweeps every element on each call, so reading all of them with it is quadratic
+    /// in the model size.
+    pub fn reactions_all(&self, pseudo_time: f64) -> slotmap::SecondaryMap<NId, [f64; NDOF]> {
+        let view = self.node_view();
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        let mut totals = slotmap::SecondaryMap::new();
+        for node in self.nodes.keys() {
+            totals.insert(node, [0.0; NDOF]);
+        }
+
+        let mut resistance = AccumulateDofs {
+            totals: &mut totals,
+            sign: 1.0,
+        };
+        for (element_id, element) in self.elements.iter() {
+            let load = effective_element_load(&active, element_id);
+            element.assemble_tangent(&view, load.as_ref(), &mut resistance);
+        }
+
+        for (_, pattern) in self.load_patterns.iter() {
+            let factor = pattern.factor(pseudo_time);
+            if factor == 0.0 {
+                continue;
+            }
+            for node in self.nodes.keys() {
+                if let Some(nodal_load) = pattern.nodal_load(node) {
+                    for (total, load) in totals[node].iter_mut().zip(nodal_load) {
+                        *total -= factor * load;
+                    }
+                }
+            }
+            let mut applied = AccumulateDofs {
+                totals: &mut totals,
+                sign: -factor,
+            };
+            for (element_id, element) in self.elements.iter() {
+                if let Some(element_load) = pattern.element_load(element_id) {
+                    element.assemble_load(&view, Some(element_load), &mut applied);
+                }
+            }
+        }
+        totals
     }
 
     /// Total lumped mass at a physical node/DOF, including attached elements.
@@ -1535,6 +1629,38 @@ impl<NId> PickDof<NId> {
             node,
             dof: dof as u8,
             total: 0.0,
+        }
+    }
+}
+
+/// Adds every `(node, dof)` entry of an element's resistance or load vector into `totals`, scaled
+/// by `sign` — `Domain::reactions_all`'s single-pass counterpart of `PickDof`.
+struct AccumulateDofs<'a, NId: Key, const NDOF: usize> {
+    totals: &'a mut slotmap::SecondaryMap<NId, [f64; NDOF]>,
+    sign: f64,
+}
+
+impl<NId: Key, const NDOF: usize> TangentSink<NId> for AccumulateDofs<'_, NId, NDOF> {
+    fn add<const N: usize>(
+        &mut self,
+        dofs: &[DofRef<NId>; N],
+        _k: &SMatrix<f64, N, N>,
+        r: &SVector<f64, N>,
+    ) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if let Some(total) = self.totals.get_mut(node) {
+                total[slot as usize] += self.sign * r[a];
+            }
+        }
+    }
+}
+
+impl<NId: Key, const NDOF: usize> VectorSink<NId> for AccumulateDofs<'_, NId, NDOF> {
+    fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if let Some(total) = self.totals.get_mut(node) {
+                total[slot as usize] += self.sign * v[a];
+            }
         }
     }
 }

@@ -2,8 +2,8 @@ use nalgebra::{SMatrix, SVector};
 use slotmap::new_key_type;
 
 use super::{
-    ElementLoad, ElementLoad3, Node, Node3, Node3Id, NodeId, ELEMENT_DOF, NDF, PLANAR_NDIM,
-    SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
+    ElementLoad, ElementLoad3, LimitKind, LimitStateConfig, Node, Node3, Node3Id, NodeId,
+    ELEMENT_DOF, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 mod ops;
@@ -14,6 +14,7 @@ pub use ops::{
 
 mod disp_beam_column;
 mod elastic_beam_column;
+mod embedded_bar;
 mod force_beam_column;
 mod plane_common;
 mod quad4;
@@ -26,6 +27,7 @@ mod zero_length;
 
 pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
+pub use embedded_bar::{EmbeddedBar, EmbeddedBarHost};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
 pub use quad4::{Quad4, Quad4Formulation};
 pub use shell3::Shell3;
@@ -49,6 +51,10 @@ new_key_type! {
 
 /// Element catalog. Closed enum, `match`-based dispatch, no `Box<dyn Trait>`
 ///.
+// The size gap is `Quad4` (its per-point caches are inline, about 2.4 KB against about 0.6 KB for the next). Boxing it
+// would put an allocation and an indirection on every element visit in the assembly hot loop, so the lint is
+// suppressed deliberately, as for `Integrator`.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Element {
     Truss(Truss),
@@ -59,9 +65,11 @@ pub enum Element {
     ForceBeamColumn(ForceBeamColumn),
     Tri3(Tri3),
     Quad4(Quad4),
+    EmbeddedBar(EmbeddedBar),
 }
 
-const CONTINUUM: &str = "continuum elements assemble through ElementOps, not the two-node path";
+const CONTINUUM: &str =
+    "continuum and embedded-bar elements assemble through ElementOps, not the two-node path";
 
 impl Element {
     /// The nodes this element connects, in local order.
@@ -69,6 +77,11 @@ impl Element {
         match self {
             Element::Tri3(t) => t.nodes.into_iter().collect(),
             Element::Quad4(q) => q.nodes.into_iter().collect(),
+            Element::EmbeddedBar(bar) => match bar.host() {
+                EmbeddedBarHost::Tri3 { nodes, .. } => nodes.iter().copied().collect(),
+                EmbeddedBarHost::Quad4 { nodes, .. } => nodes.iter().copied().collect(),
+                EmbeddedBarHost::Rod { nodes, .. } => nodes.iter().copied().collect(),
+            },
             _ => self.pair().into_iter().collect(),
         }
     }
@@ -76,7 +89,9 @@ impl Element {
     /// The two end nodes of a two-node element.
     fn pair(&self) -> [NodeId; 2] {
         match self {
-            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) | Element::EmbeddedBar(_) => {
+                unreachable!("{CONTINUUM}")
+            }
             Element::Truss(t) => [t.node_i, t.node_j],
             Element::ZeroLength(z) => [z.node_i, z.node_j],
             Element::ZeroLengthSection(z) => [z.node_i, z.node_j],
@@ -108,7 +123,9 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_tangent_and_resistance(node_i, node_j, load),
-            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) | Element::EmbeddedBar(_) => {
+                unreachable!("{CONTINUUM}")
+            }
         }
     }
 
@@ -125,9 +142,7 @@ impl Element {
         load: Option<&ElementLoad>,
     ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
-            (Element::ElasticBeamColumn(b), Some(load)) => {
-                b.form_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
-            }
+            (Element::ElasticBeamColumn(b), Some(load)) => b.form_load_vector(node_i, node_j, load),
             (Element::DispBeamColumn(b), Some(load)) => {
                 b.form_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
             }
@@ -147,7 +162,7 @@ impl Element {
     ) -> SVector<f64, ELEMENT_DOF> {
         match (self, load) {
             (Element::ElasticBeamColumn(b), Some(load)) => {
-                b.form_local_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
+                b.form_local_load_vector(node_i, node_j, load)
             }
             (Element::DispBeamColumn(b), Some(load)) => {
                 b.form_local_load_vector(node_i, node_j, load.beam_uniform[0], load.beam_uniform[1])
@@ -171,7 +186,9 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::DispBeamColumn(b) => b.form_mass(node_i, node_j),
             Element::ForceBeamColumn(b) => b.form_mass(node_i, node_j),
-            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) | Element::EmbeddedBar(_) => {
+                unreachable!("{CONTINUUM}")
+            }
         }
     }
 
@@ -188,7 +205,9 @@ impl Element {
             Element::ElasticBeamColumn(_) => {}
             Element::DispBeamColumn(b) => b.commit(node_i, node_j),
             Element::ForceBeamColumn(b) => b.commit(node_i, node_j, load),
-            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) | Element::EmbeddedBar(_) => {
+                unreachable!("{CONTINUUM}")
+            }
         }
     }
 
@@ -204,7 +223,9 @@ impl Element {
             Element::ElasticBeamColumn(b) => b.local_force(node_i, node_j),
             Element::DispBeamColumn(b) => b.local_force(node_i, node_j),
             Element::ForceBeamColumn(b) => b.local_force(),
-            Element::Tri3(_) | Element::Quad4(_) => unreachable!("{CONTINUUM}"),
+            Element::Tri3(_) | Element::Quad4(_) | Element::EmbeddedBar(_) => {
+                unreachable!("{CONTINUUM}")
+            }
         }
     }
 
@@ -218,7 +239,8 @@ impl Element {
             | Element::ZeroLengthSection(_)
             | Element::ElasticBeamColumn(_)
             | Element::Tri3(_)
-            | Element::Quad4(_) => None,
+            | Element::Quad4(_)
+            | Element::EmbeddedBar(_) => None,
         }
     }
 }
@@ -242,6 +264,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             | Element::ForceBeamColumn(_) => DofMask::all(NDF),
             Element::Tri3(t) => t.dof_mask(),
             Element::Quad4(q) => q.dof_mask(),
+            Element::EmbeddedBar(bar) => bar.dof_mask(),
         }
     }
 
@@ -255,14 +278,19 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
 
     fn accepts_load(&self, load: &ElementLoad) -> bool {
         match self {
-            Element::ElasticBeamColumn(_)
-            | Element::DispBeamColumn(_)
-            | Element::ForceBeamColumn(_) => !load.has_body() && !load.has_edge(),
+            // Only the elastic beam integrates a linearly varying load; the others take uniform loads.
+            Element::ElasticBeamColumn(_) => !load.has_body() && !load.has_edge(),
+            Element::DispBeamColumn(_) | Element::ForceBeamColumn(_) => {
+                !load.has_body() && !load.has_edge() && !load.has_taper()
+            }
             Element::Tri3(_) => !load.has_beam() && !load.has_edge_from(3),
             Element::Quad4(_) => !load.has_beam(),
             Element::Truss(_) | Element::ZeroLength(_) | Element::ZeroLengthSection(_) => {
                 !load.has_beam() && !load.has_body() && !load.has_edge()
             }
+            // A bar's axial state depends only on its host's nodal
+            // displacements; it carries no element load of its own.
+            Element::EmbeddedBar(_) => false,
         }
     }
 
@@ -278,7 +306,43 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::Tri3(_) => 1,
             Element::Quad4(_) => 4,
+            Element::EmbeddedBar(_) => 1,
             _ => 0,
+        }
+    }
+
+    fn gauss_kc2(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        point: usize,
+    ) -> Option<f64> {
+        match self {
+            Element::Tri3(t) => t.gauss_kc2(nodes, point),
+            Element::Quad4(q) => q.gauss_kc2(nodes, point),
+            _ => None,
+        }
+    }
+
+    fn embedded_bar_response(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> Option<(f64, f64, f64, bool)> {
+        match self {
+            Element::EmbeddedBar(bar) => Some(bar.local_response(nodes)),
+            _ => None,
+        }
+    }
+
+    fn zero_length_response(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> Option<(f64, f64)> {
+        match self {
+            Element::ZeroLength(z) => {
+                let [i, j] = Element::pair(self);
+                z.response(nodes.get(i), nodes.get(j))
+            }
+            _ => None,
         }
     }
 
@@ -289,6 +353,18 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::Tri3(t) => Some(t.gauss_responses(nodes)),
             Element::Quad4(q) => Some(q.gauss_responses(nodes)),
+            // One point: axial strain/stress in the first component, the
+            // rest zero (a bar has no shear or transverse component).
+            // `local_response`'s axial force and rupture flag are not
+            // reported here - the dedicated embedded-bar recorder (plan
+            // phase 5) will carry those.
+            Element::EmbeddedBar(bar) => {
+                let (_, strain, stress, _) = bar.local_response(nodes);
+                Some(vec![GaussResponse {
+                    strain: [strain, 0.0, 0.0],
+                    stress: [stress, 0.0, 0.0],
+                }])
+            }
             _ => None,
         }
     }
@@ -302,6 +378,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::Tri3(t) => return t.assemble_tangent(nodes, sink),
             Element::Quad4(q) => return q.assemble_tangent(nodes, sink),
+            Element::EmbeddedBar(bar) => return bar.assemble_tangent(nodes, sink),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -322,6 +399,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             (Element::Quad4(q), load) => {
                 return load.map_or((), |load| q.assemble_load(nodes, load, sink))
             }
+            (Element::EmbeddedBar(_), _) => return,
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -337,6 +415,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::Tri3(t) => return t.assemble_mass(nodes, sink),
             Element::Quad4(q) => return q.assemble_mass(nodes, sink),
+            Element::EmbeddedBar(_) => return,
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -352,6 +431,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::Tri3(t) => return t.commit(nodes),
             Element::Quad4(q) => return q.commit(nodes),
+            Element::EmbeddedBar(bar) => return bar.commit(nodes),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -362,6 +442,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::Tri3(_) => 6,
             Element::Quad4(_) => 8,
+            Element::EmbeddedBar(bar) => bar.local_force_width(),
             _ => ELEMENT_DOF,
         }
     }
@@ -370,6 +451,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::Tri3(t) => return t.local_force(nodes),
             Element::Quad4(q) => return q.local_force(nodes),
+            Element::EmbeddedBar(bar) => return bar.local_force(nodes),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -392,6 +474,12 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
                     .map_or(SVector::<f64, 8>::zeros(), |l| q.load_vector(nodes, l))
                     .into()
             }
+            Element::EmbeddedBar(bar) => {
+                return match bar.local_force_width() {
+                    6 => SVector::<f64, 6>::zeros().into(),
+                    _ => SVector::<f64, 8>::zeros().into(),
+                }
+            }
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -402,15 +490,34 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         &self,
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
     ) -> Option<Vec<Vec<(f64, f64)>>> {
-        if let Element::Tri3(_) | Element::Quad4(_) = self {
+        if let Element::Tri3(_) | Element::Quad4(_) | Element::EmbeddedBar(_) = self {
             return None;
         }
         let [i, j] = Element::pair(self);
         Element::fiber_responses(self, nodes.get(i), nodes.get(j))
     }
+
+    fn limit_utilization(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        limits: &LimitStateConfig,
+    ) -> Option<(f64, LimitKind)> {
+        match self {
+            Element::Tri3(t) => t.limit_utilization(nodes, limits),
+            Element::Quad4(q) => q.limit_utilization(nodes, limits),
+            Element::EmbeddedBar(bar) => bar.limit_utilization(nodes, limits),
+            Element::ZeroLength(z) => {
+                let [i, j] = Element::pair(self);
+                z.limit_utilization(nodes.get(i), nodes.get(j))
+            }
+            _ => None,
+        }
+    }
 }
 /// 3D element catalog — `Domain3`'s counterpart to `Element`. Closed
 /// enum, `match`-based dispatch, same reasoning as `Element`.
+// Same reasoning as `Element`: the gap is `Shell4` (about 13 KB against about 9.6 KB for `Shell3`).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Element3 {
     Truss3(Truss3),
@@ -1097,7 +1204,7 @@ mod mask_conformance {
             &Element3::ZeroLength3(
                 ZeroLength3::new(a, b)
                     .with_material(0, steel())
-                    .with_orientation(tilt.clone()),
+                    .with_orientation(tilt),
             ),
             &nodes,
             false,

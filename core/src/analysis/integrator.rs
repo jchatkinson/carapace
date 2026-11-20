@@ -21,10 +21,50 @@ use super::{AnalysisError, ArcLength, SparseFactorization, SparseSolver};
 /// generic parameters instead of `Integrator`'s, since an integrator's
 /// identity only depends on which node/DOF it controls, not which `Domain`
 /// it's later used with.
+///
+/// `ArcLength`'s payload (configuration built once per analysis, not
+/// touched in any per-step/per-element hot loop — unlike `Element`'s own
+/// `#[derive]`-driven size concern) is considerably larger than
+/// `LoadControl`'s, which trips `clippy::large_enum_variant`'s generic
+/// byte-count heuristic. Boxing it would mean every `Integrator::ArcLength`
+/// construction site across the workspace takes on an extra allocation and
+/// `Box::new`/deref for no runtime benefit (this enum is never assembled at
+/// scale the way `Element` is), so the lint is suppressed here deliberately
+/// rather than restructured around.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Integrator<NId = NodeId> {
     LoadControl {
         increment: f64,
+    },
+    /// `LoadControl`, plus adaptive substepping on non-convergence: on a
+    /// failed attempt, `Analysis::step`/`step_prescribed` revert the
+    /// domain, halve the attempted increment, and retry, down to
+    /// `min_increment` — then return `AnalysisError::LoadControlExhausted`
+    /// if even that fails. This is a separate variant rather than an
+    /// optional field on `LoadControl` so every existing `LoadControl {
+    /// increment }` call site keeps compiling unchanged.
+    ///
+    /// **Scheduling contract** (`docs/csfm-plan.md` §2.5 point 1, ported
+    /// from CalcsApp's `solveIncrementWithSession`/`solveLoadPath`): one
+    /// `step()`/`step_prescribed()` call accepts **one** (sub)increment. If
+    /// a cutback was needed, the call accepts the halved size — not the
+    /// nominal one — and the uncovered remainder (`nominal - accepted`) is
+    /// carried internally (`Analysis`'s `load_control_remainder`) and
+    /// *replaces* `increment` as the next call's requested size (TS's
+    /// `pending.unshift(remainder)`). A caller driving a fixed-count
+    /// schedule must therefore keep calling `step()` until the accepted
+    /// load factor reaches its target, not merely for a fixed number of
+    /// calls — `StepResult::cutbacks` reports each call's nominal vs.
+    /// accepted increment so a caller can tell when more calls are needed.
+    LoadControlCutbacks {
+        /// This integrator's nominal full-size increment. Must be > 0 and
+        /// finite.
+        increment: f64,
+        /// The smallest increment a cutback may attempt. Must be in
+        /// `(0, increment]`; `increment` itself disables retries (first
+        /// failure exhausts cutbacks immediately).
+        min_increment: f64,
     },
     /// Chooses this step's pseudo-time increment so that the controlled
     /// node/DOF's displacement changes by exactly `increment`, via the
@@ -68,6 +108,15 @@ impl<NId: Copy> Integrator<NId> {
     {
         match self {
             Integrator::LoadControl { increment } => Ok((current_pseudo_time + increment, None)),
+            // The cutback retry loop (`Analysis::step_with_cutbacks`) never
+            // calls `predict`/`correct` on this variant directly — it
+            // swaps in a plain `LoadControl { increment: attempt }` for the
+            // duration of each attempt instead, so `attempt`'s size is
+            // whatever the loop is currently retrying, not this variant's
+            // nominal `increment`.
+            Integrator::LoadControlCutbacks { .. } => {
+                unreachable!("Analysis routes LoadControlCutbacks through step_with_cutbacks")
+            }
             Integrator::DisplacementControl {
                 node,
                 dof,
@@ -133,6 +182,9 @@ impl<NId: Copy> Integrator<NId> {
     {
         match self {
             Integrator::LoadControl { .. } => Ok((0.0, du_bar)),
+            Integrator::LoadControlCutbacks { .. } => {
+                unreachable!("Analysis routes LoadControlCutbacks through step_with_cutbacks")
+            }
             Integrator::DisplacementControl { node, dof, .. } => {
                 let eq = domain
                     .equation_of(*node, *dof)

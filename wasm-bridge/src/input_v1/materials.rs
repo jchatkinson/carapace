@@ -93,6 +93,21 @@ pub enum MaterialSpec {
         min_strain: f64,
         max_strain: f64,
     },
+    /// The CSFM embedded-rebar law (N, mm, MPa), used by `embeddedBars`. `fctm`/`ecm` are the host
+    /// concrete's (given explicitly, not referenced); `rho_eff` selects TCM or POM routing.
+    #[allow(clippy::too_many_arguments)]
+    CsfmRebar {
+        es: f64,
+        fy: f64,
+        ft: f64,
+        eps_u: f64,
+        fctm: f64,
+        ecm: f64,
+        diameter: f64,
+        rho_eff: f64,
+        lambda: f64,
+        tension_stiffening: bool,
+    },
     /// Trilinear moment-rotation envelope with pinching/stiffness/strength
     /// degradation — see `core::Material::hysteretic`'s doc comment. Field
     /// order matches the constructor's positional parameters.
@@ -253,6 +268,33 @@ fn resolve_one(
             let inner = resolve_one(arena, *inner as usize, resolved, stack)?;
             Material::min_max(inner, *min_strain, *max_strain)
         }
+        MaterialSpec::CsfmRebar {
+            es,
+            fy,
+            ft,
+            eps_u,
+            fctm,
+            ecm,
+            diameter,
+            rho_eff,
+            lambda,
+            tension_stiffening,
+        } => Material::csfm_rebar(
+            *es,
+            *fy,
+            *ft,
+            *eps_u,
+            *fctm,
+            *ecm,
+            *diameter,
+            *rho_eff,
+            *lambda,
+            *tension_stiffening,
+        )
+        .map_err(|error| DecodeError::InvalidMaterial {
+            index: index as u32,
+            reason: error.message(),
+        })?,
         MaterialSpec::Hysteretic {
             mom1p,
             rot1p,

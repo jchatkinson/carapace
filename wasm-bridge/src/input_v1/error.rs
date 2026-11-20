@@ -51,8 +51,28 @@ pub enum DecodeError {
         point: u32,
         count: u32,
     },
+    /// An `embeddedBar` recorder names a segment the bar does not have (`count` is the bar's
+    /// number of pieces).
+    InvalidEmbeddedBarSegment {
+        recorder: u32,
+        bar: u32,
+        segment: u32,
+        count: u32,
+    },
+    /// A recorder asks for a quantity its target cannot produce (today: `kc2` on a point that is
+    /// not `csfmConcrete`).
+    RecorderNotApplicable {
+        recorder: u32,
+        reason: &'static str,
+    },
     /// A plane material's constants are unusable.
     InvalidPlaneMaterial {
+        index: u32,
+        reason: &'static str,
+    },
+    /// An entry of the `materials` arena has unusable constants (today, a `csfmRebar` whose
+    /// steel, reinforcement ratio, bond inputs or TCM startup bridge is invalid).
+    InvalidMaterial {
         index: u32,
         reason: &'static str,
     },
@@ -171,6 +191,13 @@ pub enum ModelErrorDetail {
         element: usize,
         reason: &'static str,
     },
+    EmbeddedBarOutsideMesh {
+        segment: usize,
+    },
+    EmbeddedBarAmbiguousHost {
+        segment: usize,
+    },
+    EmbeddedBarDegeneratePath,
 }
 
 impl From<ModelError> for ModelErrorDetail {
@@ -201,6 +228,13 @@ impl From<ModelError> for ModelErrorDetail {
             ModelError::InvalidElement { element, reason } => {
                 ModelErrorDetail::InvalidElement { element, reason }
             }
+            ModelError::EmbeddedBarOutsideMesh { segment } => {
+                ModelErrorDetail::EmbeddedBarOutsideMesh { segment }
+            }
+            ModelError::EmbeddedBarAmbiguousHost { segment } => {
+                ModelErrorDetail::EmbeddedBarAmbiguousHost { segment }
+            }
+            ModelError::EmbeddedBarDegeneratePath => ModelErrorDetail::EmbeddedBarDegeneratePath,
         }
     }
 }

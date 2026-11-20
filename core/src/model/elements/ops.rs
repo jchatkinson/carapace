@@ -13,7 +13,7 @@ use arrayvec::ArrayVec;
 use nalgebra::{SMatrix, SVector};
 use slotmap::{Key, SlotMap};
 
-use crate::model::Node;
+use crate::model::{LimitKind, LimitStateConfig, Node};
 
 /// The most nodes any element in this crate connects: two-node frame
 /// elements, three- and four-node planar elements (2D membranes, 3D shell
@@ -286,6 +286,26 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         0
     }
 
+    /// Kaufmann's `kc2` at Gauss point `point`, for a `CsfmConcrete` point only (`None` for every
+    /// other element, material or out-of-range point).
+    fn gauss_kc2(&self, _nodes: &NodeView<'_, NDIM, NDOF, NId>, _point: usize) -> Option<f64> {
+        None
+    }
+
+    /// An embedded bar's `(axial force, strain, stress, ruptured)` (`None` for every other element).
+    fn embedded_bar_response(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+    ) -> Option<(f64, f64, f64, bool)> {
+        None
+    }
+
+    /// A zero-length element's `(deformation, force)` along its first material direction (`None` for every other
+    /// element, and for a zero-length with no material).
+    fn zero_length_response(&self, _nodes: &NodeView<'_, NDIM, NDOF, NId>) -> Option<(f64, f64)> {
+        None
+    }
+
     /// Components per Gauss-point strain or stress vector (3 for plane elements, 8 for shells);
     /// the bound a Gauss-point recorder's `component` is checked against.
     fn gauss_component_count(&self) -> usize {
@@ -316,4 +336,21 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
         &self,
         nodes: &NodeView<'_, NDIM, NDOF, NId>,
     ) -> Option<Vec<Vec<(f64, f64)>>>;
+
+    /// The worst (highest) material-limit utilization among this element's
+    /// integration points, and which kind it is (plan
+    /// `docs/csfm-plan.md` §2.5 point 3) — `None` for every element kind
+    /// with no limit state to report (every element but a CSFM continuum
+    /// element or an `EmbeddedBar` over a `CsfmRebar`). Evaluated at the
+    /// *trial* state (no commit needed: CSFM's laws are stateless, exactly
+    /// like `gauss_responses`/`local_force`). The default accepts every
+    /// element kind and reports nothing, matching
+    /// `gauss_responses`/`shell_responses`/`fiber_responses`'s own default.
+    fn limit_utilization(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+        _limits: &LimitStateConfig,
+    ) -> Option<(f64, LimitKind)> {
+        None
+    }
 }

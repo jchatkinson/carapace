@@ -41,7 +41,9 @@ use super::{DofMask, ElementForce, GaussResponse, TangentSink, VectorSink};
 use crate::model::continuum::{
     physical_derivatives, quad4_dshape, quad4_shape, validate_quad, Jacobian, QUAD4_GAUSS_2X2,
 };
-use crate::model::{ElementLoad, NodeId, PlaneMaterial, PlaneMatrix, PlaneVector};
+use crate::model::{
+    ElementLoad, LimitKind, LimitStateConfig, NodeId, PlaneMaterial, PlaneMatrix, PlaneVector,
+};
 
 /// Which displacement field the element uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -357,6 +359,38 @@ impl Quad4 {
             .collect()
     }
 
+    /// `kc2` at Gauss point `point` (`None` out of range or for a non-`CsfmConcrete` material).
+    pub(super) fn gauss_kc2(&self, view: &PlaneView<'_>, point: usize) -> Option<f64> {
+        let material = self.materials.get(point)?;
+        let u = plane_displacement::<4, 8>(&self.nodes, view);
+        let strains = self.strains(&self.cache_or_compute(view), &u);
+        material.csfm_concrete_kc2(&strains[point])
+    }
+
+    /// The worst `CsfmConcrete` limit utilization among the four Gauss
+    /// points (`None` if no point holds a `CsfmConcrete` material, or for
+    /// `Enhanced`'s internal-mode strain — this reads the same `strains`
+    /// `B u (+ G~ alpha)` as `gauss_responses`).
+    pub(super) fn limit_utilization(
+        &self,
+        view: &PlaneView<'_>,
+        limits: &LimitStateConfig,
+    ) -> Option<(f64, LimitKind)> {
+        let u = plane_displacement::<4, 8>(&self.nodes, view);
+        let strains = self.strains(&self.cache_or_compute(view), &u);
+        let mut worst: Option<(f64, LimitKind)> = None;
+        for (strain, material) in strains.iter().zip(&self.materials) {
+            if !matches!(material, PlaneMaterial::CsfmConcrete(_)) {
+                continue;
+            }
+            let point = material.csfm_concrete_limit_utilization(strain, limits);
+            if worst.is_none_or(|(best, _)| point.0 > best) {
+                worst = Some(point);
+            }
+        }
+        worst
+    }
+
     #[cfg(test)]
     pub(super) fn cache(&self) -> Option<Cache> {
         self.cache
@@ -599,11 +633,11 @@ mod tests {
         assert!(alpha.norm() > 1e-6, "internal modes should engage");
         let d = material().d_matrix();
         let responses = el.gauss_responses(&view);
-        for g in 0..4 {
+        for (g, response) in responses.iter().enumerate().take(4) {
             let strain = cache.points[g].b * u + enhanced.g[g] * alpha;
             let stress = d * strain;
-            assert!((PlaneVector::from(responses[g].stress) - stress).norm() < 1e-9);
-            assert!((PlaneVector::from(responses[g].strain) - strain).norm() < 1e-15);
+            assert!((PlaneVector::from(response.stress) - stress).norm() < 1e-9);
+            assert!((PlaneVector::from(response.strain) - strain).norm() < 1e-15);
             let compatible_only = d * (cache.points[g].b * u);
             assert!((stress - compatible_only).norm() > 1e-3 * stress.norm());
         }
