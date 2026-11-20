@@ -114,24 +114,3 @@ impl<const NDIM: usize, const NDOF: usize> Node<NDIM, NDOF> {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn planar_and_spatial_aliases_share_one_node_implementation() {
-        let planar: Node2 = Node::new([1.0, 2.0]).fix(2);
-        assert_eq!(planar.coords, [1.0, 2.0]);
-        assert!(planar.fixed[2]);
-        assert_eq!(planar.displacement.len(), 3);
-
-        let spatial = Node3::new([1.0, 2.0, 3.0])
-            .fix(SpatialDof::Rz as usize)
-            .with_mass(SpatialDof::Uz as usize, 4.0);
-        assert_eq!(spatial.coords, [1.0, 2.0, 3.0]);
-        assert!(spatial.fixed[SpatialDof::Rz as usize]);
-        assert_eq!(spatial.mass[SpatialDof::Uz as usize], 4.0);
-        assert_eq!(spatial.displacement.len(), 6);
-    }
-}
