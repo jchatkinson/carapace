@@ -1,6 +1,6 @@
 # Native API and workspace reorganization plan
 
-Status: Phase A (steps 1-2) done: `carapace-input` extracted, `tsify` optional, generated `.d.ts` byte-identical. Phase B done except accumulating validation errors and result tables (see `docs/native-api.md`): `Session::run`, `carapace` CLI, JSON Schema feature, example models. Phase C done: `py/` Python package (builder, numpy results, tests). Phase D done for the tangent assembly, sparse factorization and `run_many`/`batch` (see `docs/native-api.md#threads`). The rest is plan only.
+Status: Phase A (steps 1-2) done: `carapace-input` extracted, `tsify` optional, generated `.d.ts` byte-identical. Phase B done except accumulating validation errors and result tables (see `docs/native-api.md`): `Session::run`, `carapace` CLI, JSON Schema feature, example models. Phase C done: `py/` Python package, since reshaped to follow OpenSeesPy commands (see `docs/python-api.md`; the "builder helpers" below are that API). Phase D done for the tangent assembly and `run_many`/`batch`; factorization threading is adaptive (large factors only) because faer's threading was slower on 2D meshes (see `docs/native-api.md#threads`). A `parallel` build defaults to serial. The rest is plan only.
 
 Goals:
 
@@ -145,9 +145,10 @@ algorithm.
    combinations, section/material probe batches, and multiple models from a drawing-to-model run. Each
    `Session` is independent, so the CLI and Python layers run many in a rayon pool or via a `run_many`
    API. Deterministic by construction.
-2. **Sparse factorization**: faer supports parallel `Par::Rayon(n)` in its sparse LU/LLT. Plumb `Par`
-   through `SparseSolver` (`core/src/analysis/solver.rs`). Gains depend on model size; measure on
-   `benchmark_scaling`.
+2. **Sparse factorization**: faer supports parallel `Par::Rayon(n)` in its sparse LU/LLT, but only inside
+   a supernode. Measured: slower on 2D meshes (a 137k-DOF shell plate), 2.2x faster on a 160M-entry 3D
+   pattern, so `SparseSolver` threads Cholesky only above 60M entries in `L`. Tree-level parallelism or a
+   nested-dissection ordering would be the next gains (not done).
 3. **Element state update and assembly**: the per-element loop is the hot path for fiber and continuum
    models. Parallelize with a per-thread triplet buffer (chunked by element) merged in element order, so
    the summed matrix is bit-identical to serial. The closed-enum, no-`dyn`, no-heap-in-loop design makes

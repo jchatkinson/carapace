@@ -57,21 +57,23 @@ cd py && python -m venv .venv && .venv/bin/pip install maturin numpy pytest
 .venv/bin/maturin develop --release && .venv/bin/python -m pytest tests
 ```
 
+The commands follow OpenSeesPy (same names, argument order, 1-based DOFs); see [python-api.md](python-api.md) for
+the supported commands and every deviation.
+
 ```python
-import carapace
-m = carapace.Model(ndm=2)
-a = m.add_node(0, 0, fixed="all"); b = m.add_node(0, 3000)
-m.add_elastic_beam(a, b, e=200000, a=8000, iz=1e8)
-m.add_static_stage(); m.add_nodal_load(b, 0, 10000)
-r = m.record_node_disp(b, 0)
-print(carapace.validate(m))                 # {"valid": True, "ndm": 2} or structured errors with a path
-print(carapace.run(m).recorder(r))          # (n, 2) numpy array of (load factor, displacement)
+import carapace.opensees as ops
+ops.model('basic', '-ndm', 2, '-ndf', 3)
+ops.node(1, 0.0, 0.0); ops.node(2, 0.0, 3000.0); ops.fix(1, 1, 1, 1)
+ops.geomTransf('Linear', 1)
+ops.element('elasticBeamColumn', 1, 1, 2, 8000.0, 200000.0, 1e8, 1)
+ops.timeSeries('Linear', 1); ops.pattern('Plain', 1, 1); ops.load(2, 1e4, 0.0, 0.0)
+ops.integrator('LoadControl', 1.0); ops.analysis('Static')
+ops.analyze(1); print(ops.nodeDisp(2, 1))
 ```
 
-`Model` covers nodes, trusses, elastic beams (2D/3D), nodal loads, static and modal stages and node recorders;
-anything else goes in `model.raw` (a dict merged over the output) or pass a plain `CarapaceInputV1` dict or JSON
-text to `validate`/`run`. Invalid models raise `ModelError` (with `.errors`); an analysis failure does not raise:
-check `results.completed` / `results.error`. The GIL is released while the engine runs.
+Unsupported commands raise `NotImplementedError`. Invalid models raise `ModelError` (with `.errors` and the JSON
+path); an analysis failure makes `analyze` return `-1` (`model.last_error`) and `carapace.run` report
+`results.completed` / `results.error`. The GIL is released while the engine runs.
 
 ## Rust: `Session::run`
 

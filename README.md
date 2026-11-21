@@ -25,7 +25,8 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
 - [x] ZeroLength — per-DOF materials and Coulomb friction coupling (2D + 3D), with optional
   OpenSees-style `-orient` local axes (default: global axes)
 - [x] ElasticBeamColumn — axial, bending, torsion, `Linear`/`PDelta`
-  transforms (2D + 3D)
+  transforms (2D + 3D); `PDelta` uses the consistent geometric stiffness (exact beam-column result,
+  about 1% from OpenSees' simplified `PDelta` per element)
 - [x] DispBeamColumn — fiber-discretized, displacement-based (2D uniaxial,
   3D biaxial)
 - [x] Tri3 (constant strain) and Quad4 (full 2x2 or enhanced incompatible-mode)
@@ -149,6 +150,15 @@ algorithm and friction derivations, and a rejected Turso storage alternative) li
 [`docs/obsolete/`](docs/obsolete/) — useful for the reasoning behind past
 decisions, no longer maintained as living specs.
 
+## Native use (CLI, Python, threads)
+
+The same engine also runs natively, without a browser: `carapace validate|run|batch|schema` takes the JSON
+model and prints JSON; the Python package `carapace-fe` (`py/`) offers OpenSeesPy-style commands
+(`ops.node(...)`, `ops.element(...)`, `ops.analyze(n)`, `ops.nodeDisp(...)`) over the same engine, with
+numpy results and `run_many` for concurrent models. An optional `parallel` feature threads the element
+assembly and large factorizations (never enabled for wasm; results do not depend on the thread count).
+See [`docs/native-api.md`](docs/native-api.md) and [`docs/python-api.md`](docs/python-api.md).
+
 ## Workspace layout
 
 ```
@@ -157,10 +167,14 @@ carapace/
 │                    compiles and tests identically on native and wasm32 targets.
 ├── input/           # carapace-input: wire format, input decoding, session API, probes (native + wasm)
 ├── wasm-bridge/     # carapace-wasm: the wasm-bindgen glue over carapace-input
+├── cli/             # carapace-cli: the `carapace` binary (validate, run, batch, schema)
+├── py/              # carapace-fe: Python package (PyO3), OpenSeesPy-style commands (its own Cargo workspace)
 └── docs/
     ├── architecture.md             # domain model, element interface, how to extend
     ├── algorithms.md               # current solver API and JS configuration
     ├── arclength.md                # arc-length continuation design record
+    ├── native-api.md               # CLI, Python, threads, `Session::run` (native use)
+    ├── python-api.md               # the OpenSeesPy-style Python commands and every deviation
     ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
     └── obsolete/                    # superseded planning docs, kept for history
 ```

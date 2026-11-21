@@ -21,7 +21,7 @@ Cargo workspace of four crates (plus `py/`):
   `docs/native-api-plan.md`.
 - `cli/` (`carapace-cli`): the `carapace` binary (`validate`, `run`, `schema`; JSON in, JSON out). See
   `docs/native-api.md`. Example models in `examples/models/`.
-- `py/` (`carapace-fe`): the Python package (PyO3 + maturin, its own Cargo workspace, excluded from `cargo test`).
+- `py/` (`carapace-fe`): the Python package (PyO3 + maturin, its own Cargo workspace, excluded from `cargo test`). Its API follows OpenSeesPy; every deviation is listed in `docs/python-api.md` and must stay listed.
   Tests: `cd py && maturin develop && pytest tests`.
 
 Other directories: `docs/` (design and wire-format docs), `comparison/` (Python harness vs real OpenSeesPy,
@@ -52,7 +52,8 @@ uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, 
 - Any change to the wire format (`input_v1`) must be mirrored by PySees: its `CarapaceInputV1` type
   (`../pysees/src/app/types/carapaceInputV1.ts`) and compiler (`src/app/lib/carapace/compileInputV1.ts`).
 - Results must agree with OpenSees. Cross-check new elements and materials against OpenSeesPy where one
-  exists; PySees also runs `carapaceVsOpenSees.test.ts` against the bundled wasm.
+  exists (a deliberate, documented exception: elastic-beam `PDelta` uses the consistent geometric stiffness,
+  see `docs/python-api.md`); PySees also runs `carapaceVsOpenSees.test.ts` against the bundled wasm.
 - 2D/3D, not "planar"/"spatial", in prose and docs. (Some existing file names use `spatial`; leave them.)
 - Keep code compact and match the surrounding style. Run `cargo fmt` and `cargo clippy`.
 

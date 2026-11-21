@@ -179,7 +179,10 @@ Notes:
   omitted. A zero vector (or, in 3D, parallel vectors; in 2D, `x3 != 0`) decodes
   to `invalidOrientation`; a `yp` in 2D, or none in 3D, to `invalidRow`.
   Element forces recorded for an oriented element are still in global DOFs.
-- `TransformSpec` (2D): `"linear" | "pDelta" | "corotational"`.
+- `TransformSpec` (2D): `"linear" | "pDelta" | "corotational"`. `pDelta` on an elastic beam uses the consistent
+  geometric stiffness `Kg(N)` in both the resisting force and the tangent (`N` from the elastic axial force), so a
+  converged solution includes P-Delta and P-small-delta. OpenSees' `PDelta` keeps only the chord-rotation terms, so
+  results differ by about 1% per element (they agree as the mesh is refined).
   `TransformSpec3`: `{ kind: "linear3" | "pDelta3", vecXz: [x,y,z] }`. There is
   no 3D corotational transform. `vecXz` is a vector not parallel to the
   member axis; it fixes the local y/z orientation.
