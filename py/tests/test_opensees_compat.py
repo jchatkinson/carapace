@@ -53,18 +53,22 @@ def frame2d(ops, transform="Linear", steps=10):
     return np.concatenate([np.ravel(r) for r in out])
 
 
-PDELTA_APPROXIMATION = pytest.mark.xfail(
-    strict=True,
-    reason="elasticBeamColumn PDelta is a linearized tangent only (resisting force stays elastic, axial force "
-           "read from the previous step), so it differs from OpenSees; see elastic_beam_column.rs "
-           "`geometric_stiffness` and docs/python-api.md",
-)
-
-
-@pytest.mark.parametrize("transform", ["Linear", "Corotational", pytest.param("PDelta", marks=PDELTA_APPROXIMATION)])
+@pytest.mark.parametrize("transform", ["Linear", "Corotational"])
 def test_2d_frame_stepwise(transform):
     got, want = run_both(lambda ops: frame2d(ops, transform))
     np.testing.assert_allclose(got, want, rtol=1e-8, atol=1e-8 * np.abs(want).max())
+
+
+def test_2d_frame_pdelta_is_close_to_opensees_but_not_identical():
+    """Carapace's `PDelta` is the consistent geometric stiffness (it includes P-small-delta, matching the exact
+    beam-column solution); OpenSees' keeps only the chord-rotation terms. Both are P-Delta, so they agree to a
+    percent or so on a frame like this, and not to solver tolerance (docs/python-api.md)."""
+    got, want = run_both(lambda ops: frame2d(ops, "PDelta"))
+    linear, _ = run_both(lambda ops: frame2d(ops, "Linear"))
+    scale = np.abs(want).max()
+    assert np.abs(got - want).max() < 2e-2 * scale
+    assert np.abs(got - want).max() > 1e-6 * scale  # not accidentally the same formulation
+    assert np.abs(want - linear).max() > 10 * np.abs(got - want).max()  # P-Delta matters here, and both see it
 
 
 def test_truss_with_newton_and_one_big_analyze():

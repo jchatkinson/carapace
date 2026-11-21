@@ -75,16 +75,10 @@ impl ElasticBeamColumn {
         k
     }
 
-    /// First-order (linearized) geometric-stiffness correction from the
-    /// current axial force `p` (tension positive), added to the elastic
-    /// bending block for `GeomTransf::PDelta` — the standard consistent
-    /// geometric stiffness matrix (e.g. Przemieniecki §2), *not* a full
-    /// corotational update. Only the tangent used to solve for the next
-    /// displacement increment is corrected this way; the resisting-force
-    /// recovery (`form_tangent_and_resistance`'s second return value)
-    /// stays purely elastic. Consistent path-following P-Delta (where the
-    /// resisting force itself must reflect the same correction) needs
-    /// Newton iteration to track correctly and is not implemented.
+    /// First-order geometric-stiffness matrix for the axial force `p` (tension
+    /// positive) used by `GeomTransf::PDelta`: the standard consistent matrix
+    /// (e.g. Przemieniecki §2), *not* a full corotational update. See
+    /// `local_response` for how it enters the resisting force and the tangent.
     fn geometric_stiffness(&self, p: f64, length: f64) -> SMatrix<f64, 6, 6> {
         let l = length;
         let mut kg = SMatrix::<f64, 6, 6>::zeros();
@@ -102,6 +96,26 @@ impl ElasticBeamColumn {
             }
         }
         kg
+    }
+
+    /// Local resisting force and tangent for `Linear`/`PDelta` (`Corotational` is handled apart). For
+    /// `PDelta` the force is `(K + Kg(N)) d` with `N` the elastic axial force, so a converged Newton
+    /// solution contains the P-Delta effect; the tangent is `K + Kg(N)` at that `N`, ignoring how `N`
+    /// itself changes with `d` (a quasi-Newton tangent, since `N` couples to `d` only through the axial
+    /// stiffness). A beam with no axial force reduces exactly to `Linear`.
+    fn local_response(
+        &self,
+        k_local: &SMatrix<f64, 6, 6>,
+        d_local: &SVector<f64, 6>,
+        length: f64,
+    ) -> (SVector<f64, 6>, SMatrix<f64, 6, 6>) {
+        let mut resistance = k_local * d_local;
+        if self.transform != GeomTransf::PDelta {
+            return (resistance, *k_local);
+        }
+        let kg = self.geometric_stiffness(resistance[3], length); // tension-positive axial force at node j
+        resistance += kg * d_local;
+        (resistance, k_local + kg)
     }
 
     /// Block-diagonal rotation from global to local DOFs: `d_local = T * d_global`.
@@ -160,17 +174,8 @@ impl ElasticBeamColumn {
         ]);
         let d_local = t * d_global;
 
-        let resistance_local = k_local * d_local;
+        let (resistance_local, k_total_local) = self.local_response(&k_local, &d_local, length);
         let resistance = t.transpose() * resistance_local;
-
-        let k_total_local = match self.transform {
-            GeomTransf::Linear => k_local,
-            GeomTransf::PDelta => {
-                let axial_force = resistance_local[3]; // tension-positive axial force at node j
-                k_local + self.geometric_stiffness(axial_force, length)
-            }
-            GeomTransf::Corotational => unreachable!("handled above"),
-        };
         let k = t.transpose() * k_total_local * t;
 
         (k, resistance)
@@ -214,7 +219,7 @@ impl ElasticBeamColumn {
             node_j.displacement[1],
             node_j.displacement[2],
         ]);
-        k_local * (t * d_global)
+        self.local_response(&k_local, &(t * d_global), length).0
     }
 
     /// Equivalent nodal load (global coordinates) from a uniform local-axis
@@ -408,6 +413,23 @@ impl ElasticBeamColumn3 {
         k
     }
 
+    /// Local resisting force and tangent, spatial counterpart of the planar `local_response`: for
+    /// `PDelta3` the force is `(K + Kg(N)) d` and the tangent `K + Kg(N)` with `N` the elastic axial force.
+    fn local_response(
+        &self,
+        k_local: &SpatialElementMatrix,
+        d_local: &SpatialElementVector,
+        length: f64,
+    ) -> (SpatialElementVector, SpatialElementMatrix) {
+        let mut resistance = k_local * d_local;
+        if !matches!(self.transform, GeomTransf3::PDelta3 { .. }) {
+            return (resistance, *k_local);
+        }
+        let kg = self.geometric_stiffness(resistance[6], length); // tension-positive axial force at node j
+        resistance += kg * d_local;
+        (resistance, k_local + kg)
+    }
+
     /// First-order (linearized) geometric-stiffness correction from the
     /// current axial force `p` (tension positive), added to the elastic
     /// bending blocks for `GeomTransf3::PDelta3` — the spatial analogue of
@@ -481,16 +503,8 @@ impl ElasticBeamColumn3 {
         );
         let d_local = t * d_global;
 
-        let resistance_local = k_local * d_local;
+        let (resistance_local, k_total_local) = self.local_response(&k_local, &d_local, length);
         let resistance = t.transpose() * resistance_local;
-
-        let k_total_local = match self.transform {
-            GeomTransf3::Linear3 { .. } => k_local,
-            GeomTransf3::PDelta3 { .. } => {
-                let axial_force = resistance_local[6]; // tension-positive axial force at node j
-                k_local + self.geometric_stiffness(axial_force, length)
-            }
-        };
         let k = t.transpose() * k_total_local * t;
 
         (k, resistance)
@@ -510,7 +524,7 @@ impl ElasticBeamColumn3 {
                 .chain(node_j.displacement.iter())
                 .copied(),
         );
-        k_local * (t * d_global)
+        self.local_response(&k_local, &(t * d_global), length).0
     }
 
     /// Equivalent nodal load (global coordinates) from a uniform local-axis

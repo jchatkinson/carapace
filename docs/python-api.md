@@ -72,7 +72,7 @@ generated document) or pass a `CarapaceInputV1` dict/JSON to `carapace.run`.
 | `eigen` | Uses the current state | Uses the undeformed model; solver flags are ignored | Modal analysis is its own stage |
 | `nodeEigenvector` | OpenSees' normalization | Carapace's normalization (compare directions, not values) | |
 | `getTime` | Pseudo-time | The load factor reached | |
-| `geomTransf('PDelta')` on `elasticBeamColumn` | Consistent P-Delta | **Differs from OpenSees**: a linearized tangent whose axial force comes from the previous step, resisting force stays elastic (see `geometric_stiffness` in `elastic_beam_column.rs`) | Known engine approximation; use `'Corotational'` (2D), which matches OpenSees |
+| `geomTransf('PDelta')` on `elasticBeamColumn` | Chord-rotation (P-Delta) terms only, in force and tangent | The consistent geometric stiffness `(K + Kg(N)) d`, so it includes P-small-delta and matches the exact beam-column solution with one element. **Results differ from OpenSees by about 1%** and converge to the same answer as the mesh is refined | A deliberate choice: more accurate, not bit-comparable. `Corotational` (2D) matches OpenSees exactly |
 | Tags | Any integers | Any integers; mapped to table indices internally | The wire format is columnar and 0-based |
 | `load` | Zero values are loads | Zero components are skipped | The wire format rejects a load on a DOF nothing stiffens |
 | Results to arrays | `ops.nodeDisp` etc. only | Also `carapace.run(model, steps=n)` returning `Results` with recorder 0 = every node displacement per step, recorder 1 = every reaction (`Results.bulk`) | Batch runs and numpy |

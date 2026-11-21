@@ -1,8 +1,9 @@
 //! `ElasticBeamColumn` / `ElasticBeamColumn3` through the full stack: closed-form UDL
-//! and combined-load deflections, `PDelta` against `Linear`, and axial/transverse element loads.
+//! and combined-load deflections, `PDelta` against `Linear` and against the exact beam-column solution
+//! (Newton, 2D and 3D), and axial/transverse element loads.
 
 use carapace_core::analysis::{
-    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
 };
 use carapace_core::model::{
     Domain, Domain3, ElasticBeamColumn, ElasticBeamColumn3, Element, Element3, ElementLoad,
@@ -142,6 +143,113 @@ fn pdelta_matches_linear_at_zero_axial_force_and_softens_under_compression() {
         v_pdelta_compression.abs() > v_linear_compression.abs(),
         "compressive PDelta should soften the beam relative to Linear: got {v_pdelta_compression} vs {v_linear_compression}"
     );
+}
+
+/// Exact tip deflection of a cantilever under a compressive axial load `p` and a lateral tip load `h`
+/// (small-displacement beam-column theory, P-delta and P-delta-small together):
+/// `h / (p k) * (tan(kL) - kL)` with `k = sqrt(p / EI)`.
+fn beam_column_tip(h: f64, p: f64, ei: f64, length: f64) -> f64 {
+    let k = (p / ei).sqrt();
+    h / (p * k) * ((k * length).tan() - k * length)
+}
+
+/// With Newton iteration, `GeomTransf::PDelta`'s converged answer contains the P-delta effect: one element
+/// reproduces the exact beam-column tip deflection to 0.01% (the consistent geometric stiffness is exact
+/// for the cubic-Hermite field up to that), where `Linear` is 5% soft. The axial force enters the
+/// resisting force, not just the tangent, so the answer does not depend on the iteration path.
+/// OpenSees' `PDelta` (translation terms only) gives 4.712 here; Carapace deliberately differs, see
+/// `docs/python-api.md`.
+#[test]
+fn pdelta_beam_column_matches_the_exact_solution_under_newton() {
+    let (e, a, iz, length, p, h) = (2.0e5, 8000.0, 1.0e8, 3000.0, 3.0e5, 1.0e4);
+    let tip = |transform: GeomTransf| {
+        let mut domain = Domain::new();
+        let node_i = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+        let node_j = domain.add_node(Node::new([length, 0.0]));
+        domain.load_node(node_j, 0, -p);
+        domain.load_node(node_j, 1, h);
+        domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+            node_i, node_j, e, a, iz, transform,
+        )));
+        let mut analysis = AnalysisBuilder::new()
+            .constraint_handler(ConstraintHandler::Plain)
+            .integrator(Integrator::LoadControl { increment: 1.0 })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
+            .test(ConvergenceTest::NormDispIncr {
+                tol: 1e-9,
+                max_iter: 50,
+            })
+            .build(domain);
+        analysis.step().expect("P-delta cantilever converges");
+        analysis.domain().node(node_j).displacement[1]
+    };
+    let exact = beam_column_tip(h, p, e * iz, length);
+    let linear = tip(GeomTransf::Linear);
+    let pdelta = tip(GeomTransf::PDelta);
+    assert!((linear - h * length.powi(3) / (3.0 * e * iz)).abs() < 1e-9);
+    assert!(
+        (pdelta / exact - 1.0).abs() < 1e-4,
+        "P-delta tip {pdelta}, exact beam-column {exact}"
+    );
+    assert!(
+        pdelta > 1.05 * linear,
+        "P-delta must soften: {pdelta} vs {linear}"
+    );
+}
+
+/// The spatial counterpart: a member along x with different `Iy` and `Iz`, loaded laterally in global y
+/// (bends about local z, `Iz`) and in global z (bends about local y, `Iy`), both under compression.
+#[test]
+fn pdelta3_beam_column_matches_the_exact_solution_in_both_planes() {
+    let (e, g, a, j, iy, iz) = (2.0e5, 8.0e4, 8000.0, 1.0e8, 6.0e7, 1.0e8);
+    let (length, p, h) = (3000.0, 2.0e5, 1.0e4);
+    let tips = |transform: GeomTransf3| {
+        let mut domain = Domain3::new();
+        let fixed = domain.add_node(
+            Node3::new([0.0, 0.0, 0.0])
+                .fix(SpatialDof::Ux as usize)
+                .fix(SpatialDof::Uy as usize)
+                .fix(SpatialDof::Uz as usize)
+                .fix(SpatialDof::Rx as usize)
+                .fix(SpatialDof::Ry as usize)
+                .fix(SpatialDof::Rz as usize),
+        );
+        let free = domain.add_node(Node3::new([length, 0.0, 0.0]));
+        domain.add_element(Element3::ElasticBeamColumn3(ElasticBeamColumn3::new(
+            fixed, free, e, g, a, j, iy, iz, transform,
+        )));
+        domain.load_node(free, SpatialDof::Ux as usize, -p);
+        domain.load_node(free, SpatialDof::Uy as usize, h);
+        domain.load_node(free, SpatialDof::Uz as usize, h);
+        let mut analysis = AnalysisBuilder::new()
+            .constraint_handler(ConstraintHandler::Plain)
+            .integrator(Integrator::LoadControl { increment: 1.0 })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
+            .test(ConvergenceTest::NormDispIncr {
+                tol: 1e-9,
+                max_iter: 50,
+            })
+            .build(domain);
+        analysis.step().expect("P-delta cantilever converges");
+        let d = &analysis.domain().node(free).displacement;
+        (d[SpatialDof::Uy as usize], d[SpatialDof::Uz as usize])
+    };
+    let (vy, vz) = tips(GeomTransf3::p_delta([0.0, 0.0, 1.0]));
+    let (ly, lz) = tips(GeomTransf3::linear([0.0, 0.0, 1.0]));
+    for (name, pdelta, linear, inertia) in [("y", vy, ly, iz), ("z", vz, lz, iy)] {
+        let exact = beam_column_tip(h, p, e * inertia, length);
+        assert!(
+            (pdelta / exact - 1.0).abs() < 1e-4,
+            "{name}: P-delta tip {pdelta}, exact beam-column {exact}"
+        );
+        assert!(pdelta > 1.02 * linear, "{name}: must soften");
+    }
 }
 
 /// A 3D `ElasticBeamColumn3` cantilever, run
