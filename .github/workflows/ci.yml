@@ -41,7 +41,7 @@ jobs:
       - run: |
           cd py
           python -m venv .venv
-          .venv/bin/pip install maturin numpy pytest
+          .venv/bin/pip install maturin numpy pytest openseespy
           .venv/bin/maturin develop
           .venv/bin/python -m pytest tests
   deploy:

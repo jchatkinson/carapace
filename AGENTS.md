@@ -21,7 +21,7 @@ Cargo workspace of four crates (plus `py/`):
   `docs/native-api-plan.md`.
 - `cli/` (`carapace-cli`): the `carapace` binary (`validate`, `run`, `schema`; JSON in, JSON out). See
   `docs/native-api.md`. Example models in `examples/models/`.
-- `py/` (`carapace-fe`): the Python package (PyO3 + maturin, its own Cargo workspace, excluded from `cargo test`).
+- `py/` (`carapace-fe`): the Python package (PyO3 + maturin, its own Cargo workspace, excluded from `cargo test`). Its API follows OpenSeesPy; every deviation is listed in `docs/python-api.md` and must stay listed.
   Tests: `cd py && maturin develop && pytest tests`.
 
 Other directories: `docs/` (design and wire-format docs), `comparison/` (Python harness vs real OpenSeesPy,

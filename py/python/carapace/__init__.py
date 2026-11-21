@@ -1,7 +1,8 @@
 """Python interface to the Carapace finite-element engine.
 
-Build a model with :class:`Model` (or pass any ``CarapaceInputV1`` dict / JSON text), then
-``carapace.validate(model)`` and ``carapace.run(model)``. Errors come back as structured data, never
+Build a model with :class:`Model`, whose commands follow OpenSeesPy (``m.node(...)``, ``m.element(...)``,
+``m.analyze(n)``; ``import carapace.opensees as ops`` gives the module-level spelling), or pass any
+``CarapaceInputV1`` dict / JSON text to ``carapace.validate(model)`` and ``carapace.run(model)``. Errors come back as structured data, never
 as a bare exception, so a script (or an agent) can read the path of the bad value, fix it and retry.
 """
 
@@ -13,6 +14,7 @@ from typing import Any, Union
 import numpy as np
 
 from . import _carapace
+from .errors import ModelError
 from .model import Model
 
 __all__ = ["Model", "Results", "ModelError", "validate", "run", "run_many"]
@@ -20,17 +22,9 @@ __all__ = ["Model", "Results", "ModelError", "validate", "run", "run_many"]
 ModelLike = Union["Model", dict, str]
 
 
-class ModelError(Exception):
-    """The model is invalid. ``errors`` is a list of ``{stage, path?, detail}`` dicts."""
-
-    def __init__(self, errors: list[dict]):
-        self.errors = errors
-        super().__init__(json.dumps(errors, indent=2))
-
-
-def _text(model: ModelLike) -> str:
+def _text(model: ModelLike, steps: int = 1) -> str:
     if isinstance(model, Model):
-        return json.dumps(model.to_dict())
+        return json.dumps(model.to_dict(steps=steps))
     if isinstance(model, dict):
         return json.dumps(model)
     return model
@@ -80,13 +74,14 @@ class Results:
         raise KeyError(f"no modal stage {stage}")
 
 
-def run(model: ModelLike, step_budget: int = 64, raise_on_invalid: bool = True, threads: int = 1) -> Results:
+def run(model: ModelLike, step_budget: int = 64, raise_on_invalid: bool = True, threads: int = 1,
+        steps: int = 1) -> Results:
     """Decode and run to completion. An invalid model raises :class:`ModelError` (or is returned as the
     ``{"valid": False, ...}`` dict when ``raise_on_invalid=False``). An analysis failure (non-convergence)
     does not raise: check ``results.completed`` / ``results.error``; results before the failure are kept.
     ``threads`` sets the solver/assembly thread count (``0`` = all cores); it never changes the results.
-    The setting is process-wide."""
-    out = json.loads(_carapace.run(_text(model), step_budget, threads))
+    The setting is process-wide. ``steps`` is the length of the static stage when ``model`` is a :class:`Model`."""
+    out = json.loads(_carapace.run(_text(model, steps), step_budget, threads))
     if not out["valid"]:
         if raise_on_invalid:
             raise ModelError(out["errors"])
@@ -94,12 +89,12 @@ def run(model: ModelLike, step_budget: int = 64, raise_on_invalid: bool = True, 
     return Results(out["report"])
 
 
-def run_many(models: list[ModelLike], threads: int = 0) -> list[Results | dict]:
+def run_many(models: list[ModelLike], threads: int = 0, steps: int = 1) -> list[Results | dict]:
     """Run independent models concurrently (``threads=0`` uses every core), in input order. An invalid model
     yields its ``{"valid": False, "errors": [...]}`` dict in its slot instead of raising, so one bad model
     does not lose the others."""
     out = []
-    for text in _carapace.run_many([_text(m) for m in models], threads):
+    for text in _carapace.run_many([_text(m, steps) for m in models], threads):
         doc = json.loads(text)
         out.append(Results(doc["report"]) if doc["valid"] else doc)
     return out

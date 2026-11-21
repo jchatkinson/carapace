@@ -3,7 +3,9 @@
 //! version-proof surface that mirrors the CLI exactly.
 
 use carapace_core::analysis::{set_parallelism, Parallelism};
-use carapace_input::input_v1::{decode, run_many as run_many_inputs, CarapaceInputV1, RunOptions, Session};
+use carapace_input::input_v1::{
+    decode, run_many as run_many_inputs, CarapaceInputV1, RunOptions, Session,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -39,7 +41,11 @@ fn parse(model_json: &str) -> Result<CarapaceInputV1, String> {
 fn validate(model_json: &str) -> String {
     match load(model_json) {
         Ok(session) => {
-            let ndm = if matches!(session, Session::D2(_)) { 2 } else { 3 };
+            let ndm = if matches!(session, Session::D2(_)) {
+                2
+            } else {
+                3
+            };
             serde_json::json!({ "valid": true, "ndm": ndm }).to_string()
         }
         Err(report) => report,
@@ -87,10 +93,15 @@ fn run_many(py: Python<'_>, models: Vec<String>, threads: usize) -> PyResult<Vec
             }
         }
         let options = RunOptions::default();
-        for (at, outcome) in slots.into_iter().zip(run_many_inputs(inputs, threads, &options)) {
+        for (at, outcome) in slots
+            .into_iter()
+            .zip(run_many_inputs(inputs, threads, &options))
+        {
             out[at] = match outcome {
-                Ok(report) => serde_json::to_string(&serde_json::json!({ "valid": true, "report": report }))
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                Ok(report) => {
+                    serde_json::to_string(&serde_json::json!({ "valid": true, "report": report }))
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?
+                }
                 Err(e) => serde_json::json!({ "valid": false, "errors": [{
                     "stage": "decode", "detail": serde_json::to_value(&e).unwrap_or_default(),
                 }] })
@@ -101,11 +112,37 @@ fn run_many(py: Python<'_>, models: Vec<String>, threads: usize) -> PyResult<Vec
     })
 }
 
+/// A decoded model that is stepped from Python: the stateful half behind `analyze(n)` and the result
+/// queries of the OpenSees-style `Model`.
+#[pyclass(name = "Session")]
+struct PySession {
+    inner: Session,
+}
+
+#[pymethods]
+impl PySession {
+    /// Decodes a model. An invalid one raises `ValueError` whose message is the `{valid: false, errors}` JSON.
+    #[new]
+    fn new(model_json: &str) -> PyResult<Self> {
+        load(model_json)
+            .map(|inner| Self { inner })
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Takes up to `step_budget` steps (GIL released); returns the `StepOutcome` as JSON.
+    fn advance(&mut self, py: Python<'_>, step_budget: u32) -> PyResult<String> {
+        let session = &mut self.inner;
+        py.detach(|| serde_json::to_string(&session.advance(step_budget)))
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+}
+
 #[pymodule]
 fn _carapace(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(run_many, m)?)?;
+    m.add_class::<PySession>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
