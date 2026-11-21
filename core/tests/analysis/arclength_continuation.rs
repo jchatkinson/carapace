@@ -49,7 +49,7 @@ fn build<const NDIM: usize, const NDOF: usize, NId, E>(
     test: ConvergenceTest,
 ) -> Analysis<NDIM, NDOF, NId, E>
 where
-    NId: slotmap::Key,
+    NId: carapace_core::model::NodeKey,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {

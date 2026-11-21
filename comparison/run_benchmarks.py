@@ -63,7 +63,7 @@ def machine():
     return {"cpu": cpu, "threads": os.cpu_count(), "os": platform.platform(),
             "rustc": tool("rustc", "--version"), "openseespy": ops.version(),
             "commit": tool("git", "rev-parse", "--short", "HEAD"),
-            "dirty": bool(tool("git", "status", "--porcelain", "--", "core", "wasm-bridge")),
+            "dirty": bool(tool("git", "status", "--porcelain", "--", "core", "input", "wasm-bridge")),
             "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")}
 
 

@@ -6,8 +6,14 @@ edition.workspace = true
 [lib]
 name = "carapace_core"
 
+[features]
+# Native-only multithreading (rayon via faer). Never enable for wasm32: wasm threads need SharedArrayBuffer
+# and a different build, and `lib.rs` refuses the combination at compile time.
+parallel = ["faer/rayon", "dep:rayon"]
+
 [dependencies]
 slotmap = "1.1"
+rayon = { version = "1", optional = true }
 arrayvec = "0.7"
 nalgebra = "0.35"
 faer = { version = "0.24", default-features = false, features = ["std", "sparse-linalg"] }

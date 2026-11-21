@@ -1,5 +1,5 @@
+use crate::model::NodeKey;
 use nalgebra::DVector;
-use slotmap::Key;
 
 use crate::model::{
     Domain, Element, Element3, ElementOps, Node3Id, NodeId, NDF, PLANAR_NDIM, SPATIAL_NDF,
@@ -61,7 +61,7 @@ pub struct TransientAnalysis<
     NId = NodeId,
     E = Element,
 > where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     domain: Domain<NDIM, NDOF, NId, E>,
@@ -94,7 +94,7 @@ pub type TransientAnalysis3 = TransientAnalysis<SPATIAL_NDIM, SPATIAL_NDF, Node3
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> TransientAnalysis<NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {

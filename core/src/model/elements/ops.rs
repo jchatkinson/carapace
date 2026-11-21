@@ -9,6 +9,7 @@
 //! (`SMatrix`) math and a closed-enum dispatch (no `dyn`, no heap in the
 //! assembly loop).
 
+use crate::model::NodeKey;
 use arrayvec::ArrayVec;
 use nalgebra::{SMatrix, SVector};
 use slotmap::{Key, SlotMap};
@@ -63,11 +64,11 @@ impl DofMask {
 /// Read access to the domain's nodes, handed to every element method that
 /// needs node coordinates or state. A thin wrapper so the element interface
 /// does not expose how `Domain` stores nodes.
-pub struct NodeView<'a, const NDIM: usize, const NDOF: usize, NId: Key> {
+pub struct NodeView<'a, const NDIM: usize, const NDOF: usize, NId: NodeKey> {
     nodes: &'a SlotMap<NId, Node<NDIM, NDOF>>,
 }
 
-impl<'a, const NDIM: usize, const NDOF: usize, NId: Key> NodeView<'a, NDIM, NDOF, NId> {
+impl<'a, const NDIM: usize, const NDOF: usize, NId: NodeKey> NodeView<'a, NDIM, NDOF, NId> {
     pub(crate) fn new(nodes: &'a SlotMap<NId, Node<NDIM, NDOF>>) -> Self {
         NodeView { nodes }
     }
@@ -182,10 +183,12 @@ pub struct ShellResponse {
 /// either duplicate every variant or need `Box<dyn Trait>` in the assembly
 /// loop. `NDIM`/`NDOF` are separate const generics (not computed from each
 /// other) because stable Rust cannot evaluate `2 * NDOF` in a generic item.
-pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
+pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send + Sync {
     /// An element-load kind this catalog supports. `Add` so several loads on
     /// one element in one pattern accumulate.
     type Load: Copy
+        + Send
+        + Sync
         + crate::model::ElementLoadComponents
         + std::ops::Add<Output = Self::Load>
         + std::ops::Mul<f64, Output = Self::Load>;
@@ -194,7 +197,7 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: Key> {
     /// rather than a further generic parameter of `Domain`, so it is always
     /// determined by `E` and never an independently unconstrained type
     /// variable (which broke inference at every `Domain::new()`).
-    type Id: Key;
+    type Id: Key + Send + Sync;
 
     /// The nodes this element connects, in local order.
     fn nodes(&self) -> NodeList<NId>;

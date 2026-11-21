@@ -6,14 +6,23 @@ Feature list: `README.md`.
 
 ## Layout
 
-Cargo workspace of two crates:
+Cargo workspace of four crates (plus `py/`):
 
 - `core/` (`carapace-core`): the native engine. `model/` (domain, nodes, elements, materials, sections,
   constraints, load patterns) and `analysis/` (solvers, integrators, algorithms, arc-length, modal, transient).
   Plain Rust, no wasm dependencies. Tests in `core/tests/`, benchmarks in `core/examples/`.
-- `wasm-bridge/` (`carapace-wasm`): the wasm-bindgen boundary. `input_v1/` decodes the JSON wire format
-  (`CarapaceInputV1`) into a core `Domain` and analysis sequence; also `material_probe.rs` (unit zero-length
-  spring for PySees' Material Preview) and result/recorder streaming. Tests in `wasm-bridge/tests/`.
+- `input/` (`carapace-input`): the model-from-data layer, native-first with no wasm dependencies. `input_v1/`
+  decodes the JSON wire format (`CarapaceInputV1`) into a core `Domain` and analysis sequence and runs it as a
+  steppable `Session`; also `material_probe.rs` (unit zero-length spring for PySees' Material Preview),
+  `section_probe/` and result/recorder streaming. The `tsify` feature adds TypeScript derives (only
+  `carapace-wasm` enables it). Tests in `input/tests/`.
+- `wasm-bridge/` (`carapace-wasm`): only the wasm-bindgen boundary (`boundary.rs`) over `carapace-input`, plus
+  the TypeScript smoke tests in `wasm-bridge/tests/`. Plan for native frontends:
+  `docs/native-api-plan.md`.
+- `cli/` (`carapace-cli`): the `carapace` binary (`validate`, `run`, `schema`; JSON in, JSON out). See
+  `docs/native-api.md`. Example models in `examples/models/`.
+- `py/` (`carapace-fe`): the Python package (PyO3 + maturin, its own Cargo workspace, excluded from `cargo test`).
+  Tests: `cd py && maturin develop && pytest tests`.
 
 Other directories: `docs/` (design and wire-format docs), `comparison/` (Python harness vs real OpenSeesPy,
 uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, gitignored).
@@ -32,7 +41,10 @@ uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, 
 - 2D (ndm=2, 3 DOF) and 3D (ndm=3, 6 DOF) share one const-generic implementation (`Domain` / `Domain3`).
   Share assembly, numbering, constraints and the analysis layer; split leaf elements whose kinematics differ.
   See "When to share and when to split" in `architecture.md`.
-- Element catalogs are closed enums: no `dyn`, no heap allocation in the assembly loop.
+- Element catalogs are closed enums: no `dyn`, no heap allocation in the assembly loop. Generic code bounds node ids
+  with `NodeKey` (`slotmap::Key + Send + Sync`), not bare `Key`, so the threaded assembly can share a `Domain`.
+- `parallel` is a native-only feature of `carapace-core`/`carapace-input`; never enable it for wasm. Threaded results must
+  stay bit-identical to serial (scatter in element order).
 - `dof_mask` must declare exactly the slots an element stiffens. Never read state through `equation_of`; use
   `Domain::dof_terms` / `Domain::value_at`.
 - Unsupported or invalid input must surface as an error (`ModelError`, `DecodeError`), never be silently
@@ -47,13 +59,13 @@ uses `comparison/.venv`), `pkg/` and `pkg-web/` (generated wasm-bindgen output, 
 ## Commands
 
 ```
-cargo test                                   # all native tests (core + wasm-bridge)
-cargo test -p carapace-core --test elements   # one integration test binary (elements, analysis, dynamics, constraints, continuum, materials; wasm-bridge: wire)
+cargo test                                   # all native tests (core + input)
+cargo test -p carapace-core --test elements   # one integration test binary (elements, analysis, dynamics, constraints, continuum, materials; input: wire)
 cargo build -p carapace-wasm --target wasm32-unknown-unknown --release
 ```
 
 Integration tests are one binary per area (`tests/<area>/main.rs` plus a module per feature):
-`core/tests/{elements,analysis,dynamics,constraints,continuum,materials}` and `wasm-bridge/tests/wire`
+`core/tests/{elements,analysis,dynamics,constraints,continuum,materials}` and `input/tests/wire`
 (shared builders in `wire/common.rs`). Add a test to the module for its feature and give 2D and 3D cases
 to the same module. Each file's `//!` header says what it verifies and against which reference.
 The docs site publishes a test report (`docs-site/gen_tests.py`) built from `cargo test` output plus each test's `///` doc comment

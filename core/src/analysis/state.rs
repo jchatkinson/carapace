@@ -1,4 +1,4 @@
-use slotmap::Key;
+use crate::model::NodeKey;
 
 use crate::model::{
     Domain, Element, Element3, ElementOps, LimitKind, LimitStateConfig, Node3Id, NodeId, NDF,
@@ -27,7 +27,7 @@ pub struct Analysis<
     NId = NodeId,
     E = Element,
 > where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     pub(crate) domain: Domain<NDIM, NDOF, NId, E>,
@@ -119,7 +119,7 @@ pub struct CutbackInfo {
 
 impl<const NDIM: usize, const NDOF: usize, NId, E> Analysis<NDIM, NDOF, NId, E>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId> + Clone,
     E::Load: Clone,
 {

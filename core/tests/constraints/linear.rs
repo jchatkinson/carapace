@@ -22,7 +22,7 @@ fn analysis<const NDIM: usize, const NDOF: usize, NId, E>(
     domain: Domain<NDIM, NDOF, NId, E>,
 ) -> Analysis<NDIM, NDOF, NId, E>
 where
-    NId: slotmap::Key,
+    NId: carapace_core::model::NodeKey,
     E: carapace_core::model::ElementOps<NDIM, NDOF, NId>,
 {
     AnalysisBuilder::new()

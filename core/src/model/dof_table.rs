@@ -1,4 +1,5 @@
-use slotmap::{Key, SecondaryMap};
+use crate::model::NodeKey;
+use slotmap::SecondaryMap;
 
 /// What one `(node, dof)` slot contributes to the free-DOF system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,13 +33,13 @@ pub(crate) enum DofEntry {
 /// freshly added node having no equation numbers until the next
 /// `number_dofs`.
 #[derive(Debug, Clone)]
-pub(crate) struct DofTable<NId: Key, const NDOF: usize> {
+pub(crate) struct DofTable<NId: NodeKey, const NDOF: usize> {
     ordinal: SecondaryMap<NId, usize>,
     entries: Vec<DofEntry>,
     terms: Vec<(usize, f64)>,
 }
 
-impl<NId: Key, const NDOF: usize> Default for DofTable<NId, NDOF> {
+impl<NId: NodeKey, const NDOF: usize> Default for DofTable<NId, NDOF> {
     fn default() -> Self {
         DofTable {
             ordinal: SecondaryMap::new(),
@@ -48,7 +49,7 @@ impl<NId: Key, const NDOF: usize> Default for DofTable<NId, NDOF> {
     }
 }
 
-impl<NId: Key, const NDOF: usize> DofTable<NId, NDOF> {
+impl<NId: NodeKey, const NDOF: usize> DofTable<NId, NDOF> {
     /// A table covering `nodes` (in iteration order), every DOF `Fixed`.
     pub(crate) fn for_nodes(nodes: impl Iterator<Item = NId>) -> Self {
         let mut ordinal = SecondaryMap::new();

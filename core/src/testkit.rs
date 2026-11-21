@@ -15,8 +15,9 @@
 //! tangents, rupture secants) are deliberate and are tested directly
 //! against their specified value instead, never through this checker.
 
+use crate::model::NodeKey;
 use nalgebra::{DMatrix, DVector, SMatrix, SVector};
-use slotmap::{Key, SlotMap};
+use slotmap::SlotMap;
 
 use crate::analysis::{Analysis, Integrator};
 use crate::model::{
@@ -268,7 +269,7 @@ pub fn assert_element_tangent_matches_fd<const NDIM: usize, const NDOF: usize, N
     load: Option<&E::Load>,
     config: &FdConfig,
 ) where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     element.prepare(&NodeView::new(nodes));

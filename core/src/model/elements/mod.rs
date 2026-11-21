@@ -894,6 +894,7 @@ mod mask_conformance {
     use slotmap::{Key, SlotMap};
 
     use super::*;
+    use crate::model::NodeKey;
     use crate::model::{
         BeamIntegration, ElasticBeamColumn, ElasticBeamColumn3, Fiber, Fiber3, FiberSection,
         FiberSection3, ForceBeamColumn, ForceBeamColumn3, Friction, Friction3, GeomTransf,
@@ -908,7 +909,7 @@ mod mask_conformance {
         _marker: std::marker::PhantomData<NId>,
     }
 
-    impl<NId: Key> TangentSink<NId> for Touched<NId> {
+    impl<NId: NodeKey> TangentSink<NId> for Touched<NId> {
         fn add<const N: usize>(
             &mut self,
             dofs: &[DofRef<NId>; N],
@@ -925,7 +926,12 @@ mod mask_conformance {
         }
     }
 
-    fn touched<const NDIM: usize, const NDOF: usize, NId: Key, E: ElementOps<NDIM, NDOF, NId>>(
+    fn touched<
+        const NDIM: usize,
+        const NDOF: usize,
+        NId: NodeKey,
+        E: ElementOps<NDIM, NDOF, NId>,
+    >(
         element: &E,
         nodes: &SlotMap<NId, Node<NDIM, NDOF>>,
     ) -> BTreeSet<u8> {
@@ -946,7 +952,7 @@ mod mask_conformance {
 
     /// `exact`: the mask must equal the touched slots (no needless
     /// activation); otherwise it only has to cover them.
-    fn check<const NDIM: usize, const NDOF: usize, NId: Key, E: ElementOps<NDIM, NDOF, NId>>(
+    fn check<const NDIM: usize, const NDOF: usize, NId: NodeKey, E: ElementOps<NDIM, NDOF, NId>>(
         name: &str,
         element: &E,
         nodes: &SlotMap<NId, Node<NDIM, NDOF>>,

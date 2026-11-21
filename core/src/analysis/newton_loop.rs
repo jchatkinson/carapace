@@ -1,5 +1,5 @@
+use crate::model::NodeKey;
 use nalgebra::DVector;
-use slotmap::Key;
 
 use crate::model::{Domain, ElementOps, SparseMatrix};
 
@@ -87,7 +87,7 @@ pub(crate) fn iterate_to_equilibrium<const NDIM: usize, const NDOF: usize, NId, 
     force_tolerance: Option<&ForceTolerance>,
 ) -> Result<(IterationOutcome, f64), AnalysisError>
 where
-    NId: Key,
+    NId: NodeKey,
     E: ElementOps<NDIM, NDOF, NId>,
 {
     test.validate()?;
