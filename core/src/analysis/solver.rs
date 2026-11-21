@@ -1,9 +1,13 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use faer::dyn_stack::{MemBuffer, MemStack};
 use faer::prelude::*;
-use faer::sparse::linalg::solvers::{Llt, Lu, SymbolicLlt, SymbolicLu};
+use faer::sparse::linalg::cholesky::{
+    factorize_symbolic_cholesky, LltRef, SymbolicCholesky, SymmetricOrdering,
+};
+use faer::sparse::linalg::solvers::{Lu, SymbolicLu};
 use faer::sparse::{SymbolicSparseColMat, SymbolicSparseColMatRef};
-use faer::Side;
+use faer::{Par, Side};
 use nalgebra::DVector;
 
 use crate::model::SparseMatrix;
@@ -39,7 +43,31 @@ struct CachedSymbolic {
 
 struct CachedCholesky {
     pattern: SymbolicSparseColMat<usize>,
-    factorization: SymbolicLlt<usize>,
+    factorization: Arc<SymbolicCholesky<usize>>,
+}
+
+/// A Cholesky factor: the shared symbolic structure and this factorization's values.
+struct Cholesky {
+    symbolic: Arc<SymbolicCholesky<usize>>,
+    values: Vec<f64>,
+}
+
+/// Entries in `L` from which faer's threaded dense kernels beat its serial ones. They only split work
+/// inside a supernode, so below this (every 2D mesh and small 3D models measured: a 137k-DOF shell plate
+/// has 38M and ran 3x slower on 2 threads) the thread hand-offs cost more than they save, while a 160M
+/// 3D model ran 2.2x faster on 8.
+#[cfg(feature = "parallel")]
+const PARALLEL_MIN_FILL: usize = 60_000_000;
+
+/// The parallelism for a factorization with `fill` entries in `L`: the process-wide setting, but serial
+/// when the factors are too small for threads to pay.
+fn factor_par(fill: usize) -> Par {
+    #[cfg(feature = "parallel")]
+    if fill >= PARALLEL_MIN_FILL {
+        return faer::get_global_parallelism();
+    }
+    let _ = fill;
+    Par::Seq
 }
 
 /// Whether two CSC patterns are identical (same shape, column pointers, counts and row indices).
@@ -107,6 +135,8 @@ impl CachedCholesky {
 
 impl SparseSolver {
     pub fn new() -> Self {
+        #[cfg(feature = "parallel")]
+        super::parallelism::ensure_default();
         Self {
             symbolic_cache: Mutex::new(None),
             cholesky_cache: Mutex::new(None),
@@ -135,7 +165,7 @@ impl SparseSolver {
 
     /// Cholesky factors of `k`, or `None` when it is not positive definite (or its ordering fails), in which
     /// case the caller falls back to LU. The symbolic analysis is cached like the LU one.
-    fn try_cholesky(&self, k: &SparseMatrix) -> Option<Llt<usize, f64>> {
+    fn try_cholesky(&self, k: &SparseMatrix) -> Option<Cholesky> {
         let symbolic = {
             let mut cache = self
                 .cholesky_cache
@@ -143,7 +173,15 @@ impl SparseSolver {
                 .expect("symbolic LLT cache poisoned");
             let pattern = k.symbolic();
             if !cache.as_ref().is_some_and(|cached| cached.matches(pattern)) {
-                let factorization = SymbolicLlt::try_new(pattern, Side::Lower).ok()?;
+                let factorization = Arc::new(
+                    factorize_symbolic_cholesky(
+                        pattern,
+                        Side::Lower,
+                        SymmetricOrdering::Amd,
+                        Default::default(),
+                    )
+                    .ok()?,
+                );
                 let pattern = pattern.to_owned().ok()?;
                 *cache = Some(CachedCholesky {
                     pattern,
@@ -156,7 +194,24 @@ impl SparseSolver {
                 .factorization
                 .clone()
         };
-        Llt::try_new_with_symbolic(symbolic, k.as_ref(), Side::Lower).ok()
+        let par = factor_par(symbolic.len_val());
+        let mut values = vec![0.0; symbolic.len_val()];
+        let mut stack = MemBuffer::try_new(
+            symbolic.factorize_numeric_llt_scratch::<f64>(par, Default::default()),
+        )
+        .ok()?;
+        symbolic
+            .factorize_numeric_llt::<f64>(
+                &mut values,
+                k.as_ref(),
+                Side::Lower,
+                Default::default(),
+                par,
+                MemStack::new(&mut stack),
+                Default::default(),
+            )
+            .ok()?;
+        Some(Cholesky { symbolic, values })
     }
 
     fn factor_lu(&self, k: &SparseMatrix) -> Result<SparseFactorization, AnalysisError> {
@@ -215,7 +270,7 @@ impl Default for SparseSolver {
 pub struct SparseFactorization(Factors);
 
 enum Factors {
-    Cholesky(Llt<usize, f64>),
+    Cholesky(Cholesky),
     Lu(Box<Lu<usize, f64>>),
 }
 
@@ -224,7 +279,18 @@ impl SparseFactorization {
         let n = r.len();
         let rhs = faer::col::Col::from_fn(n, |i| r[i]);
         let x = match &self.0 {
-            Factors::Cholesky(llt) => llt.solve(&rhs),
+            Factors::Cholesky(llt) => {
+                let mut x = rhs;
+                let par = factor_par(llt.symbolic.len_val());
+                let mut stack = MemBuffer::new(llt.symbolic.solve_in_place_scratch::<f64>(1, par));
+                LltRef::new(&llt.symbolic, &llt.values).solve_in_place_with_conj(
+                    faer::Conj::No,
+                    x.as_mat_mut(),
+                    par,
+                    MemStack::new(&mut stack),
+                );
+                x
+            }
             Factors::Lu(lu) => lu.solve(&rhs),
         };
         DVector::from_fn(n, |i, _| x[i])

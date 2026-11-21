@@ -18,6 +18,7 @@ pub enum Parallelism {
 pub fn set_parallelism(parallelism: Parallelism) -> bool {
     #[cfg(feature = "parallel")]
     {
+        DEFAULT.call_once(|| {});
         *POOL.lock().expect("pool lock poisoned") = match parallelism {
             Parallelism::Serial => None,
             Parallelism::Threads(n) => rayon::ThreadPoolBuilder::new()
@@ -38,10 +39,22 @@ pub fn set_parallelism(parallelism: Parallelism) -> bool {
     }
 }
 
+/// `faer` defaults to every core once its `rayon` feature is on, which would make a `parallel` build
+/// threaded until someone asked. The default here is serial: the first use of the solver or the assembly
+/// (or any call to `set_parallelism`) settles it, and an explicit setting is never overwritten.
+#[cfg(feature = "parallel")]
+static DEFAULT: std::sync::Once = std::sync::Once::new();
+
+#[cfg(feature = "parallel")]
+pub(crate) fn ensure_default() {
+    DEFAULT.call_once(|| faer::set_global_parallelism(faer::Par::Seq));
+}
+
 /// The current setting.
 pub fn parallelism() -> Parallelism {
     #[cfg(feature = "parallel")]
     {
+        ensure_default();
         match faer::get_global_parallelism() {
             faer::Par::Seq => Parallelism::Serial,
             faer::Par::Rayon(n) => Parallelism::Threads(n.get()),
@@ -60,5 +73,6 @@ static POOL: std::sync::Mutex<Option<std::sync::Arc<rayon::ThreadPool>>> =
 
 #[cfg(feature = "parallel")]
 pub(crate) fn pool() -> Option<std::sync::Arc<rayon::ThreadPool>> {
+    ensure_default();
     POOL.lock().expect("pool lock poisoned").clone()
 }

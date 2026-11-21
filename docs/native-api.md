@@ -32,10 +32,15 @@ Native only, behind the `parallel` feature (the CLI and Python package enable it
 `carapace-core` refuses `parallel` on `wasm32` at compile time). Results are bit-identical for any thread count.
 
 - `carapace run model.json --threads N` (and `run(model, threads=N)` in Python): threads the element loop of
-  the tangent assembly (chunks evaluated in parallel, scattered in element order) and faer's sparse
-  factorization. On a 100x30 fiber-free elastic frame (9,300 DOFs) 4 threads took the solve from 566 ms to
-  330 ms; the factorization alone did not help frames, the assembly did. Small models (< 256 elements) stay serial.
-  The setting is process-wide (`carapace_core::analysis::set_parallelism`).
+  the tangent assembly (chunks evaluated in parallel, scattered in element order) and, for large factorizations
+  only, faer's sparse Cholesky. Serial is the default (threads = 1). Measured on an 8-thread machine:
+  - A 100x30 fiber frame (`disp_beam_column`, 9,300 DOFs, `benchmark_scaling`): 185 ms serial, 135 ms on 4 threads
+    (the assembly is the part that scales).
+  - A 150x150 elastic `Shell4` plate (137k DOFs, `benchmark_shell`): no gain. About 45% of the 2.3 s is the
+    factorization, which is serial below 60M entries in `L` because faer only threads inside a supernode and
+    threading a 38M-entry 2D factor was 3x *slower*; the element tangents (0.3 s) cost about as much to record and
+    replay as to compute. A 160M-entry 3D pattern factored 2.2x faster on 8 threads, so that path stays threaded.
+  Small models (< 256 elements) stay serial. The setting is process-wide (`carapace_core::analysis::set_parallelism`).
 - `carapace batch a.json b.json ... [--threads N]` and `carapace.run_many([...], threads=N)`: independent models
   concurrently, one result per model in order. This is the largest win for sweeps and load cases, and it
   switches solver threading off while it runs to avoid oversubscription.
