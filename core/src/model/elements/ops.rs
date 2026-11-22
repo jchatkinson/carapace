@@ -7,7 +7,8 @@
 //! an element DOF count: a 6x6 truss and an 8x8 quadrilateral can live in
 //! one catalog with no padding, and every element keeps fixed-size
 //! (`SMatrix`) math and a closed-enum dispatch (no `dyn`, no heap in the
-//! assembly loop).
+//! assembly loop for existing fixed-size elements; variable-connectivity
+//! elements own their runtime storage and use the slice sink entry points.
 
 use crate::model::NodeKey;
 use arrayvec::ArrayVec;
@@ -16,13 +17,45 @@ use slotmap::{Key, SlotMap};
 
 use crate::model::{LimitKind, LimitStateConfig, Node};
 
-/// The most nodes any element in this crate connects: two-node frame
-/// elements, three- and four-node planar elements (2D membranes, 3D shell
-/// triangles and quadrilaterals). 3D solid elements are not planned.
+/// Inline node-list capacity used by the existing fixed-connectivity catalog.
 pub const MAX_ELEMENT_NODES: usize = 4;
 
-/// The nodes an element connects, in the element's own local order.
-pub type NodeList<NId> = ArrayVec<NId, MAX_ELEMENT_NODES>;
+/// The nodes an element connects, in its own local order. Existing elements
+/// return `Inline` without allocation; variable-connectivity elements return
+/// a borrowed slice into their own storage.
+#[derive(Debug, Clone)]
+pub enum NodeList<'a, NId> {
+    Inline(ArrayVec<NId, MAX_ELEMENT_NODES>),
+    Borrowed(&'a [NId]),
+}
+
+impl<NId> NodeList<'_, NId> {
+    pub fn as_slice(&self) -> &[NId] {
+        match self {
+            Self::Inline(nodes) => nodes.as_slice(),
+            Self::Borrowed(nodes) => nodes,
+        }
+    }
+}
+
+impl<NId> std::ops::Deref for NodeList<'_, NId> {
+    type Target = [NId];
+    fn deref(&self) -> &[NId] {
+        self.as_slice()
+    }
+}
+
+impl<NId, const N: usize> From<[NId; N]> for NodeList<'_, NId> {
+    fn from(nodes: [NId; N]) -> Self {
+        Self::Inline(nodes.into_iter().collect())
+    }
+}
+
+impl<NId> FromIterator<NId> for NodeList<'_, NId> {
+    fn from_iter<T: IntoIterator<Item = NId>>(iter: T) -> Self {
+        Self::Inline(iter.into_iter().collect())
+    }
+}
 
 /// One element DOF: `(node, slot)`, where `slot` indexes the node's
 /// profile DOFs (`ux, uy, rz` in 2D; `ux..rz` in 3D).
@@ -88,12 +121,19 @@ pub trait TangentSink<NId> {
         k: &SMatrix<f64, N, N>,
         r: &SVector<f64, N>,
     );
+
+    /// Runtime-sized tangent and resistance contribution. `k_row_major` has
+    /// `dofs.len()²` entries in row-major order.
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], k_row_major: &[f64], r: &[f64]);
 }
 
 /// Receives a vector indexed by an element's DOFs: an equivalent nodal load
 /// or a lumped mass.
 pub trait VectorSink<NId> {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>);
+
+    /// Runtime-sized vector contribution.
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], v: &[f64]);
 }
 
 /// DOFs of a two-node element laid out as `[all of node i's slots, all of
@@ -116,6 +156,10 @@ pub fn two_node_dofs<NId: Copy, const N: usize>(i: NId, j: NId, ndof: usize) -> 
 pub struct ElementForce(Vec<f64>);
 
 impl ElementForce {
+    pub fn from_vec(v: Vec<f64>) -> Self {
+        ElementForce(v)
+    }
+
     pub fn from_svector<const N: usize>(v: &SVector<f64, N>) -> Self {
         ElementForce(v.iter().copied().collect())
     }
@@ -200,7 +244,7 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
     type Id: Key + Send + Sync;
 
     /// The nodes this element connects, in local order.
-    fn nodes(&self) -> NodeList<NId>;
+    fn nodes(&self) -> NodeList<'_, NId>;
 
     /// The node DOF slots this element stiffens (the same for each node).
     /// Must cover every slot on which `assemble_tangent` can produce a

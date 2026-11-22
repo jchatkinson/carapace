@@ -61,6 +61,12 @@ enum Mock {
     /// Four nodes, `ux`/`uy` only, no stiffness: carries a lumped mass
     /// `mass / 4` per node per translation, and a `NodalPush` load.
     Block4 { nodes: [NodeId; 4], mass: f64 },
+    /// Runtime-sized chain of springs, with compact `ux` layout.
+    DynChain {
+        nodes: Vec<NodeId>,
+        k: f64,
+        mass: f64,
+    },
 }
 
 fn dofs<const N: usize>(nodes: &[NodeId], slots: &[u8]) -> [DofRef<NodeId>; N] {
@@ -77,15 +83,19 @@ impl ElementOps<2, 3, NodeId> for Mock {
     type Load = NodalPush;
     type Id = MockId;
 
-    fn nodes(&self) -> NodeList<NodeId> {
+    fn nodes(&self) -> NodeList<'_, NodeId> {
         match self {
             Mock::Chain3 { nodes, .. } => nodes.iter().copied().collect(),
             Mock::Block4 { nodes, .. } => nodes.iter().copied().collect(),
+            Mock::DynChain { nodes, .. } => NodeList::Borrowed(nodes),
         }
     }
 
     fn dof_mask(&self) -> DofMask {
-        DofMask::all(3)
+        match self {
+            Mock::DynChain { .. } => DofMask::none().with(0),
+            _ => DofMask::all(3),
+        }
     }
 
     fn assemble_tangent<S: TangentSink<NodeId>>(
@@ -100,6 +110,25 @@ impl ElementOps<2, 3, NodeId> for Mock {
                 SMatrix::<f64, 3, 3>::new(1.0, -1.0, 0.0, -1.0, 2.0, -1.0, 0.0, -1.0, 1.0) * *k;
             sink.add(&dofs::<3>(nodes, &[0]), &kmat, &(kmat * u));
         }
+        if let Mock::DynChain { nodes, k, .. } = self {
+            let n = nodes.len();
+            let mut matrix = vec![0.0; n * n];
+            for i in 0..n - 1 {
+                matrix[i * n + i] += k;
+                matrix[i * n + i + 1] -= k;
+                matrix[(i + 1) * n + i] -= k;
+                matrix[(i + 1) * n + i + 1] += k;
+            }
+            let u: Vec<_> = nodes
+                .iter()
+                .map(|&id| view.get(id).displacement[0])
+                .collect();
+            let resistance: Vec<_> = (0..n)
+                .map(|i| (0..n).map(|j| matrix[i * n + j] * u[j]).sum())
+                .collect();
+            let refs: Vec<_> = nodes.iter().map(|&id| (id, 0)).collect();
+            sink.add_dyn(&refs, &matrix, &resistance);
+        }
     }
 
     fn assemble_load<S: VectorSink<NodeId>>(
@@ -112,6 +141,11 @@ impl ElementOps<2, 3, NodeId> for Mock {
             let v = SVector::<f64, 8>::from_fn(|a, _| if a % 2 == 0 { push.fx } else { push.fy });
             sink.add(&dofs::<8>(nodes, &[0, 1]), &v);
         }
+        if let (Mock::DynChain { nodes, .. }, Some(push)) = (self, load) {
+            let refs: Vec<_> = nodes.iter().map(|&id| (id, 0)).collect();
+            let values = vec![push.fx; nodes.len()];
+            sink.add_dyn(&refs, &values);
+        }
     }
 
     fn assemble_mass<S: VectorSink<NodeId>>(&self, _: &NodeView<'_, 2, 3, NodeId>, sink: &mut S) {
@@ -121,6 +155,11 @@ impl ElementOps<2, 3, NodeId> for Mock {
                 &SVector::<f64, 8>::repeat(mass / 4.0),
             );
         }
+        if let Mock::DynChain { nodes, mass, .. } = self {
+            let refs: Vec<_> = nodes.iter().map(|&id| (id, 0)).collect();
+            let values = vec![*mass; nodes.len()];
+            sink.add_dyn(&refs, &values);
+        }
     }
 
     fn commit(&mut self, _: &NodeView<'_, 2, 3, NodeId>, _: Option<&NodalPush>) {}
@@ -129,6 +168,7 @@ impl ElementOps<2, 3, NodeId> for Mock {
         match self {
             Mock::Chain3 { .. } => 3,
             Mock::Block4 { .. } => 8,
+            Mock::DynChain { nodes, .. } => nodes.len(),
         }
     }
 
@@ -141,6 +181,17 @@ impl ElementOps<2, 3, NodeId> for Mock {
                 (kmat * u).into()
             }
             Mock::Block4 { .. } => SVector::<f64, 8>::zeros().into(),
+            Mock::DynChain { nodes, k, .. } => {
+                let mut force = vec![0.0; nodes.len()];
+                for i in 0..nodes.len() - 1 {
+                    let delta = k
+                        * (view.get(nodes[i]).displacement[0]
+                            - view.get(nodes[i + 1]).displacement[0]);
+                    force[i] += delta;
+                    force[i + 1] -= delta;
+                }
+                ElementForce::from_vec(force)
+            }
         }
     }
 
@@ -152,6 +203,9 @@ impl ElementOps<2, 3, NodeId> for Mock {
         match (self, load) {
             (Mock::Block4 { .. }, Some(p)) => {
                 SVector::<f64, 8>::from_fn(|a, _| if a % 2 == 0 { p.fx } else { p.fy }).into()
+            }
+            (Mock::DynChain { nodes, .. }, Some(p)) => {
+                ElementForce::from_vec(vec![p.fx; nodes.len()])
             }
             _ => SVector::<f64, 8>::zeros().into(),
         }
@@ -286,4 +340,112 @@ fn elements_of_different_sizes_assemble_into_one_system() {
     // Springs in series, tip load on c: u_c = 2P/k, u_b = P/k.
     assert!((d.node(c).displacement[0] - 2.0 * p / k).abs() < 1e-12);
     assert!((d.node(b).displacement[0] - p / k).abs() < 1e-12);
+}
+
+fn variable_chain_model(extra_parallel_elements: bool) -> (MockDomain, Vec<NodeId>) {
+    let mut domain = MockDomain::new();
+    let nodes: Vec<_> = (0..7)
+        .map(|i| {
+            let node = Node::new([i as f64, 0.0]);
+            domain.add_node(if i == 0 { node.fix(0) } else { node })
+        })
+        .collect();
+    let element = domain.add_element(Mock::DynChain {
+        nodes: nodes.clone(),
+        k: 17.0,
+        mass: 0.75,
+    });
+    let pattern = domain.default_pattern();
+    domain.add_element_load(pattern, element, NodalPush { fx: 2.5, fy: 0.0 });
+    if extra_parallel_elements {
+        let filler = [0, 1, 2, 3]
+            .map(|i| domain.add_node(Node::new([100.0 + i as f64, 0.0]).fix(0).fix(1).fix(2)));
+        for _ in 0..255 {
+            domain.add_element(Mock::Block4 {
+                nodes: filler,
+                mass: 0.0,
+            });
+        }
+    }
+    (domain, nodes)
+}
+
+fn equivalent_chain_model() -> (MockDomain, Vec<NodeId>) {
+    let mut domain = MockDomain::new();
+    let nodes: Vec<_> = (0..7)
+        .map(|i| {
+            let node = Node::new([i as f64, 0.0]).fix(1).fix(2).with_mass(0, 0.75);
+            domain.add_node(if i == 0 { node.fix(0) } else { node })
+        })
+        .collect();
+    for i in [0, 2, 4] {
+        domain.add_element(Mock::Chain3 {
+            nodes: [nodes[i], nodes[i + 1], nodes[i + 2]],
+            k: 17.0,
+        });
+    }
+    for &node in &nodes {
+        domain.load_node(node, 0, 2.5);
+    }
+    (domain, nodes)
+}
+
+/// A seven-node runtime-sized element scatters tangent, resistance, load
+/// and mass through slice sinks. Its solve and reactions match three
+/// existing three-node chains plus nodal loads and masses.
+#[test]
+fn variable_connectivity_slice_sinks_match_fixed_size_reference() {
+    let (mut variable, variable_nodes) = variable_chain_model(false);
+    let (mut reference, reference_nodes) = equivalent_chain_model();
+    let variable_mass = variable.assemble_mass_diagonal();
+    let reference_mass = reference.assemble_mass_diagonal();
+    assert_eq!(
+        variable.num_free_dofs(),
+        6,
+        "nodes() and the ux-only dof_mask activate exactly six unknowns"
+    );
+    assert_eq!(variable_mass.as_slice(), reference_mass.as_slice());
+
+    let mut variable = linear_analysis(variable);
+    let mut reference = linear_analysis(reference);
+    variable.step().expect("variable element solves");
+    reference.step().expect("fixed-size reference solves");
+    for (&a, &b) in variable_nodes.iter().zip(&reference_nodes) {
+        assert!(
+            (variable.domain().node(a).displacement[0]
+                - reference.domain().node(b).displacement[0])
+                .abs()
+                < 1e-12
+        );
+        assert!(
+            (variable.domain().reaction(a, 0, 1.0) - reference.domain().reaction(b, 0, 1.0)).abs()
+                < 1e-10
+        );
+    }
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn variable_connectivity_serial_and_parallel_scatter_are_bit_identical() {
+    use carapace_core::analysis::{set_parallelism, Parallelism};
+
+    let (serial, nodes) = variable_chain_model(true);
+    let (parallel, parallel_nodes) = variable_chain_model(true);
+    set_parallelism(Parallelism::Serial);
+    let mut serial = linear_analysis(serial);
+    serial.step().expect("serial solve");
+    set_parallelism(Parallelism::Threads(2));
+    let mut parallel = linear_analysis(parallel);
+    parallel.step().expect("parallel solve");
+    for (&a, &b) in nodes.iter().zip(&parallel_nodes) {
+        assert_eq!(
+            serial.domain().node(a).displacement[0].to_bits(),
+            parallel.domain().node(b).displacement[0].to_bits()
+        );
+        assert_eq!(
+            serial.domain().reaction(a, 0, 1.0).to_bits(),
+            parallel.domain().reaction(b, 0, 1.0).to_bits()
+        );
+    }
+    set_parallelism(Parallelism::Serial);
 }

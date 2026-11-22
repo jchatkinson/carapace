@@ -267,7 +267,7 @@ impl ElementOps<2, 3, NodeId> for TestElement {
     type Load = NoLoad;
     type Id = ExpId;
 
-    fn nodes(&self) -> NodeList<NodeId> {
+    fn nodes(&self) -> NodeList<'_, NodeId> {
         self.pair().into_iter().collect()
     }
 

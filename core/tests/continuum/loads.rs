@@ -28,7 +28,7 @@ fn material() -> PlaneMaterial {
 }
 
 /// `ElementLoad` values add and scale field by field (beam uniform, body force, edge traction, edge
-/// pressure), and expose a fixed 18-component layout via `component(i)`, which is what element-load
+/// pressure, wall slots), and expose a fixed 26-component layout via `component(i)`, which is what element-load
 /// recorders index into.
 #[test]
 fn loads_accumulate_field_by_field_and_expose_a_fixed_component_layout() {
@@ -44,13 +44,19 @@ fn loads_accumulate_field_by_field_and_expose_a_fixed_component_layout() {
     assert_eq!((scaled.beam_uniform, scaled.body), ([2.0, 4.0], [6.0, 8.0]));
 
     // [wx, wy, bx, by, t0x, t0y, p0, t1x, t1y, p1, ...]
-    assert_eq!(ElementLoad::COUNT, 18);
+    assert_eq!(ElementLoad::COUNT, 26);
     let load = both + summed;
     let expect = [1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 5.0, 6.0, 8.0];
     for (i, e) in expect.into_iter().enumerate() {
         assert_eq!(load.component(i), e, "component {i}");
     }
     assert_eq!(load.component(16), 0.0);
+    let wall = ElementLoad {
+        wall: [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+        ..Default::default()
+    };
+    assert_eq!(wall.component(18), 0.0);
+    assert_eq!(wall.component(25), 7.0);
 
     // The beam taper is the change in intensity from node i to node j and occupies the last two slots.
     let trapezoid = ElementLoad::trapezoid(1.0, 2.0, 4.0, -2.0);

@@ -62,6 +62,22 @@ where
         }
         arena.values.extend(r.iter().copied());
     }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], k: &[f64], r: &[f64]) {
+        let n = dofs.len();
+        assert_eq!(k.len(), n * n);
+        assert_eq!(r.len(), n);
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared_dyn(dofs, Some(k), r);
+        let arena = &mut self.arena;
+        arena.sizes.push(n);
+        arena.dofs.extend(
+            dofs.iter()
+                .map(|&(node, slot)| (node.data().as_ffi(), slot)),
+        );
+        arena.values.extend_from_slice(k);
+        arena.values.extend_from_slice(r);
+    }
 }
 
 /// Fills `sink` from the elements on the configured pool. `false` (nothing done) when the build is serial,
@@ -125,6 +141,8 @@ where
     /// floating-point expressions, so the result matches the serial path exactly.
     fn add_recorded(&mut self, dofs: &[DofRef<NId>], k: &[f64], r: &[f64]) {
         let n = dofs.len();
+        assert_eq!(k.len(), n * n);
+        assert_eq!(r.len(), n);
         for (a, &(node_a, slot_a)) in dofs.iter().enumerate() {
             for &(eq_a, coeff_a) in self.domain.dof_terms(node_a, slot_a as usize).iter() {
                 self.resistance[eq_a] += coeff_a * r[a];

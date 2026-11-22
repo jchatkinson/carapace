@@ -8,25 +8,30 @@ these choices is in [domain-refactor-plan.md](domain-refactor-plan.md); the wire
 
 `Domain<NDIM, NDOF, NId, E>` owns nodes, elements, constraints and load patterns. The two profiles are
 `Domain` (2D: `ux, uy, rz`, element catalog `Element`) and `Domain3` (3D: six DOFs, catalog `Element3`).
-The catalogs are closed enums: no `dyn`, no heap in the assembly loop, fixed-size `SMatrix` element math.
+The catalogs are closed enums: no `dyn`, and existing fixed-size elements keep fixed-size `SMatrix` math
+without per-call allocation in the assembly loop. Variable-connectivity elements may own runtime-sized
+local arrays and use the slice sink path.
 The analysis layer (`analysis/`) is generic over the profile.
 
 ## Element interface
 
-Every catalog implements `ElementOps`. An element reports its nodes (`nodes()`, at most
-`MAX_ELEMENT_NODES` = 4) and pushes its own contribution through sinks that are generic over the
-element's matrix size:
+Every catalog implements `ElementOps`. An element reports its nodes (`nodes()`) as an inline `NodeList`
+for fixed connectivity or as a borrowed slice for variable connectivity. It pushes its contributions
+through sinks:
 
-- `TangentSink::add::<N>(&[DofRef; N], &SMatrix<N,N>, &SVector<N>)` receives stiffness and resistance.
-- `VectorSink::add::<N>(&[DofRef; N], &SVector<N>)` receives loads and mass.
+- `TangentSink::add::<N>(&[DofRef; N], &SMatrix<N,N>, &SVector<N>)` receives fixed-size stiffness and resistance.
+- `VectorSink::add::<N>(&[DofRef; N], &SVector<N>)` receives fixed-size loads and mass.
+- `TangentSink::add_dyn(&[DofRef], row_major_k, r)` and `VectorSink::add_dyn(&[DofRef], v)` receive
+  runtime-sized contributions. Their arrays are sized to the element's DOF list; the tangent is row-major.
 - `DofRef` is `(node, slot)`, so an element's local layout is its own business.
 
 The same element code path serves tangent assembly, load assembly, mass, and reactions. Other trait
 members: `dof_mask` (which node slots the element stiffens), `accepts_load`, `validate`, `prepare` (cache
 immutable reference geometry; called from `Domain::validate`), `commit`, `local_force_width`,
 `local_force`, `local_load_force`, `fiber_responses`, `gauss_point_count`, `gauss_responses`.
-Concrete elements (`Truss`, `Quad4`, ...) keep their own typed math; only the catalog impl builds `DofRef`
-arrays.
+Concrete fixed-size elements (`Truss`, `Quad4`, ...) keep their own typed math; only the catalog impl
+builds `DofRef` arrays. A variable-connectivity element owns its node list and runtime-sized matrices,
+then passes slices to the sink without changing the closed-enum dispatch.
 
 ## DOF activation and state mapping
 
@@ -98,7 +103,8 @@ costs more than the roughly 100 duplicated lines it saves, so `Truss`/`Truss3` s
 3. `accepts_load`: which load kinds it takes (default: none).
 4. `validate` (geometry and parameters, returning `ModelError::InvalidElement`) and `prepare` (cache
    immutable geometry).
-5. Call `sink.add::<N>` from `assemble_tangent`/`assemble_load`/`assemble_mass`; implement `commit`.
+5. Call `sink.add::<N>` for fixed-size contributions or `sink.add_dyn` for runtime-sized contributions
+   from `assemble_tangent`/`assemble_load`/`assemble_mass`; implement `commit`.
 6. `local_force_width` and `local_force` (and `gauss_*`/`fiber_responses` if it has them) so recorders are
    bounds-checked at decode time.
 7. Tests: add the element to the mask-conformance test in `elements/mod.rs`; rigid-body and patch tests;

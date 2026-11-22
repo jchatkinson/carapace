@@ -14,8 +14,8 @@ use super::load_pattern::{
 use super::{
     Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LimitKind,
     LimitStateConfig, LoadPatternId, LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView,
-    ShellResponse, SparseMatrix, TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF,
-    SPATIAL_NDIM,
+    ShellResponse, SparseMatrix, StudWallResponse, TangentSink, VectorSink, NDF, PLANAR_NDIM,
+    SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -787,6 +787,16 @@ where
                     }
                 }
             }
+
+            fn add_dyn(&mut self, dofs: &[DofRef<NId>], v: &[f64]) {
+                assert_eq!(dofs.len(), v.len());
+                for (a, &(node, slot)) in dofs.iter().enumerate() {
+                    let terms = self.domain.dof_terms(node, slot as usize);
+                    if v[a] != 0.0 && terms.as_slice().len() > 1 && self.offender.is_none() {
+                        self.offender = Some((node, slot as usize));
+                    }
+                }
+            }
         }
         let view = self.node_view();
         let mut probe = Probe {
@@ -921,7 +931,7 @@ where
         let mut active: HashSet<(NId, usize)> = HashSet::new();
         for (_, element) in self.elements.iter() {
             let mask = element.dof_mask();
-            for node in element.nodes() {
+            for &node in element.nodes().as_slice() {
                 for dof in (0..NDOF).filter(|&dof| mask.contains(dof)) {
                     active.insert((node, dof));
                 }
@@ -1026,15 +1036,21 @@ where
         k: Option<&SMatrix<f64, N, N>>,
         values: &[f64],
     ) {
+        self.assert_declared_dyn(dofs, k.map(|k| k.as_slice()), values);
+    }
+
+    #[cfg(debug_assertions)]
+    fn assert_declared_dyn(&self, dofs: &[DofRef<NId>], k: Option<&[f64]>, values: &[f64]) {
+        let n = dofs.len();
         let scale = |it: &mut dyn Iterator<Item = f64>| it.fold(0.0_f64, |m, v| m.max(v.abs()));
         let vector_scale = scale(&mut values.iter().copied());
-        let diagonal_scale = k.map_or(0.0, |k| scale(&mut (0..N).map(|i| k[(i, i)])));
+        let diagonal_scale = k.map_or(0.0, |k| scale(&mut (0..n).map(|i| k[i * n + i])));
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             if self.dofs.entry(node, slot as usize) != DofEntry::Inactive {
                 continue;
             }
             let stray_value = values[a].abs() > 1e-10 * vector_scale;
-            let stray_stiffness = k.is_some_and(|k| k[(a, a)].abs() > 1e-10 * diagonal_scale);
+            let stray_stiffness = k.is_some_and(|k| k[a * n + a].abs() > 1e-10 * diagonal_scale);
             assert!(
                 !(stray_value || stray_stiffness),
                 "an element contributes to DOF {slot} of a node on which it did not declare a DOF in \
@@ -1520,6 +1536,28 @@ where
             }
         }
     }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], k: &[f64], r: &[f64]) {
+        let n = dofs.len();
+        assert_eq!(k.len(), n * n);
+        assert_eq!(r.len(), n);
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared_dyn(dofs, Some(k), r);
+        for (a, &(node_a, slot_a)) in dofs.iter().enumerate() {
+            for &(eq_a, coeff_a) in self.domain.dof_terms(node_a, slot_a as usize).iter() {
+                self.resistance[eq_a] += coeff_a * r[a];
+                for (b, &(node_b, slot_b)) in dofs.iter().enumerate() {
+                    for &(eq_b, coeff_b) in self.domain.dof_terms(node_b, slot_b as usize).iter() {
+                        self.triplets.push(Triplet::new(
+                            eq_a,
+                            eq_b,
+                            coeff_a * coeff_b * k[a * n + b],
+                        ));
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Scatters element tangents into the value array of a known `StiffnessPattern` and element resistances into
@@ -1569,6 +1607,27 @@ where
             }
         }
     }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], k: &[f64], r: &[f64]) {
+        let n = dofs.len();
+        assert_eq!(k.len(), n * n);
+        assert_eq!(r.len(), n);
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared_dyn(dofs, Some(k), r);
+        for (a, &(node_a, slot_a)) in dofs.iter().enumerate() {
+            for &(eq_a, coeff_a) in self.domain.dof_terms(node_a, slot_a as usize).iter() {
+                self.resistance[eq_a] += coeff_a * r[a];
+                for (b, &(node_b, slot_b)) in dofs.iter().enumerate() {
+                    for &(eq_b, coeff_b) in self.domain.dof_terms(node_b, slot_b as usize).iter() {
+                        match self.pattern.position(eq_a, eq_b) {
+                            Some(at) => self.values[at] += coeff_a * coeff_b * k[a * n + b],
+                            None => self.complete = false,
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Scatters scaled element load vectors into the free-DOF load vector.
@@ -1597,6 +1656,17 @@ where
             }
         }
     }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], v: &[f64]) {
+        assert_eq!(dofs.len(), v.len());
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared_dyn(dofs, None, v);
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            for &(eq, coeff) in self.domain.dof_terms(node, slot as usize).iter() {
+                self.load[eq] += coeff * self.factor * v[a];
+            }
+        }
+    }
 }
 
 /// Scatters element lumped masses into the free-DOF mass diagonal.
@@ -1618,6 +1688,15 @@ where
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
         #[cfg(debug_assertions)]
         self.domain.assert_declared(dofs, None, v.as_slice());
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            accumulate_mass(self.mass, self.domain.dof_terms(node, slot as usize), v[a]);
+        }
+    }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], v: &[f64]) {
+        assert_eq!(dofs.len(), v.len());
+        #[cfg(debug_assertions)]
+        self.domain.assert_declared_dyn(dofs, None, v);
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             accumulate_mass(self.mass, self.domain.dof_terms(node, slot as usize), v[a]);
         }
@@ -1663,10 +1742,28 @@ impl<NId: NodeKey, const NDOF: usize> TangentSink<NId> for AccumulateDofs<'_, NI
             }
         }
     }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], _k: &[f64], r: &[f64]) {
+        assert_eq!(dofs.len(), r.len());
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if let Some(total) = self.totals.get_mut(node) {
+                total[slot as usize] += self.sign * r[a];
+            }
+        }
+    }
 }
 
 impl<NId: NodeKey, const NDOF: usize> VectorSink<NId> for AccumulateDofs<'_, NId, NDOF> {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if let Some(total) = self.totals.get_mut(node) {
+                total[slot as usize] += self.sign * v[a];
+            }
+        }
+    }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], v: &[f64]) {
+        assert_eq!(dofs.len(), v.len());
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             if let Some(total) = self.totals.get_mut(node) {
                 total[slot as usize] += self.sign * v[a];
@@ -1688,10 +1785,28 @@ impl<NId: NodeKey> TangentSink<NId> for PickDof<NId> {
             }
         }
     }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], _k: &[f64], r: &[f64]) {
+        assert_eq!(dofs.len(), r.len());
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if node == self.node && slot == self.dof {
+                self.total += r[a];
+            }
+        }
+    }
 }
 
 impl<NId: NodeKey> VectorSink<NId> for PickDof<NId> {
     fn add<const N: usize>(&mut self, dofs: &[DofRef<NId>; N], v: &SVector<f64, N>) {
+        for (a, &(node, slot)) in dofs.iter().enumerate() {
+            if node == self.node && slot == self.dof {
+                self.total += v[a];
+            }
+        }
+    }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], v: &[f64]) {
+        assert_eq!(dofs.len(), v.len());
         for (a, &(node, slot)) in dofs.iter().enumerate() {
             if node == self.node && slot == self.dof {
                 self.total += v[a];
@@ -1714,6 +1829,20 @@ impl<NId: NodeKey> VectorSink<NId> for PickDof<NId> {
 /// of refusing to compile — see `Domain3::rigid_diaphragm` for the real
 /// (affine, lever-arm-aware) spatial version below.
 impl Domain {
+    /// Recovered local response for a stud-wall element, with the wall-slot load factors active at `pseudo_time`.
+    pub fn element_stud_wall_response(
+        &self,
+        id: crate::model::ElementId,
+        pseudo_time: f64,
+    ) -> Option<StudWallResponse> {
+        let Element::StudWall(wall) = self.elements.get(id)? else {
+            return None;
+        };
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        let load = effective_element_load(&active, id);
+        Some(wall.response(&self.node_view(), load.as_ref()))
+    }
+
     pub fn rigid_diaphragm(&mut self, retained: NodeId, constrained: &[NodeId]) {
         for &c in constrained {
             self.equal_dof(retained, c, &[0]);

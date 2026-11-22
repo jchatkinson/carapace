@@ -138,6 +138,9 @@ fn path_slope(times: &[f64], factors: &[f64], pseudo_time: f64) -> f64 {
 /// axes (pressure along the inward normal).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ElementLoad {
+    /// Stud-wall pattern slot selectors. Each nonzero entry selects one of
+    /// the wall element's pre-discretized load slots.
+    pub wall: [f64; WALL_SLOTS],
     /// Beam-columns: uniform load (force/length) `[wx, wy]`, `wx` along the
     /// member axis and `wy` transverse in local +y.
     pub beam_uniform: [f64; 2],
@@ -155,6 +158,9 @@ pub struct ElementLoad {
     /// element along the inward normal.
     pub edge_pressure: [f64; 4],
 }
+
+/// Number of independently scaled load slots on a stud-wall element.
+pub const WALL_SLOTS: usize = 8;
 
 impl ElementLoad {
     /// A uniform beam load (the former `ElementLoad::Uniform { wx, wy }`).
@@ -220,6 +226,11 @@ impl ElementLoad {
     pub fn has_edge(&self) -> bool {
         self.has_edge_from(0)
     }
+
+    /// Whether any stud-wall load slot is selected.
+    pub fn has_wall(&self) -> bool {
+        self.wall != [0.0; WALL_SLOTS]
+    }
 }
 
 impl std::ops::Add for ElementLoad {
@@ -235,6 +246,7 @@ impl std::ops::Add for ElementLoad {
                 std::array::from_fn(|i| self.edge_traction[k][i] + other.edge_traction[k][i])
             }),
             edge_pressure: std::array::from_fn(|k| self.edge_pressure[k] + other.edge_pressure[k]),
+            wall: std::array::from_fn(|k| self.wall[k] + other.wall[k]),
         }
     }
 }
@@ -254,7 +266,7 @@ pub trait ElementLoadComponents {
 /// Component layout: `[wx, wy, bx, by, t0x, t0y, p0, t1x, t1y, p1, t2x, t2y, p2, t3x, t3y, p3]`
 /// (beam uniform, body force, then traction and pressure per edge), then `[dwx, dwy]` (the beam taper).
 impl ElementLoadComponents for ElementLoad {
-    const COUNT: usize = 18;
+    const COUNT: usize = 26;
 
     fn component(&self, index: usize) -> f64 {
         match index {
@@ -268,6 +280,7 @@ impl ElementLoadComponents for ElementLoad {
                 }
             }
             16 | 17 => self.beam_taper[index - 16],
+            18..=25 => self.wall[index - 18],
             _ => 0.0,
         }
     }
@@ -297,6 +310,7 @@ impl std::ops::Mul<f64> for ElementLoad {
             body: self.body.map(|v| v * factor),
             edge_traction: self.edge_traction.map(|t| t.map(|v| v * factor)),
             edge_pressure: self.edge_pressure.map(|v| v * factor),
+            wall: self.wall.map(|v| v * factor),
         }
     }
 }

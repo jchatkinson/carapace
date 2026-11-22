@@ -420,6 +420,12 @@ mod tests {
             self.k = SMatrix::from_fn(|i, j| k[(i, j)]);
             self.r = SVector::from_fn(|i, _| r[i]);
         }
+        fn add_dyn(&mut self, _: &[DofRef<NodeId>], k: &[f64], r: &[f64]) {
+            assert_eq!(k.len(), 64);
+            assert_eq!(r.len(), 8);
+            self.k = SMatrix::from_row_slice(k);
+            self.r = SVector::from_column_slice(r);
+        }
     }
 
     struct Mass(SVector<f64, 8>);
@@ -427,6 +433,10 @@ mod tests {
     impl VectorSink<NodeId> for Mass {
         fn add<const N: usize>(&mut self, _dofs: &[DofRef<NodeId>; N], v: &SVector<f64, N>) {
             self.0 = SVector::from_fn(|i, _| v[i]);
+        }
+        fn add_dyn(&mut self, _: &[DofRef<NodeId>], v: &[f64]) {
+            assert_eq!(v.len(), 8);
+            self.0 = SVector::from_column_slice(v);
         }
     }
 

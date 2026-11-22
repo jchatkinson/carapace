@@ -6,6 +6,8 @@ mod force_beam;
 mod force_beam_loads;
 mod local_force;
 mod multi_node;
+mod stud_wall;
+mod stud_wall_takedown;
 mod tangent_fd;
 mod truss;
 mod zero_length;

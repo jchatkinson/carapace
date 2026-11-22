@@ -249,6 +249,15 @@ impl<NId: Copy> TangentSink<NId> for Collect<NId> {
         self.k = DMatrix::from_fn(N, N, |i, j| k[(i, j)]);
         self.r = DVector::from_fn(N, |i, _| r[i]);
     }
+
+    fn add_dyn(&mut self, dofs: &[DofRef<NId>], k: &[f64], r: &[f64]) {
+        let n = dofs.len();
+        assert_eq!(k.len(), n * n);
+        assert_eq!(r.len(), n);
+        self.dofs = dofs.to_vec();
+        self.k = DMatrix::from_row_slice(n, n, k);
+        self.r = DVector::from_column_slice(r);
+    }
 }
 
 /// Checks one `ElementOps` element's `assemble_tangent` at the nodal state
