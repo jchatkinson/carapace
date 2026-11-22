@@ -48,6 +48,7 @@ StudWallLayout {
   bottom: { ea, ei },
   openings: [{ x0, x1, head_height, header_ei, jack_ea, door: bool }],
   sheathing: Option<{ ga }>,          // shear flow q = ga * gamma (force/length), both faces summed
+  foundation: bool,                   // default false; internally fix interior bottom-chord u and v
 }
 ```
 
@@ -60,6 +61,8 @@ StudWallLayout {
 - With `Direct`, a top station's `x` must coincide with a stud or cripple. A hinged chord node needs a vertical
   member below it.
 - A bottom station may not lie strictly inside a door.
+- With `foundation: true`, bottom stations are rejected; every interior bottom-chord position (stud or jack)
+  is internally fixed in `u` (sill anchorage) and `v` (bearing). Bottom corners remain exterior nodes.
 - A singular internal stiffness is reported as an error at construction, never regularized. It can't occur
   for a valid layout; it guards against layout bugs.
 
@@ -178,6 +181,13 @@ state. It reports, in local axes with tension positive:
 - **Header:** end reactions (the jack forces), plus moment and shear at each header node.
 - **Chords:** axial force, moment and shear at each chord node, per chord.
 - **Piers:** `xa`, `xb`, `q`, `γ`.
+- **Pier overturning:** `moment_base` and `moment_top` are `Σ (x − x_mid) · N` over the full-height studs in the
+  pier, using each stud's axial force (tension positive) at its bottom and top end, CCW positive. By statics
+  this is the external overturning moment of everything above that section: a +x lateral load at the top gives
+  negative values, and `moment_top = moment_base + q·b·H`. `jd = xb − xa`; `chords = [−moment_base/jd,
+  +moment_base/jd]` (tension positive, so +x gives tension in the left post) is the overturning-only CSA O86 /
+  SDPWS M/jd design force. It is exact however the element shares overturning among studs; the gravity share
+  of a post comes from its stud force or a gravity analysis.
 - **Base** (bottom-chord exterior nodes: `c0`, `c1` and bottom stations): sums of the element's resisting
   forces, `Fx` and `Fy`, and the moment about `(L/2, 0)`, `Σ (x_i − L/2) · Fy_i`.
 
@@ -201,4 +211,6 @@ state. It reports, in local axes with tension positive:
 | Loaded condensation. Points between nodes, partial trapezoids, three patterns with different factors in different slots. Exterior forces, reactions and recovered member forces. | Explicit model | 1e-9 |
 | One pier, rigid chords (`ea × 1e6`), end posts `EA`: top deflection and post forces. | `2vH³/(3EAb) + vH/ga`; post force `±qH` at the base, 0 at the top | 1e-6 |
 | Two piers with a door and different `ga`; an unloaded station inserted inside a pier leaves the response unchanged. | Consistency | 1e-10 |
+| Foundation supports versus fixed bottom stations, including window and door walls; per-position reactions and member responses. | Equivalent restrained frame | 1e-10 relative |
+| Pier base/top stud-force moments and M/jd chord forces, 2- and 5-storey walls in every variant. | Section statics; O86 A.11.7.1 hold-down force | 1e-6 relative (rigid stand-in conditioning) |
 | Hand-calc takedowns (separate test file, written after the element). | Hand calculations | see file |

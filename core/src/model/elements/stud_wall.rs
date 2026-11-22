@@ -57,6 +57,8 @@ pub struct StudWallLayout {
     pub bottom_ei: f64,
     pub openings: Vec<WallOpening>,
     pub sheathing: Option<WallSheathing>,
+    /// Internally restrain interior bottom-chord positions in `u` and `v` against a rigid foundation.
+    pub foundation: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WallLoad {
@@ -113,6 +115,15 @@ pub struct WallPierResponse {
     pub xb: f64,
     pub q: f64,
     pub gamma: f64,
+    /// Vertical-stud axial-force moment about the pier mid-width at its base (CCW positive).
+    pub moment_base: f64,
+    /// Vertical-stud axial-force moment about the pier mid-width at its top (CCW positive).
+    pub moment_top: f64,
+    /// End-post centroid spacing, `xb - xa`.
+    pub jd: f64,
+    /// Overturning share only, `[−moment_base/jd, +moment_base/jd]`, tension positive. This is the
+    /// CSA O86 / SDPWS M/jd design force; gravity share comes from each post's stud force or gravity analysis.
+    pub chords: [f64; 2],
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WallBaseResponse {
@@ -205,6 +216,9 @@ pub struct StudWall {
     top_nodes: Vec<(f64, [usize; 3])>,
     bottom_nodes: Vec<(f64, [usize; 3])>,
     prepared: Option<PreparedAssembly>,
+    full_stiffness: Option<DMatrix<f64>>,
+    full_load_slots: Vec<DVector<f64>>,
+    foundation_supports: Vec<(f64, usize, usize)>,
 }
 
 impl StudWall {
@@ -456,15 +470,29 @@ impl StudWall {
             }
         }
         let piers = add_sheathing(&mut model, &layout, &top_nodes, &bottom_nodes)?;
+        let mut foundation_supports = Vec::new();
+        if layout.foundation {
+            for &(x, d) in &bottom_nodes {
+                if x > 0. && x < layout.length {
+                    model.fixed_internal.extend([d[0], d[1]]);
+                    foundation_supports.push((x, d[0], d[1]));
+                }
+            }
+        }
+        let full_stiffness = layout.foundation.then(|| model.k.clone());
         let (kc, recovery, _ki) = model.condense(ne)?;
         let mut load_slots = Vec::with_capacity(WALL_SLOTS);
         let mut load_recovery = Vec::with_capacity(WALL_SLOTS);
+        let mut full_load_slots = Vec::with_capacity(WALL_SLOTS);
         for (slot, slot_loads) in loads.iter().enumerate() {
             let mut p = DVector::zeros(model.ndof);
             for l in slot_loads {
                 discretize_load(l, slot, &layout, &top_nodes, &mut model, &mut p)?;
             }
             let (f, w) = model.condense_load(ne, &p)?;
+            if layout.foundation {
+                full_load_slots.push(p);
+            }
             load_slots.push(f);
             load_recovery.push(w);
         }
@@ -523,6 +551,9 @@ impl StudWall {
             top_nodes,
             bottom_nodes,
             prepared: None,
+            full_stiffness,
+            full_load_slots,
+            foundation_supports,
         })
     }
     pub fn nodes(&self) -> &[NodeId] {
@@ -791,14 +822,29 @@ impl StudWall {
         );
         for (i, p) in self.piers.iter().enumerate() {
             let gamma = p.beta.dot(&DVector::from_column_slice(&ufull));
+            let mid = (p.xa + p.xb) * 0.5;
+            let mut moment_base = 0.;
+            let mut moment_top = 0.;
+            for stud in r.studs.iter().filter(|s| s.x >= p.xa && s.x <= p.xb) {
+                moment_base += (stud.x - mid) * stud.bottom;
+                moment_top += (stud.x - mid) * stud.top;
+            }
+            let jd = p.xb - p.xa;
             r.piers.push(WallPierResponse {
                 xa: p.xa,
                 xb: p.xb,
                 q: q[i],
                 gamma,
+                moment_base,
+                moment_top,
+                jd,
+                chords: [-moment_base / jd, moment_base / jd],
             });
         }
-        let resisting = &self.stiffness * &ue;
+        let mut resisting = &self.stiffness * &ue;
+        for (k, slot) in self.load_slots.iter().enumerate() {
+            resisting -= slot * factors[k];
+        }
         for (i, id) in self.nodes.iter().enumerate() {
             if i < 2
                 || self
@@ -824,6 +870,22 @@ impl StudWall {
                 r.base[2] += (x - self.layout.length / 2.) * fy;
                 r.base_nodes.push(WallBaseResponse { x, fx, fy });
             }
+        }
+        if !self.foundation_supports.is_empty() {
+            let mut residual =
+                self.full_stiffness.as_ref().unwrap() * DVector::from_column_slice(&ufull);
+            for (k, p) in self.full_load_slots.iter().enumerate() {
+                residual -= p * factors[k];
+            }
+            for &(x, u, v) in &self.foundation_supports {
+                let fx = residual[u];
+                let fy = residual[v];
+                r.base[0] += fx;
+                r.base[1] += fy;
+                r.base[2] += (x - self.layout.length / 2.) * fy;
+                r.base_nodes.push(WallBaseResponse { x, fx, fy });
+            }
+            r.base_nodes.sort_by(|a, b| a.x.total_cmp(&b.x));
         }
         r
     }
@@ -935,12 +997,14 @@ impl StudWall {
 struct FrameBuild {
     ndof: usize,
     k: DMatrix<f64>,
+    fixed_internal: Vec<usize>,
 }
 impl FrameBuild {
     fn new(ne: usize) -> Self {
         Self {
             ndof: ne,
             k: DMatrix::zeros(ne, ne),
+            fixed_internal: Vec::new(),
         }
     }
     fn grow(&mut self) {
@@ -988,9 +1052,16 @@ impl FrameBuild {
         if ni == 0 {
             return Ok((kee, DMatrix::zeros(0, ne), DMatrix::zeros(0, 0)));
         }
-        let kei = self.k.view((0, ne), (ne, ni)).into_owned();
-        let kie = self.k.view((ne, 0), (ni, ne)).into_owned();
-        let kii = self.k.view((ne, ne), (ni, ni)).into_owned();
+        let free: Vec<_> = (ne..self.ndof)
+            .filter(|d| !self.fixed_internal.contains(d))
+            .collect();
+        let mut recovery = DMatrix::zeros(ni, ne);
+        if free.is_empty() {
+            return Ok((kee, recovery, DMatrix::zeros(0, 0)));
+        }
+        let kei = DMatrix::from_fn(ne, free.len(), |i, j| self.k[(i, free[j])]);
+        let kie = DMatrix::from_fn(free.len(), ne, |i, j| self.k[(free[i], j)]);
+        let kii = DMatrix::from_fn(free.len(), free.len(), |i, j| self.k[(free[i], free[j])]);
         let lu = kii.clone().lu();
         let Some(r) = lu.solve(&kie) else {
             return Err(StudWallError("internal stiffness K_ii is singular".into()));
@@ -999,7 +1070,10 @@ impl FrameBuild {
         if !kc.iter().all(|x| x.is_finite()) {
             return Err(StudWallError("internal stiffness K_ii is singular".into()));
         }
-        Ok((kc, r, kii))
+        for (j, &d) in free.iter().enumerate() {
+            recovery.row_mut(d - ne).copy_from(&r.row(j));
+        }
+        Ok((kc, recovery, kii))
     }
     fn condense_load(
         &self,
@@ -1007,19 +1081,24 @@ impl FrameBuild {
         p: &DVector<f64>,
     ) -> Result<(DVector<f64>, DVector<f64>), StudWallError> {
         let pe = p.rows(0, ne).into_owned();
-        let pi = p.rows(ne, self.ndof - ne).into_owned();
-        if pi.is_empty() {
+        let free: Vec<_> = (ne..self.ndof)
+            .filter(|d| !self.fixed_internal.contains(d))
+            .collect();
+        if free.is_empty() {
             return Ok((pe, DVector::zeros(0)));
         }
-        let w = self
-            .k
-            .view((ne, ne), (self.ndof - ne, self.ndof - ne))
-            .into_owned()
+        let kii = DMatrix::from_fn(free.len(), free.len(), |i, j| self.k[(free[i], free[j])]);
+        let pi = DVector::from_iterator(free.len(), free.iter().map(|&d| p[d]));
+        let w_free = kii
             .lu()
             .solve(&pi)
             .ok_or_else(|| StudWallError("internal stiffness K_ii is singular".into()))?;
-        let kei = self.k.view((0, ne), (ne, self.ndof - ne));
-        Ok((pe - kei * &w, w))
+        let kei = DMatrix::from_fn(ne, free.len(), |i, j| self.k[(i, free[j])]);
+        let mut w = DVector::zeros(self.ndof - ne);
+        for (j, &d) in free.iter().enumerate() {
+            w[d - ne] = w_free[j];
+        }
+        Ok((pe - kei * &w_free, w))
     }
 }
 
@@ -1124,6 +1203,11 @@ fn validate_layout(l: &StudWallLayout, stations: &[WallStation]) -> Result<(), S
         {
             return Err(StudWallError(format!(
                 "stations[{i}] duplicates another station location"
+            )));
+        }
+        if s.chord == WallChord::Bottom && l.foundation {
+            return Err(StudWallError(format!(
+                "stations[{i}] bottom station duplicates internal foundation support"
             )));
         }
         if s.chord == WallChord::Bottom

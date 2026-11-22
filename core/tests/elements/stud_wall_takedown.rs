@@ -35,6 +35,7 @@ fn layout(
         bottom_ei: 6.0e9,
         openings,
         sheathing: None,
+        foundation: false,
     }
 }
 
@@ -71,6 +72,18 @@ fn supported_wall(
     openings: Vec<WallOpening>,
     loads: [Vec<WallLoad>; WALL_SLOTS],
 ) -> (D2, BuiltWall) {
+    supported_wall_mode(length, studs, distribution, top_ei, openings, loads, false)
+}
+
+fn supported_wall_mode(
+    length: f64,
+    studs: &[(f64, f64)],
+    distribution: ChordDistribution,
+    top_ei: Option<f64>,
+    openings: Vec<WallOpening>,
+    loads: [Vec<WallLoad>; WALL_SLOTS],
+    foundation: bool,
+) -> (D2, BuiltWall) {
     let mut d = D2::new();
     let h = 2440.;
     let corners = [
@@ -89,11 +102,16 @@ fn supported_wall(
     }
     xs.sort_by(f64::total_cmp);
     xs.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
-    let bottom: Vec<_> = xs
-        .into_iter()
-        .map(|x| (x, d.add_node(Node::new([x, 0.]).fix(0).fix(1))))
-        .collect();
+    let bottom: Vec<_> = if foundation {
+        vec![]
+    } else {
+        xs.into_iter()
+            .map(|x| (x, d.add_node(Node::new([x, 0.]).fix(0).fix(1))))
+            .collect()
+    };
     let l = layout(length, studs, distribution, top_ei, openings);
+    let mut l = l;
+    l.foundation = foundation;
     let wall = add_wall(&mut d, corners, l, loads, bottom, vec![]);
     (d, wall)
 }
@@ -485,6 +503,102 @@ fn window_and_door_header_takedown() {
             + a.domain().reaction(wall.corners[0], 1, 1.)
             + a.domain().reaction(wall.corners[1], 1, 1.);
         near(sum, 36000., 1e-9, "window/door vertical reactions");
+    }
+}
+
+/// Internal foundation supports reproduce fixed bottom-station takedowns for solid, window, and door walls.
+/// Reference: paired Carapace station model; member forces, top-corner displacements, and per-x reactions agree to 1e-10 relative.
+#[test]
+fn foundation_matches_fixed_bottom_stations() {
+    for opening in [None, Some(false), Some(true)] {
+        let openings = opening
+            .map(|door| {
+                vec![WallOpening {
+                    x0: 1140.,
+                    x1: 2460.,
+                    head_height: 2000.,
+                    header_ei: 7.8e11,
+                    jack_ea: 50e6,
+                    door,
+                }]
+            })
+            .unwrap_or_default();
+        let mut loads = empty_loads();
+        loads[0].push(WallLoad::TopLine {
+            x0: 0.,
+            x1: 3600.,
+            wx0: 0.,
+            wx1: 0.,
+            wy0: -10.,
+            wy1: -10.,
+        });
+        let studs = if opening.is_some() {
+            window_studs()
+        } else {
+            (0..=9).map(|i| (i as f64 * 400., 50e6)).collect()
+        };
+        let solve_mode = |foundation| {
+            let (mut d, wall) = supported_wall_mode(
+                3600.,
+                &studs,
+                ChordDistribution::Direct,
+                None,
+                openings.clone(),
+                loads.clone(),
+                foundation,
+            );
+            let pattern = d.default_pattern();
+            add_wall_selector(&mut d, wall.id, 0, pattern);
+            let a = solve(d);
+            let r = a.domain().element_stud_wall_response(wall.id, 1.).unwrap();
+            let corners = wall.corners.map(|n| a.domain().node(n).displacement);
+            (r, corners)
+        };
+        let (stations, u_station) = solve_mode(false);
+        let (foundation, u_foundation) = solve_mode(true);
+        for (a, b) in u_station
+            .iter()
+            .flatten()
+            .zip(u_foundation.iter().flatten())
+        {
+            near(*a, *b, 1e-10, "corner displacement station/foundation");
+        }
+        assert_eq!(stations.studs.len(), foundation.studs.len(), "stud count");
+        assert_eq!(stations.cripples.len(), foundation.cripples.len());
+        assert_eq!(stations.jacks.len(), foundation.jacks.len());
+        assert_eq!(stations.header.len(), foundation.header.len());
+        assert_eq!(stations.top_chord.len(), foundation.top_chord.len());
+        assert_eq!(stations.bottom_chord.len(), foundation.bottom_chord.len());
+        for (a, b) in stations.studs.iter().zip(&foundation.studs) {
+            near(a.bottom, b.bottom, 1e-10, "stud bottom station/foundation");
+            near(a.top, b.top, 1e-10, "stud top station/foundation");
+        }
+        for (a, b) in stations.cripples.iter().zip(&foundation.cripples) {
+            near(a.axial, b.axial, 1e-10, "cripple station/foundation");
+        }
+        for (a, b) in stations.jacks.iter().zip(&foundation.jacks) {
+            near(a.axial, b.axial, 1e-10, "jack station/foundation");
+        }
+        for (a, b) in stations.header.iter().zip(&foundation.header) {
+            near(a.moment, b.moment, 1e-10, "header station/foundation");
+            near(a.shear, b.shear, 1e-10, "header shear station/foundation");
+        }
+        assert_eq!(stations.base_nodes.len(), foundation.base_nodes.len());
+        for a in &stations.base_nodes {
+            let b = foundation
+                .base_nodes
+                .iter()
+                .find(|b| (a.x - b.x).abs() < 1e-8)
+                .unwrap();
+            near(a.fx, b.fx, 1e-10, "base Fx station/foundation");
+            near(a.fy, b.fy, 1e-10, "base Fy station/foundation");
+        }
+        for (a, b) in stations.top_chord.iter().zip(&foundation.top_chord) {
+            near(a.axial, b.axial, 1e-10, "header station/foundation");
+        }
+        for (a, b) in stations.bottom_chord.iter().zip(&foundation.bottom_chord) {
+            near(a.axial, b.axial, 1e-10, "bottom chord station/foundation");
+        }
     }
 }
 

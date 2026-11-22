@@ -12,7 +12,9 @@
 //! storey force delivered uniformly along the top plate) is the code's own idealization and must reproduce
 //! the hand calculation: tolerance 1e-5 relative. The residual, about 2e-6, comes from the finite stand-in
 //! plate stiffness `EA × 1e6`; stiffer stand-ins only add roundoff. The other variants switch on one real
-//! effect at a time and are characterizations, printed with `--nocapture`.
+//! effect at a time and are characterizations, printed with `--nocapture`. In every variant the pier's M/jd
+//! chord force equals the O86 hold-down force by statics (1e-6 relative, limited by the conditioning of the
+//! rigid stand-ins; `RIGID = 1e10` rather than larger for the same reason).
 
 use carapace_core::analysis::{
     Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
@@ -32,7 +34,7 @@ const BV: f64 = 11_000.;
 /// Sheathing nail diameter (mm).
 const D_F: f64 = 3.25;
 /// Stand-in for a rigid link (N/mm).
-const RIGID: f64 = 1e13;
+const RIGID: f64 = 1e10;
 
 struct Case {
     name: &'static str,
@@ -61,15 +63,17 @@ struct Variant {
     bearing: bool,
     /// Storey force applied at the two top corners (otherwise uniformly along the top plate).
     corner_load: bool,
+    sideways_only: bool,
 }
 
-const VARIANTS: [Variant; 5] = [
+const VARIANTS: [Variant; 6] = [
     Variant {
         name: "code idealized",
         interior_studs: false,
         real_plates: false,
         bearing: false,
         corner_load: false,
+        sideways_only: false,
     },
     Variant {
         name: "+ interior studs",
@@ -77,6 +81,7 @@ const VARIANTS: [Variant; 5] = [
         real_plates: false,
         bearing: false,
         corner_load: false,
+        sideways_only: false,
     },
     Variant {
         name: "+ real plates, corner anchors",
@@ -84,6 +89,7 @@ const VARIANTS: [Variant; 5] = [
         real_plates: true,
         bearing: false,
         corner_load: false,
+        sideways_only: false,
     },
     Variant {
         name: "+ real plates, corner load",
@@ -91,6 +97,7 @@ const VARIANTS: [Variant; 5] = [
         real_plates: true,
         bearing: false,
         corner_load: true,
+        sideways_only: false,
     },
     Variant {
         name: "+ real plates, stud bearing",
@@ -98,6 +105,15 @@ const VARIANTS: [Variant; 5] = [
         real_plates: true,
         bearing: true,
         corner_load: false,
+        sideways_only: false,
+    },
+    Variant {
+        name: "+ real plates, sideways only",
+        interior_studs: true,
+        real_plates: true,
+        bearing: false,
+        corner_load: false,
+        sideways_only: true,
     },
 ];
 
@@ -184,7 +200,7 @@ fn o86_hand_calc(c: &Case) -> Vec<[f64; 5]> {
     out
 }
 
-fn layout(c: &Case, i: usize, v: Variant) -> StudWallLayout {
+fn layout(c: &Case, i: usize, v: Variant, foundation: bool) -> StudWallLayout {
     let post = c.plies[i] * EA_PLY;
     let interior = if v.interior_studs { EA_PLY } else { 1. };
     let mut studs = vec![WallStud { x: 0., ea: post }];
@@ -213,6 +229,7 @@ fn layout(c: &Case, i: usize, v: Variant) -> StudWallLayout {
         bottom_ei: 6.0e9,
         openings: vec![],
         sheathing: Some(WallSheathing { ga: c.secant_ga(i) }),
+        foundation: foundation && v.bearing && i == 0,
     }
 }
 
@@ -229,9 +246,17 @@ struct Result {
     drift: Vec<f64>,
     /// Hold-down forces below each storey, bottom to top.
     holddown: Vec<f64>,
+    /// Left end-post axial force at the base and M/jd design force, by storey.
+    left_stud_and_chord: Vec<[f64; 2]>,
+    /// (base, top) stud-force moments, by storey.
+    pier_moments: Vec<[f64; 2]>,
 }
 
 fn element_model(c: &Case, v: Variant) -> Result {
+    element_model_mode(c, v, true)
+}
+
+fn element_model_mode(c: &Case, v: Variant, use_foundation: bool) -> Result {
     let (l, h) = (c.length, c.height);
     let mut d: D2 = Domain::new();
     let ground = d.add_node(Node::new([0., 0.]).fix(0).fix(1).fix(2));
@@ -239,9 +264,14 @@ fn element_model(c: &Case, v: Variant) -> Result {
     let mut bottom_right = d.add_node(Node::new([l, 0.]).fix(0).fix(1));
     holddown(&mut d, ground, bottom_left, c.k_hd);
     let mut links = vec![(ground, bottom_left)];
-    let mut bottom_stations: Vec<(f64, NodeId)> = if v.bearing {
-        let xs = c.interior_xs();
-        xs.into_iter()
+    let mut bottom_stations: Vec<(f64, NodeId)> = if v.sideways_only {
+        c.interior_xs()
+            .into_iter()
+            .map(|x| (x, d.add_node(Node::new([x, 0.]).fix(0))))
+            .collect()
+    } else if v.bearing && !use_foundation {
+        c.interior_xs()
+            .into_iter()
             .map(|x| (x, d.add_node(Node::new([x, 0.]).fix(0).fix(1))))
             .collect()
     } else {
@@ -249,11 +279,12 @@ fn element_model(c: &Case, v: Variant) -> Result {
     };
     let pattern = d.default_pattern();
     let mut levels = Vec::new();
+    let mut wall_ids = Vec::new();
     for i in 0..c.n() {
         let y = (i + 1) as f64 * h;
         let top_right = d.add_node(Node::new([l, y]));
         let top_left = d.add_node(Node::new([0., y]));
-        let top_stations: Vec<(f64, NodeId)> = if v.bearing && i + 1 < c.n() {
+        let top_stations: Vec<(f64, NodeId)> = if (v.bearing || v.sideways_only) && i + 1 < c.n() {
             let xs = c.interior_xs();
             xs.into_iter()
                 .map(|x| (x, d.add_node(Node::new([x, y]))))
@@ -287,8 +318,10 @@ fn element_model(c: &Case, v: Variant) -> Result {
             });
         }
         let corners = [bottom_left, bottom_right, top_right, top_left];
-        let wall = StudWall::new(corners, stations, layout(c, i, v), loads).unwrap();
+        let wall =
+            StudWall::new(corners, stations, layout(c, i, v, use_foundation), loads).unwrap();
         let id = d.add_element(Element::StudWall(wall));
+        wall_ids.push(id);
         if !v.corner_load {
             let mut wall = [0.; WALL_SLOTS];
             wall[0] = 1.;
@@ -308,7 +341,21 @@ fn element_model(c: &Case, v: Variant) -> Result {
             links.push((top_left, next_left));
             bottom_left = next_left;
             bottom_right = top_right;
-            bottom_stations = top_stations;
+            if v.sideways_only {
+                bottom_stations = top_stations
+                    .iter()
+                    .map(|&(x, upper)| {
+                        let lower = d.add_node(Node::new([x, y]));
+                        d.add_element(Element::ZeroLength(
+                            ZeroLength::new(upper, lower)
+                                .with_material(0, Material::Elastic { e: RIGID }),
+                        ));
+                        (x, lower)
+                    })
+                    .collect();
+            } else {
+                bottom_stations = top_stations;
+            }
         }
     }
     let mut a = AnalysisBuilder::new()
@@ -316,7 +363,7 @@ fn element_model(c: &Case, v: Variant) -> Result {
         .integrator(Integrator::LoadControl { increment: 1. })
         .algorithm(Algorithm::Linear)
         .test(ConvergenceTest::NormUnbalance {
-            tol: 1e-9,
+            tol: 1e-13,
             max_iter: 4,
         })
         .build(d);
@@ -331,6 +378,20 @@ fn element_model(c: &Case, v: Variant) -> Result {
         holddown: links
             .iter()
             .map(|&(below, above)| c.k_hd * (u(above, 1) - u(below, 1)))
+            .collect(),
+        left_stud_and_chord: wall_ids
+            .iter()
+            .map(|&id| {
+                let r = dom.element_stud_wall_response(id, 1.).unwrap();
+                [r.studs.first().unwrap().bottom, r.piers[0].chords[0]]
+            })
+            .collect(),
+        pier_moments: wall_ids
+            .iter()
+            .map(|&id| {
+                let r = dom.element_stud_wall_response(id, 1.).unwrap();
+                [r.piers[0].moment_base, r.piers[0].moment_top]
+            })
             .collect(),
     }
 }
@@ -356,6 +417,23 @@ fn compare(c: &Case) {
     eprintln!("  element / O86 (deflection per level; hold-down per level):");
     for v in VARIANTS {
         let r = element_model(c, v);
+        if v.bearing {
+            let station = element_model_mode(c, v, false);
+            for (a, b) in r.drift.iter().zip(&station.drift) {
+                near(*a, *b, 1e-9);
+            }
+            for (a, b) in r.holddown.iter().zip(&station.holddown) {
+                near(*a, *b, 1e-9);
+            }
+            for (a, b) in r
+                .left_stud_and_chord
+                .iter()
+                .flatten()
+                .zip(station.left_stud_and_chord.iter().flatten())
+            {
+                near(*a, *b, 1e-9);
+            }
+        }
         let fmt = |xs: Vec<f64>| {
             xs.iter()
                 .map(|x| format!("{x:6.3}"))
@@ -363,11 +441,38 @@ fn compare(c: &Case) {
                 .join(" ")
         };
         eprintln!(
-            "  {:30} Δ {}   T {}",
+            "  {:30} Δ {}   T {}   left stud / M/jd {}",
             v.name,
             fmt((0..c.n()).map(|i| r.drift[i] / hand[i][0]).collect()),
             fmt((0..c.n()).map(|i| r.holddown[i] / c.holddown(i)).collect()),
+            fmt(r.left_stud_and_chord.iter().map(|f| f[0] / f[1]).collect()),
         );
+        for i in 0..c.n() {
+            eprintln!(
+                "    storey {}: M/jd {:.9} × O86; Mbase {:.6e}, Mtop {:.6e} (O86 Mtop {:.6e})",
+                i + 1,
+                r.left_stud_and_chord[i][1] / c.holddown(i),
+                r.pier_moments[i][0],
+                r.pier_moments[i][1],
+                -c.moment_top(i),
+            );
+        }
+        // Statics: the pier M/jd chord force is the O86 hold-down force `M_{i-1}/L_s`, and the moment
+        // entering the top of each storey is the overturning from the storeys above, in every variant.
+        // Exact up to the conditioning of the rigid stand-ins (`RIGID`, plates `EA × 1e6`): 1e-6 relative.
+        for i in 0..c.n() {
+            near(r.left_stud_and_chord[i][1], c.holddown(i), 1e-6);
+            let scale = r.pier_moments[i][0].abs();
+            assert!(
+                (r.pier_moments[i][1] + c.moment_top(i)).abs() <= 1e-6 * scale,
+                "{} {} storey {}: moment_top {} != {}",
+                c.name,
+                v.name,
+                i + 1,
+                r.pier_moments[i][1],
+                -c.moment_top(i)
+            );
+        }
         if v.name == "code idealized" {
             for (i, (drift, t)) in r.drift.iter().zip(&r.holddown).enumerate() {
                 near(*drift, hand[i][0], 1e-5);

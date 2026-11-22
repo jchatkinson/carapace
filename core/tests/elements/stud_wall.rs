@@ -4,8 +4,8 @@ use carapace_core::analysis::{
     Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
 };
 use carapace_core::model::{
-    ChordDistribution, ElementLoad, StudWall, StudWallLayout, WallChord, WallLoad, WallStud,
-    WALL_SLOTS,
+    ChordDistribution, ElementLoad, StudWall, StudWallLayout, WallChord, WallLoad, WallStation,
+    WallStud, WALL_SLOTS,
 };
 use carapace_core::model::{Domain, Element, Node};
 use carapace_core::model::{ElasticBeamColumn, GeomTransf, Material, Truss};
@@ -29,6 +29,7 @@ fn layout() -> StudWallLayout {
         bottom_ei: 1.0e6,
         openings: vec![],
         sheathing: None,
+        foundation: false,
     }
 }
 
@@ -47,6 +48,24 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
     ];
     let error = StudWall::new(c, vec![], l, std::array::from_fn(|_| vec![])).unwrap_err();
     assert!(error.to_string().contains("studs[1]"));
+
+    let mut l = layout();
+    l.foundation = true;
+    let station = d.add_node(Node::new([5., 0.]));
+    let error = StudWall::new(
+        c,
+        vec![WallStation {
+            chord: WallChord::Bottom,
+            x: 5.,
+            node: station,
+        }],
+        l,
+        std::array::from_fn(|_| vec![]),
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("bottom station duplicates internal foundation support"));
 
     let a = ElementLoad {
         wall: [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -217,6 +236,7 @@ fn frame_layout(distribution: ChordDistribution, door: bool) -> StudWallLayout {
             door,
         }],
         sheathing: None,
+        foundation: false,
     }
 }
 fn wall_loads() -> [Vec<WallLoad>; WALL_SLOTS] {
@@ -863,6 +883,7 @@ fn single_sheathed_pier_matches_sdpws_terms() {
         bottom_ei: 5e10,
         openings: vec![],
         sheathing: Some(carapace_core::model::WallSheathing { ga }),
+        foundation: false,
     };
     l.height = height;
     let mut d: D2 = Domain::new();
@@ -911,6 +932,9 @@ fn single_sheathed_pier_matches_sdpws_terms() {
     );
     near(left.bottom, q * height, 1e-6);
     near(right.bottom, -q * height, 1e-6);
+    near(response.piers[0].chords[0], q * height, 1e-6);
+    near(response.piers[0].chords[1], -q * height, 1e-6);
+    near(response.piers[0].moment_top, 0., 1e-6);
 }
 
 /// Door piers balance lateral load through their `q·b` fields and report the same total base shear.
@@ -925,18 +949,10 @@ fn door_piers_sum_to_applied_and_reported_base_shear() {
         d.add_node(Node::new([6., 3.])),
         d.add_node(Node::new([0., 3.])),
     ];
-    let mut stations = Vec::new();
-    for x in [1., 1.5, 3.5, 4., 5.] {
-        let node = d.add_node(Node::new([x, 0.]).fix(0).fix(1));
-        stations.push(carapace_core::model::WallStation {
-            chord: WallChord::Bottom,
-            x,
-            node,
-        });
-    }
     let mut l = frame_layout(ChordDistribution::Beam, true);
     l.sheathing = Some(carapace_core::model::WallSheathing { ga: 8e4 });
-    let wall = StudWall::new(corners, stations, l, std::array::from_fn(|_| vec![])).unwrap();
+    l.foundation = true;
+    let wall = StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap();
     let id = d.add_element(Element::StudWall(wall));
     let pattern = d.default_pattern();
     d.add_nodal_load(pattern, corners[2], 0, lateral / 2.);
@@ -958,6 +974,11 @@ fn door_piers_sum_to_applied_and_reported_base_shear() {
         1e-9,
     );
     near(r.base[0].abs(), lateral, 1e-9);
+    for p in &r.piers {
+        // q is positive when its pier carries +x shear; the corresponding CCW-positive axial-force
+        // moment relation is M_top = M_base + q·b·H.
+        near(p.moment_top, p.moment_base + p.q * (p.xb - p.xa) * 3., 1e-9);
+    }
 }
 
 /// Adjacent walls with different sheathing stiffnesses share the applied shear in proportion to their response.
@@ -988,6 +1009,7 @@ fn adjacent_walls_with_different_ga_balance_individually_and_together() {
         bottom_ei: 5e10,
         openings: vec![],
         sheathing: Some(carapace_core::model::WallSheathing { ga }),
+        foundation: false,
     };
     let make_wall = |corners, ga| {
         StudWall::new(
@@ -1068,6 +1090,7 @@ fn unloaded_stations_inside_a_pier_leave_response_unchanged() {
             bottom_ei: 5e10,
             openings: vec![],
             sheathing: Some(carapace_core::model::WallSheathing { ga: 2e5 }),
+            foundation: false,
         };
         let id = d.add_element(Element::StudWall(
             StudWall::new(corners, stations, layout, std::array::from_fn(|_| vec![])).unwrap(),
