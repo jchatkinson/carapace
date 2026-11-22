@@ -73,10 +73,10 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
         l,
         std::array::from_fn(|_| vec![]),
     )
-    .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("bottom station duplicates internal foundation support"));
+    .expect(
+        "a bottom station on a foundation replaces the internal support there (for a hold-down)",
+    );
+    let _ = error;
 
     let mut many_piers = StudWallLayout {
         length: 390.,
@@ -345,7 +345,9 @@ fn supported_domain() -> (
         d.add_node(Node::new([6., 3.])),
         d.add_node(Node::new([0., 3.]).fix(0)),
     ];
-    let ts = d.add_node(Node::new([1., 3.]));
+    // Vertical support at the top station: with the plates hinged over the opening, the unsheathed left pier
+    // (pinned only at c0) would otherwise rotate rigidly about c0, since pinned studs resist no vertical shear.
+    let ts = d.add_node(Node::new([1., 3.]).fix(1));
     let bs = d.add_node(Node::new([5., 0.]).fix(0).fix(1));
     (d, c, ts, bs)
 }
@@ -425,10 +427,25 @@ fn explicit_frame(distribution: ChordDistribution, door: bool) -> ExplicitFrame 
             GeomTransf::Linear,
         )))
     };
+    // Plates are hinged at the opening edges (x0 = 1.5, x1 = 3.5) for the segments over the opening: a
+    // coincident node tied in ux, uy only.
+    let hinged = |d: &mut D2, p: &[(f64, carapace_core::model::NodeId)], y: f64| {
+        let over = p[0].0 >= 1.5 - 1e-10 && p[1].0 <= 3.5 + 1e-10;
+        let mut ends = [p[0].1, p[1].1];
+        for (k, edge) in [(0, 1.5), (1, 3.5)] {
+            if over && (p[k].0 - edge).abs() < 1e-10 {
+                let n = d.add_node(Node::new([edge, y]));
+                d.equal_dof(p[k].1, n, &[0, 1]);
+                ends[k] = n;
+            }
+        }
+        ends
+    };
     let mut top_beams = Vec::new();
     for p in top.windows(2) {
         if distribution == ChordDistribution::Beam {
-            let id = beam(&mut d, p[0].1, p[1].1, 1., l.top_ea, l.top_ei.unwrap());
+            let [a, b] = hinged(&mut d, p, 3.);
+            let id = beam(&mut d, a, b, 1., l.top_ea, l.top_ei.unwrap());
             top_beams.push((p[0].0, p[1].0, id));
         } else {
             d.add_element(Element::Truss(Truss::new(
@@ -444,7 +461,8 @@ fn explicit_frame(distribution: ChordDistribution, door: bool) -> ExplicitFrame 
         if door && p[0].0 >= 1.5 - 1e-10 && p[1].0 <= 3.5 + 1e-10 {
             continue;
         }
-        let id = beam(&mut d, p[0].1, p[1].1, 1., l.bottom_ea, l.bottom_ei);
+        let [a, b] = hinged(&mut d, p, 0.);
+        let id = beam(&mut d, a, b, 1., l.bottom_ea, l.bottom_ei);
         bottom_beams.push((p[0].0, p[1].0, id));
     }
     let mut stud_bars = Vec::new();

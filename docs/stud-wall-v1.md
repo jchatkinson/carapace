@@ -19,7 +19,7 @@ sheathing law can be nonlinear.
 
 | In v1 | Deferred |
 |---|---|
-| Studs and stud packs (one row each), top chord `beam` or `direct`, bottom chord, openings with header, jacks and cripples (windows and doors) | Sills and cripples below windows, `chordOverOpening: released`, force transfer around openings |
+| Studs and stud packs (one row each), top chord `beam` or `direct`, bottom chord, openings with header, jacks and cripples (windows and doors) | Sills and cripples below windows, force transfer around openings (segmented design only) |
 | Stations (exterior nodes) on either chord | Automatic station generation (a PySees/decoder concern) |
 | Linear sheathing (`ga`), CSA O86:19 nonlinear-elastic shear and nail-slip law, and uniaxial material laws, each one constant-shear field per full-height pier | Hysteretic member framing, staged installation |
 | Top point and top line loads in up to 8 pattern slots | Self-weight, mass, out-of-plane output (PySees post-processing) |
@@ -60,13 +60,15 @@ StudWallLayout {
 - `L`, `H` and every `ea` and `ei` are positive and finite (`top.ei` only with `Beam`).
 - Studs are strictly increasing in `x`, start at 0 and end at `L`.
 - For each opening: `0 < x0 < x1 < L` and `0 < head_height < H`. Openings don't overlap, and at least one
-  full-height stud lies between consecutive openings.
-- No stud row sits exactly at an opening's `x0` or `x1`, since the jacks occupy those positions.
+  full-height stud lies in `[x1 of the previous opening, x0]`.
+- A stud row exactly at an opening's `x0` or `x1` is the king stud. It is a full-height stud that shares the
+  jack's bottom-chord node (one end post), so the adjacent pier ends at the opening edge.
 - With `Direct`, a top station's `x` must coincide with a stud or cripple. A hinged chord node needs a vertical
   member below it.
 - A bottom station may not lie strictly inside a door.
-- With `foundation: true`, bottom stations are rejected; every interior bottom-chord position (stud or jack)
-  is internally fixed in `u` (sill anchorage) and `v` (bearing). Bottom corners remain exterior nodes.
+- With `foundation: true`, every interior bottom-chord position (stud or jack) is internally fixed in `u` (sill
+  anchorage) and `v` (bearing), except where a bottom station is placed: the station replaces the internal
+  support (for a hold-down at a pier end). Bottom corners remain exterior nodes.
 - A singular internal stiffness is reported as an error at construction, never regularized. It can't occur
   for a valid layout; it guards against layout bugs.
 
@@ -90,6 +92,7 @@ All DOFs are in the local frame:
 |---|---|
 | Chord segment | Between consecutive chord nodes. `Beam`: Euler–Bernoulli (`ea` on `u`, `ei` on `v, θ`). `Direct` top chord: an axial bar on `u` only, hinged at every node. |
 | Bottom chord at a door | No segment between `x0` and `x1`. |
+| Chord segments over an opening | Beam segments lying within `[x0, x1]` (top `Beam` chord, bottom chord under a window) are hinged at `x0` and `x1`: the segment end gets its own rotation DOF, and loads on the segment put their fixed-end moment on it. Piers on either side are tied axially only. |
 | Full-height stud | Vertical bar between the bottom and top chord nodes at its `x`: `ea/H` on the two `v`s. |
 | Jack | Vertical bar from the bottom chord node at `x0` (or `x1`) to the header end node: `jack_ea/head_height`. |
 | Cripple | A stud row strictly inside `(x0, x1)` becomes a vertical bar from the header node to the top chord node: `ea/(H − head_height)`. |
@@ -265,4 +268,5 @@ the committed response. It reports, in local axes with tension positive:
 | Pier base/top stud-force moments and M/jd chord forces, 2- and 5-storey walls in every variant. | Section statics; O86 A.11.7.1 hold-down force | 1e-6 relative (rigid stand-in conditioning) |
 | O86 law per storey against the matching secant walls, 2- and 5-storey, every variant (Newton, displacement-increment test). | Secant-at-design-load identity; code idealized also against the O86 A.11.7.1 hand calculation | 1e-8 with real plates; 1e-6 with rigid stand-ins (`EA × 1e6` plates, `RIGID` links); 1e-5 hand calculation |
 | Hand-calc takedowns (`stud_wall_takedown.rs`): uniform, point, packs, window and door headers, factored combinations, stacked storeys, wall on a beam. | Hand calculations | 1e-9 (1e-6 for the continuous-beam top plate) |
-| User-guide example (`stud_wall_guide_example.rs`): window wall on a foundation, O86 law, hold-down, gravity plus wind with Newton. | Statics: base reactions, pier shear sum, M/jd | 1e-8 |
+| Window wall with king studs and hold-downs at every pier end (`stud_wall_openings.rs`), `Direct` and rim-stiff `Beam` top chords. | Two separate pier walls joined by an axial drag strut (segmented design) | 1e-10 |
+| User-guide example (`stud_wall_guide_example.rs`): window wall with king studs on a foundation, O86 law, hold-downs at every pier end, gravity plus wind with Newton. | Statics: base reactions, pier shear sum, M/jd | 1e-8 |

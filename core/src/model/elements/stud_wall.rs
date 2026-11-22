@@ -52,9 +52,11 @@ pub struct WallStud {
     /// Axial stiffness `EA` of the row (sum of its plies).
     pub ea: f64,
 }
-/// A window or door. Jacks stand at `x0` and `x1` (no stud row may sit there), the header spans between them,
-/// simply supported on the jacks, and stud rows strictly inside become cripples above the header. Nothing is
-/// modelled below a window. Put king studs beside the jacks so the adjacent piers reach the opening.
+/// A window or door. Jacks stand at `x0` and `x1`, the header spans between them, simply supported on the
+/// jacks, and stud rows strictly inside become cripples above the header. Nothing is modelled below a window.
+/// A stud row exactly at `x0` or `x1` is the king stud: king and jack share one bottom-plate node (one end
+/// post), and the adjacent pier ends there. The top and bottom plates are hinged at `x0` and `x1` for the
+/// segments over the opening, so piers on either side are tied axially only.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WallOpening {
     /// Left edge (left jack position), `0 < x0 < x1`.
@@ -138,9 +140,23 @@ pub struct StudWallLayout {
     pub sheathing: Option<WallSheathing>,
     /// The wall bears on a rigid foundation: every interior bottom-plate position (each stud and jack) is fixed
     /// internally in `u` (sill anchorage) and `v` (bearing), with reactions in
-    /// [`StudWallResponse::base_nodes`]. The bottom corners stay exterior. Bottom stations are rejected.
+    /// [`StudWallResponse::base_nodes`]. The bottom corners stay exterior. A bottom station replaces the
+    /// internal support at its position, so hold-downs can attach at interior pier ends
+    /// ([`StudWallLayout::pier_ends`]).
     pub foundation: bool,
 }
+impl StudWallLayout {
+    /// Pier end-post positions (each pier's `xa` and `xb`, in `x` order): where segmented design needs
+    /// overturning anchorage. `0` and `L` are the corners `c0`/`c1`; attach hold-downs at the others through
+    /// bottom stations (with `foundation`, a station there replaces the internal support).
+    pub fn pier_ends(&self) -> Vec<f64> {
+        pier_bounds(self)
+            .into_iter()
+            .flat_map(|(a, b)| [a, b])
+            .collect()
+    }
+}
+
 /// A load on the top plate, in local axes (`fx` along the wall, `fy` along the studs, negative down). Loads are
 /// grouped into `WALL_SLOTS` slots at construction; a load pattern scales slot `k` through
 /// `ElementLoad::wall[k]`.
@@ -502,13 +518,14 @@ impl StudWall {
         let mut headers = Vec::new();
         let mut axial_chords = Vec::new();
         // Chord elements, with rotations retained internally and exterior translations mapped directly.
-        add_chord_elements(
+        let top_segments = add_chord_elements(
             &mut model,
             &top_nodes,
             layout.top_ea,
             layout.top_ei.unwrap_or(0.),
             layout.top_distribution,
             WallChord::Top,
+            &layout.openings,
             &mut beams,
             &mut axial_chords,
         );
@@ -520,12 +537,13 @@ impl StudWall {
             {
                 continue;
             }
+            let [a, b] = released_segment(&mut model, pair, &layout.openings);
             add_beam3(
                 &mut model,
-                pair[0].0,
-                pair[1].0,
-                pair[0].1,
-                pair[1].1,
+                a.0,
+                b.0,
+                a.1,
+                b.1,
                 layout.bottom_ea,
                 layout.bottom_ei,
                 WallChord::Bottom,
@@ -625,8 +643,9 @@ impl StudWall {
         let piers = add_sheathing(&mut model, &layout, &top_nodes, &bottom_nodes)?;
         let mut foundation_supports = Vec::new();
         if layout.foundation {
+            // A bottom station replaces the internal support at its position (for a hold-down there).
             for &(x, d) in &bottom_nodes {
-                if x > 0. && x < layout.length {
+                if x > 0. && x < layout.length && d[1] >= ne {
                     model.fixed_internal.extend([d[0], d[1]]);
                     foundation_supports.push((x, d[0], d[1]));
                 }
@@ -645,7 +664,7 @@ impl StudWall {
         for (slot, slot_loads) in loads.iter().enumerate() {
             let mut p = DVector::zeros(model.ndof);
             for l in slot_loads {
-                discretize_load(l, slot, &layout, &top_nodes, &mut model, &mut p)?;
+                discretize_load(l, slot, &layout, &top_nodes, &top_segments, &mut p)?;
             }
             if let Some(cache) = &mut nonlinear {
                 cache
@@ -1737,20 +1756,16 @@ fn validate_layout(l: &StudWallLayout, stations: &[WallStation]) -> Result<(), S
                 "openings[{i}] header_ei and jack_ea must be positive and finite"
             )));
         }
+        // A stud row at `x0` or `x1` is a king stud: it shares the jack's bottom-plate node (one end post).
         if i > 0
-            && (o.x0 < l.openings[i - 1].x1
+            && (o.x0 <= l.openings[i - 1].x1
                 || !l
                     .studs
                     .iter()
-                    .any(|s| s.x > l.openings[i - 1].x1 && s.x < o.x0))
+                    .any(|s| s.x >= l.openings[i - 1].x1 && s.x <= o.x0))
         {
             return Err(StudWallError(format!(
                 "openings[{i}] overlaps or has no full-height stud separation"
-            )));
-        }
-        if l.studs.iter().any(|s| s.x == o.x0 || s.x == o.x1) {
-            return Err(StudWallError(format!(
-                "openings[{i}] x0/x1 coincides with a stud row"
             )));
         }
     }
@@ -1798,11 +1813,6 @@ fn validate_layout(l: &StudWallLayout, stations: &[WallStation]) -> Result<(), S
         {
             return Err(StudWallError(format!(
                 "stations[{i}] duplicates another station location"
-            )));
-        }
-        if s.chord == WallChord::Bottom && l.foundation {
-            return Err(StudWallError(format!(
-                "stations[{i}] bottom station duplicates internal foundation support"
             )));
         }
         if s.chord == WallChord::Bottom
@@ -1878,6 +1888,31 @@ fn make_chord_nodes(
         })
         .collect()
 }
+type ChordSegment = [(f64, [usize; 3]); 2];
+
+/// A plate segment over an opening is hinged at the opening edges: its end there gets its own rotation DOF,
+/// so the plate ties the piers on either side axially only (no frame action through plate bending).
+fn released_segment(
+    model: &mut FrameBuild,
+    pair: &[(f64, [usize; 3])],
+    openings: &[WallOpening],
+) -> ChordSegment {
+    let mut seg = [pair[0], pair[1]];
+    let tol = 1e-12 * pair[1].0.abs().max(1.);
+    for o in openings {
+        if pair[0].0 < o.x0 - tol || pair[1].0 > o.x1 + tol || seg[0].1[2] == usize::MAX {
+            continue;
+        }
+        for (end, edge) in [(0, o.x0), (1, o.x1)] {
+            if (seg[end].0 - edge).abs() <= tol {
+                model.grow();
+                seg[end].1[2] = model.ndof - 1;
+            }
+        }
+    }
+    seg
+}
+
 #[allow(clippy::too_many_arguments)]
 fn add_chord_elements(
     model: &mut FrameBuild,
@@ -1886,17 +1921,20 @@ fn add_chord_elements(
     ei: f64,
     dist: ChordDistribution,
     chord: WallChord,
+    openings: &[WallOpening],
     beams: &mut Vec<BeamRec>,
     axial: &mut Vec<ChordAxialRec>,
-) {
+) -> Vec<ChordSegment> {
+    let mut segments = Vec::new();
     for pair in nodes.windows(2) {
         let l = pair[1].0 - pair[0].0;
         if chord == WallChord::Top && dist == ChordDistribution::Direct {
             model.add_bar(pair[0].1[0], pair[1].1[0], ea / l);
+            segments.push([pair[0], pair[1]]);
         } else {
-            add_beam3(
-                model, pair[0].0, pair[1].0, pair[0].1, pair[1].1, ea, ei, chord, beams,
-            );
+            let [a, b] = released_segment(model, pair, openings);
+            add_beam3(model, a.0, b.0, a.1, b.1, ea, ei, chord, beams);
+            segments.push([a, b]);
         }
         axial.push(ChordAxialRec {
             x0: pair[0].0,
@@ -1907,6 +1945,7 @@ fn add_chord_elements(
             chord,
         });
     }
+    segments
 }
 #[allow(clippy::too_many_arguments)]
 fn add_beam3(
@@ -2067,7 +2106,7 @@ fn discretize_load(
     slot: usize,
     l: &StudWallLayout,
     nodes: &[(f64, [usize; 3])],
-    model: &mut FrameBuild,
+    segments: &[ChordSegment],
     p: &mut DVector<f64>,
 ) -> Result<(), StudWallError> {
     let mut point = |x: f64, fx: f64, fy: f64| -> Result<(), StudWallError> {
@@ -2084,8 +2123,8 @@ fn discretize_load(
             p[d[1]] += fy;
             return Ok(());
         }
-        let pair = nodes
-            .windows(2)
+        let pair = segments
+            .iter()
             .find(|w| x > w[0].0 && x < w[1].0)
             .ok_or_else(|| {
                 StudWallError(format!("loads[{slot}] point is outside the top chord"))
@@ -2134,7 +2173,7 @@ fn discretize_load(
                     "loads[{slot}] has invalid line bounds or intensities"
                 )));
             }
-            for w in nodes.windows(2) {
+            for w in segments {
                 let a = x0.max(w[0].0);
                 let b = x1.min(w[1].0);
                 if b <= a {
@@ -2189,7 +2228,6 @@ fn discretize_load(
             }
         }
     }
-    let _ = model;
     Ok(())
 }
 

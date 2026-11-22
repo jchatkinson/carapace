@@ -52,21 +52,26 @@ All values are in consistent units (N and mm throughout this guide), in the wall
 | `bottom_ea`, `bottom_ei` | Bottom plate `EA` and `EI`. The bottom plate is always a beam. |
 | `openings: Vec<WallOpening>` | `x0`, `x1` (clear opening edges, where the jacks are), `head_height` (underside of header), `header_ei`, `jack_ea` (all plies of one side), `door` (cuts the bottom plate between `x0` and `x1`). |
 | `sheathing: Option<WallSheathing { law }>` | One shear law for the whole wall, applied to each pier ([Section 3](#3-sheathing-laws)). `None` for a gravity-only wall. |
-| `foundation: bool` | The wall bears on a rigid foundation: every interior bottom-plate position (each stud and jack) is fixed internally in `u` (sill anchorage) and `v` (bearing). The bottom corners remain exterior nodes for your supports and hold-downs ([Section 4](#4-supports-anchorage-and-hold-downs)). |
+| `foundation: bool` | The wall bears on a rigid foundation: every interior bottom-plate position (each stud and jack) is fixed internally in `u` (sill anchorage) and `v` (bearing). The bottom corners remain exterior nodes, and a bottom station replaces the internal support at its position, for hold-downs at interior pier ends ([Section 4](#4-supports-anchorage-and-hold-downs)). |
 
 **Openings.**
 - Each opening gets two jacks (at `x0` and `x1`, from the bottom plate to the header) and a header from `x0` to
   `x1`, simply supported on the jacks. Stud rows strictly inside `(x0, x1)` become cripples from the header to
   the top plate. Below a window there are no members (sills and lower cripples are not modelled).
-- No stud row may sit exactly at `x0` or `x1`: the jacks are there. Put king studs beside them, for example at
-  `x0 − 38` and `x1 + 38`.
-- At least one full-height stud must lie between consecutive openings.
+- **Put a stud row exactly at `x0` and at `x1`: these are the king studs.** The king stud and the jack share
+  one bottom-plate node and form the pier's end post at the opening, which is where its hold-down goes. Give
+  the row the king stud's `EA`; the jack's is `jack_ea`.
+- The top and bottom plates are hinged at `x0` and `x1` for the segments over the opening. Across an opening
+  the plates tie the piers axially (drag) only, and the header transfers no lateral force
+  ([Section 9](#9-built-in-assumptions)).
+- At least one full-height stud must lie between consecutive openings (king studs count).
 
 **Piers.** A pier is a run of full-height studs not interrupted by an opening, from its first to its last
 full-height stud (`xa`, `xb`, width `b = xb − xa`). A pier needs at least two studs. Jacks are not full-height
-studs, so **without king studs a pier stops at the last regular stud** and the strip next to the opening is
-unsheathed in the model. Only piers carry shear: sheathing above and below openings is ignored, which is
-segmented design ([Section 9](#9-built-in-assumptions)).
+studs, so **without a king stud at the opening edge a pier stops at the last regular stud**, and the strip next
+to the opening is unsheathed in the model. `layout.pier_ends()` lists the pier end positions. Only piers carry
+shear: sheathing above and below openings is ignored, which is segmented design
+([Section 9](#9-built-in-assumptions)).
 
 ## 3. Sheathing laws
 
@@ -106,16 +111,25 @@ must be in N and mm. A.11.7 applies to nails in wood-based sheathing on **dry lu
 **Racking must be restrained.** An unsheathed wall has a zero-stiffness racking mode. Gravity-only walls need a
 lateral restraint (an `ux` fix at a top or bottom corner, or the lateral system).
 
+**Anchor every pier end.** Segmented design puts overturning anchorage at both ends of every pier, including
+the end posts beside each opening. `layout.pier_ends()` gives their positions: `0` and `L` are the corners
+`c0`/`c1`, and each other position needs a bottom station with its own hold-down. Without one, that post is
+anchored by whatever holds the bottom plate there. On a foundation that support is rigid, which leaves out
+that hold-down's elongation (`d_a`) and makes the wall too stiff: 23% too stiff for a 3.6 m wall with one
+window in a probe. The M/jd forces are right either way.
+
+A hold-down is a `ZeroLength` from a fixed ground node (or the storey below) to the post node: `uy` at the
+hold-down stiffness `k_hd` (anchor rod, device and fastener slip: O86's `d_a`, SDPWS's `Δa`), and `ux` fixed or
+rigid.
+
 **On a foundation** (`foundation: true`), interior studs and jacks bear and are anchored internally, and their
-reactions are reported in `base_nodes`. You support the two bottom corners:
-- The compression corner: fix `ux` and `uy` (bearing), or a bearing spring.
-- The tension corner: a hold-down `ZeroLength` to a fixed ground node, `uy` at the hold-down stiffness `k_hd`
-  (including anchor rod, device and fastener slip: O86's `d_a`, SDPWS's `Δa`), and `ux` fixed or rigid.
-- For load reversal, give both corners hold-downs.
+reactions are reported in `base_nodes`. Put hold-downs at the corners and at bottom stations on the other
+pier ends: a bottom station replaces the internal support at its position. For load reversal, every pier end
+needs a hold-down (both directions).
 
 **On a floor or another wall**, leave `foundation: false` and connect the bottom plate with stations: a
-station at each stud and jack, joined to the plate or wall below (shared nodes, or `ZeroLength` springs for
-bearing and slip). Stack storeys by sharing or linking corner nodes. Put the hold-downs between the end posts
+station at each stud and each opening edge, joined to the plate or wall below (shared nodes, or `ZeroLength`
+springs for bearing and slip), with hold-downs at the pier ends. Stack storeys by sharing or linking corner nodes. Put the hold-downs between the end posts
 of consecutive storeys, as in `core/tests/elements/stud_wall_multistorey.rs`.
 
 **Anchor the bottom plate along its length**, not only at its corners. If it is anchored only at the corners,
@@ -195,8 +209,8 @@ analysis time). All quantities are in local axes, with **axial tension positive*
 
 ## 8. Example
 
-A 3.6 m wall with a window, on a foundation, with the O86 law, a hold-down at the left corner, and roof dead
-load plus wind run together. The same code runs as a test in
+A 3.6 m wall with a window (king studs at its edges), on a foundation, with the O86 law, a hold-down at every
+pier end, and roof dead load plus wind run together. The same code runs as a test in
 `core/tests/elements/stud_wall_guide_example.rs`, so it stays current.
 
 ```rust
@@ -210,18 +224,8 @@ let mut studs: Vec<WallStud> = (0..=9)
     .collect();
 studs[0].ea = 3.0 * ea_ply; // 3-ply end posts
 studs[9].ea = 3.0 * ea_ply;
-// The window's jacks occupy x0 = 1600 and x1 = 2400, so no stud row may sit there. King studs beside the
-// jacks end each pier at the opening; without them the piers would stop at the last regular stud.
-studs.retain(|s| s.x != 1600.0 && s.x != 2400.0);
-studs.push(WallStud {
-    x: 1562.0,
-    ea: ea_ply,
-});
-studs.push(WallStud {
-    x: 2438.0,
-    ea: ea_ply,
-});
-studs.sort_by(|a, b| a.x.total_cmp(&b.x));
+// The rows at the window edges (x0 = 1600, x1 = 2400) are the king studs: with the jacks they form the
+// pier end posts at the opening.
 let layout = StudWallLayout {
     length: l,
     height: h,
@@ -251,13 +255,28 @@ let layout = StudWallLayout {
 
 let mut d: Domain<2, 3, NodeId, Element> = Domain::new();
 let ground = d.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
-let c0 = d.add_node(Node::new([0.0, 0.0]).fix(0)); // on the hold-down
-let c1 = d.add_node(Node::new([l, 0.0]).fix(0).fix(1)); // bears on the foundation
+// A hold-down at every pier end (segmented design): the corners, plus a bottom station at each interior
+// pier end, which replaces the foundation support there. Linear springs, so they also act in compression.
+let mut post = |x: f64| {
+    let n = d.add_node(Node::new([x, 0.0]).fix(0));
+    d.add_element(Element::ZeroLength(
+        ZeroLength::new(ground, n).with_material(1, Material::Elastic { e: 20_000.0 }),
+    ));
+    n
+};
+let (c0, c1) = (post(0.0), post(l));
+let stations: Vec<WallStation> = layout
+    .pier_ends()
+    .into_iter()
+    .filter(|&x| x > 0.0 && x < l) // 1600 and 2400
+    .map(|x| WallStation {
+        chord: WallChord::Bottom,
+        x,
+        node: post(x),
+    })
+    .collect();
 let c2 = d.add_node(Node::new([l, h]));
 let c3 = d.add_node(Node::new([0.0, h]));
-d.add_element(Element::ZeroLength(
-    ZeroLength::new(ground, c0).with_material(1, Material::Elastic { e: 20_000.0 }),
-));
 
 // Slot 0: roof dead load. Slot 1: wind shear along the top plate.
 let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
@@ -277,7 +296,7 @@ loads[1].push(WallLoad::TopLine {
     wy0: 0.0,
     wy1: 0.0,
 });
-let wall = StudWall::new([c0, c1, c2, c3], vec![], layout, loads).expect("valid layout");
+let wall = StudWall::new([c0, c1, c2, c3], stations, layout, loads).expect("valid layout");
 let id = d.add_element(Element::StudWall(wall));
 
 for (slot, factor) in [(0, 1.0), (1, 1.0)] {
@@ -320,8 +339,8 @@ for pier in &r.piers {
 }
 ```
 
-Output: the two piers carry `q` = 5.00 and 5.67 N/mm (they share the 14.4 kN by stiffness), and each pier
-reports its M/jd chord forces.
+Output: the piers carry `q` = 5.21 and 5.06 N/mm (they share the 14.4 kN by stiffness), and each pier
+reports its M/jd chord forces for its two hold-downs.
 
 ## 9. Built-in assumptions
 
@@ -331,17 +350,25 @@ reports its M/jd chord forces.
   plate capacity, stability and bearing perpendicular to grain in design.
 - Studs, jacks and cripples are axial bars pinned at both ends; their bending is ignored.
 - Stud packs share load fully (one row, summed `EA`).
-- Plates are beams (`Beam` top plate, bottom plate) or hinged bars (`Direct` top plate); splices are
-  continuous.
+- Plates are beams (`Beam` top plate, bottom plate) or hinged bars (`Direct` top plate), continuous along each
+  pier (splices are not modelled), and hinged at opening edges for the segments over an opening.
 - Interior studs bear bilaterally on what is below them (no uplift separation), and the header is bilaterally
   supported on the jacks.
 
 **Sheathing.**
 - One constant shear flow per full-height pier: the field is in equilibrium with the plates and end posts,
   and overturning goes to the posts as the codes assume.
-- Sheathing over and under openings is ignored: there is no force transfer around openings and no coupling
-  through it.
-- Piers are coupled only by the continuous top plate and the header (frame action).
+- Sheathing over and under openings is ignored (segmented design): there is no force transfer around
+  openings. Laterally, each pier is its own shear wall; the opening framing (header, jacks, cripples) carries
+  gravity only.
+- Piers are tied across an opening axially only (drag through the top plate). Both plates are hinged at the
+  opening edges, and the header has no axial DOF and sits on the jacks, so neither plate bending nor the
+  header couples the piers. With hold-downs at every pier end, a wall with openings gives exactly the same
+  drift, pier shears and M/jd forces as separate pier walls joined by a drag strut, for `Direct` and `Beam`
+  top plates alike (`stud_wall_openings.rs`).
+- An unsheathed wall gets no in-plane shear stiffness from the opening framing either. A gravity-only wall
+  needs bottom supports on both sides of a door (bearing under the studs or a foundation); otherwise a pier
+  pinned at one corner can rotate about it.
 - Shear lag: the plates' and end posts' axial flexibility under the linearly varying edge forces is included
   in series with the law.
 - Interior studs inside a pier get equal and opposite sheathing traction, so they carry no lag force.
@@ -359,7 +386,8 @@ Not modelled, or not yet available:
 - JSON wire format, CLI, Python and PySees (core Rust API only).
 - 3D, out-of-plane loading and per-stud out-of-plane output.
 - Mass and self-weight (no dynamics; add wall weight as a load).
-- Sills and cripples below windows; the "released" top plate over openings; force transfer around openings.
+- Sills and cripples below windows; force transfer around openings and the perforated shear-wall method
+  (segmented design only).
 - Nonlinear or hysteretic framing members; staged sheathing installation.
 - Internal hold-downs, tension-only bearing and slip inside the element: use exterior `ZeroLength`s.
 - Unilateral interior-stud bearing (uplift of interior studs).
@@ -375,10 +403,9 @@ very soft or descending `Material` branches.
 `StudWall::new` returns `StudWallError` (with the offending item named) for:
 - non-positive or non-finite `L`, `H`, `EA` or `EI` values, or an invalid law parameter;
 - studs not strictly increasing, or not starting at `0` and ending at `L`;
-- openings out of range (`0 < x0 < x1 < L`, `0 < head_height < H`), overlapping, without a full-height stud
-  between them, or with a stud row at `x0` or `x1`;
-- with `Direct`, a top station not at a stud or cripple; a bottom station inside a door; any bottom station
-  with `foundation: true`;
+- openings out of range (`0 < x0 < x1 < L`, `0 < head_height < H`), overlapping, or without a full-height
+  stud between them;
+- with `Direct`, a top station not at a stud or cripple; a bottom station inside a door;
 - corners or stations reusing a node; a singular internal stiffness (a layout bug, never regularized);
 - too many exterior nodes: 256 for linear walls; for `O86`/`Material` walls, 32 exterior nodes and 16 piers.
 
@@ -399,6 +426,7 @@ Each check below is a test in `core/tests/elements/stud_wall*.rs`. The docs site
 | O86 law vs secant stiffness at the design load | 1e-8 (real plates) |
 | Consistent tangent vs finite differences (O86, hysteretic) | 1e-6 |
 | Cyclic `Steel01` sheathing vs the material driven directly | 1e-5 |
+| Window wall with king studs and hold-downs at every pier end vs separate pier walls + drag strut (`Direct` and rim-stiff `Beam` top plates) | 1e-10 |
 
 Realistic variants of the 2- and 5-storey walls, compared with O86 A.11.7.1:
 
