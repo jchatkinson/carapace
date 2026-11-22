@@ -7,6 +7,9 @@
 //! `uy`). The base has the same arrangement against ground. The element is linear, so nail slip enters through
 //! a per-storey secant shear stiffness at the storey's design shear, `1/ga = 1/Bv + 0.0025·e_n/v` with
 //! `e_n = (0.013·v·s/d_F²)²` (O86 A.11.7): exact at that load level, the only one the code equation evaluates.
+//! Every variant is also solved with the nonlinear `O86` shear law (Newton, displacement-increment test, since
+//! the rigid stand-ins make an unbalance norm ill-conditioned) and must equal its secant run: 1e-8 relative
+//! with real plates, 1e-6 where the stand-ins limit conditioning.
 //!
 //! The code-idealized wall (interior studs negligible, plates axially rigid, no bearing between the corners,
 //! storey force delivered uniformly along the top plate) is the code's own idealization and must reproduce
@@ -200,7 +203,7 @@ fn o86_hand_calc(c: &Case) -> Vec<[f64; 5]> {
     out
 }
 
-fn layout(c: &Case, i: usize, v: Variant, foundation: bool) -> StudWallLayout {
+fn layout(c: &Case, i: usize, v: Variant, foundation: bool, nonlinear: bool) -> StudWallLayout {
     let post = c.plies[i] * EA_PLY;
     let interior = if v.interior_studs { EA_PLY } else { 1. };
     let mut studs = vec![WallStud { x: 0., ea: post }];
@@ -228,7 +231,17 @@ fn layout(c: &Case, i: usize, v: Variant, foundation: bool) -> StudWallLayout {
         bottom_ea,
         bottom_ei: 6.0e9,
         openings: vec![],
-        sheathing: Some(WallSheathing { ga: c.secant_ga(i) }),
+        sheathing: Some(WallSheathing {
+            law: if nonlinear {
+                carapace_core::model::WallShearLaw::O86 {
+                    bv: BV,
+                    nail_spacing: c.nail_spacing[i],
+                    nail_diameter: D_F,
+                }
+            } else {
+                carapace_core::model::WallShearLaw::Linear { ga: c.secant_ga(i) }
+            },
+        }),
         foundation: foundation && v.bearing && i == 0,
     }
 }
@@ -253,10 +266,10 @@ struct Result {
 }
 
 fn element_model(c: &Case, v: Variant) -> Result {
-    element_model_mode(c, v, true)
+    element_model_mode(c, v, true, false)
 }
 
-fn element_model_mode(c: &Case, v: Variant, use_foundation: bool) -> Result {
+fn element_model_mode(c: &Case, v: Variant, use_foundation: bool, nonlinear: bool) -> Result {
     let (l, h) = (c.length, c.height);
     let mut d: D2 = Domain::new();
     let ground = d.add_node(Node::new([0., 0.]).fix(0).fix(1).fix(2));
@@ -318,8 +331,13 @@ fn element_model_mode(c: &Case, v: Variant, use_foundation: bool) -> Result {
             });
         }
         let corners = [bottom_left, bottom_right, top_right, top_left];
-        let wall =
-            StudWall::new(corners, stations, layout(c, i, v, use_foundation), loads).unwrap();
+        let wall = StudWall::new(
+            corners,
+            stations,
+            layout(c, i, v, use_foundation, nonlinear),
+            loads,
+        )
+        .unwrap();
         let id = d.add_element(Element::StudWall(wall));
         wall_ids.push(id);
         if !v.corner_load {
@@ -361,10 +379,24 @@ fn element_model_mode(c: &Case, v: Variant, use_foundation: bool) -> Result {
     let mut a = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Transformation)
         .integrator(Integrator::LoadControl { increment: 1. })
-        .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance {
-            tol: 1e-13,
-            max_iter: 4,
+        .algorithm(if nonlinear {
+            Algorithm::Newton {
+                tangent: carapace_core::analysis::TangentStrategy::Current,
+                line_search: None,
+            }
+        } else {
+            Algorithm::Linear
+        })
+        .test(if nonlinear {
+            ConvergenceTest::NormDispIncr {
+                tol: 1e-9,
+                max_iter: 100,
+            }
+        } else {
+            ConvergenceTest::NormUnbalance {
+                tol: 1e-13,
+                max_iter: 4,
+            }
         })
         .build(d);
     a.step().expect("stacked shear wall solve");
@@ -417,8 +449,9 @@ fn compare(c: &Case) {
     eprintln!("  element / O86 (deflection per level; hold-down per level):");
     for v in VARIANTS {
         let r = element_model(c, v);
+        let nonlinear = element_model_mode(c, v, true, true);
         if v.bearing {
-            let station = element_model_mode(c, v, false);
+            let station = element_model_mode(c, v, false, false);
             for (a, b) in r.drift.iter().zip(&station.drift) {
                 near(*a, *b, 1e-9);
             }
@@ -440,6 +473,12 @@ fn compare(c: &Case) {
                 .collect::<Vec<_>>()
                 .join(" ")
         };
+        let fmt_precise = |xs: Vec<f64>| {
+            xs.iter()
+                .map(|x| format!("{x:.9}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
         eprintln!(
             "  {:30} Δ {}   T {}   left stud / M/jd {}",
             v.name,
@@ -447,6 +486,38 @@ fn compare(c: &Case) {
             fmt((0..c.n()).map(|i| r.holddown[i] / c.holddown(i)).collect()),
             fmt(r.left_stud_and_chord.iter().map(|f| f[0] / f[1]).collect()),
         );
+        // The O86 law equals the secant at the design shear, so the two paths differ only by conditioning:
+        // ~1e-9 with real plates, ~1e-7 with the `EA × 1e6` plate stand-ins, ~3e-8 with `RIGID` station links.
+        let tol = if v.real_plates && !v.sideways_only {
+            1e-8
+        } else {
+            1e-6
+        };
+        for (a, b) in r.drift.iter().zip(&nonlinear.drift) {
+            near(*a, *b, tol);
+        }
+        for (a, b) in r.holddown.iter().zip(&nonlinear.holddown) {
+            near(*a, *b, tol);
+        }
+        eprintln!(
+            "    O86 law / secant Δ {}   T {}",
+            fmt_precise(
+                (0..c.n())
+                    .map(|i| nonlinear.drift[i] / r.drift[i])
+                    .collect()
+            ),
+            fmt_precise(
+                (0..c.n())
+                    .map(|i| nonlinear.holddown[i] / r.holddown[i])
+                    .collect()
+            ),
+        );
+        if v.name == "code idealized" {
+            for (i, drift) in nonlinear.drift.iter().enumerate() {
+                near(*drift, hand[i][0], 1e-5);
+                near(nonlinear.holddown[i], c.holddown(i), 1e-5);
+            }
+        }
         for i in 0..c.n() {
             eprintln!(
                 "    storey {}: M/jd {:.9} × O86; Mbase {:.6e}, Mtop {:.6e} (O86 Mtop {:.6e})",

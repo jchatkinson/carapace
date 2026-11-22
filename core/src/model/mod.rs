@@ -20,9 +20,9 @@ pub use elements::{
     Quad4Formulation, Shell3, Shell4, ShellResponse, SpatialElementMatrix, SpatialElementVector,
     StudWall, StudWallError, StudWallLayout, StudWallResponse, TangentSink, Tri3, Truss, Truss3,
     VectorSink, WallAxialResponse, WallBaseResponse, WallChord, WallChordResponse,
-    WallHeaderResponse, WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallSheathing,
-    WallStation, WallStud, ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3,
-    MAX_ELEMENT_NODES,
+    WallHeaderResponse, WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallShearLaw,
+    WallSheathing, WallStation, WallStud, ZeroLength, ZeroLength3, ZeroLengthSection,
+    ZeroLengthSection3, MAX_ELEMENT_NODES,
 };
 pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};

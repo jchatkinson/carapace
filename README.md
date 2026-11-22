@@ -39,6 +39,10 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
 - [x] ZeroLengthSection — fiber section with optional independent springs (2D + 3D)
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)
+- [x] StudWall — 2D light-frame wall macro-element (studs, plates, openings with headers, jacks and cripples,
+  condensed onto corner and station nodes) for gravity takedowns and segmented shear-wall design: per-pier
+  sheathing law (linear, CSA O86 nail slip, or any uniaxial material), M/jd chord forces, internal
+  foundation bearing. Core Rust API only for now; see [`docs/stud-wall.md`](docs/stud-wall.md)
 - [x] 2D co-rotational transform (large-displacement geometry)
 - [ ] 3D co-rotational transform — scoped, deliberately shelved: unlike planar
   rotations (a single commuting scalar angle), 3D rotations don't commute, so
@@ -176,6 +180,9 @@ carapace/
     ├── native-api.md               # CLI, Python, threads, `Session::run` (native use)
     ├── python-api.md               # the OpenSeesPy-style Python commands and every deviation
     ├── results-storage-indexeddb.md # current results-persistence design (pysees side)
+    ├── stud-wall.md                # stud-wall element user guide (usage, assumptions, limitations)
+    ├── stud-wall-v1.md             # stud-wall implementation spec and verification
+    ├── stud-wall-panel.md          # stud-wall background design and deferred features
     └── obsolete/                    # superseded planning docs, kept for history
 ```
 

@@ -36,8 +36,8 @@ pub use shell4::Shell4;
 pub use stud_wall::{
     ChordDistribution, StudWall, StudWallError, StudWallLayout, StudWallResponse,
     WallAxialResponse, WallBaseResponse, WallChord, WallChordResponse, WallHeaderResponse,
-    WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallSheathing, WallStation,
-    WallStud,
+    WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallShearLaw, WallSheathing,
+    WallStation, WallStud,
 };
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
@@ -466,7 +466,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Tri3(t) => return t.commit(nodes),
             Element::Quad4(q) => return q.commit(nodes),
             Element::EmbeddedBar(bar) => return bar.commit(nodes),
-            Element::StudWall(wall) => return wall.commit(nodes),
+            Element::StudWall(wall) => return wall.commit(nodes, load),
             _ => {}
         }
         let [i, j] = Element::pair(self);

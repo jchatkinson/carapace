@@ -1,14 +1,19 @@
 # Stud wall v1: implementation spec
 
-Status: implementation target. It supersedes the parts of `docs/stud-wall-panel.md` it contradicts. That
+Status: implementation spec. It supersedes the parts of `docs/stud-wall-panel.md` it contradicts. That
 document remains the background (prior work, rationale, RAM SS lessons) and the list of deferred features.
+How to use the element (layout, laws, supports, analysis, results, assumptions, limitations) is in the user
+guide, [`docs/stud-wall.md`](stud-wall.md).
 
-v1 is a **linear** 2D macro-element whose purpose is design:
+v1 is a 2D macro-element whose frame remains linear elastic and whose per-pier sheathing can be linear or
+nonlinear. Its purpose is design:
 
 - gravity takedowns that match hand calculations;
-- lateral analysis that matches segmented shear-wall design (SDPWS 2021 Eq. 4.3-1, three-term form).
+- lateral analysis that matches segmented shear-wall design (SDPWS 2021 Eq. 4.3-1; CSA O86:19 11.7.1.2 and
+  Annex A.11.7.1 with the `O86` law).
 
-Everything nonlinear (hold-downs, bearing, slip) lives in ordinary exterior elements (`zeroLength`).
+Hold-downs and anchorage are ordinary exterior elements, and the framing is linear elastic; only the per-pier
+sheathing law can be nonlinear.
 
 ## 1. What v1 includes and defers
 
@@ -16,9 +21,8 @@ Everything nonlinear (hold-downs, bearing, slip) lives in ordinary exterior elem
 |---|---|
 | Studs and stud packs (one row each), top chord `beam` or `direct`, bottom chord, openings with header, jacks and cripples (windows and doors) | Sills and cripples below windows, `chordOverOpening: released`, force transfer around openings |
 | Stations (exterior nodes) on either chord | Automatic station generation (a PySees/decoder concern) |
-| Linear sheathing: one constant-shear field per full-height pier, stiffness `ga` | Code nonlinear-elastic laws (`sdpws4`, `o86`), hysteretic sheathing, staged installation |
+| Linear sheathing (`ga`), CSA O86:19 nonlinear-elastic shear and nail-slip law, and uniaxial material laws, each one constant-shear field per full-height pier | Hysteretic member framing, staged installation |
 | Top point and top line loads in up to 8 pattern slots | Self-weight, mass, out-of-plane output (PySees post-processing) |
-| Condensation once at construction; internal recovery for responses | Internal Newton, failure channel, scratch arena |
 | Core API and core tests | Wire format, CLI, wasm and PySees mirror (a later phase) |
 
 ## 2. Frame and exterior nodes
@@ -47,7 +51,7 @@ StudWallLayout {
   top: { ea, ei, distribution: Beam | Direct },   // ei ignored for Direct
   bottom: { ea, ei },
   openings: [{ x0, x1, head_height, header_ei, jack_ea, door: bool }],
-  sheathing: Option<{ ga }>,          // shear flow q = ga * gamma (force/length), both faces summed
+  sheathing: Option<{ law }>,         // Linear { ga }, O86 { bv, nail_spacing, nail_diameter }, or Material(Material)
   foundation: bool,                   // default false; internally fix interior bottom-chord u and v
 }
 ```
@@ -98,7 +102,7 @@ the corners. `v` and `θ` are stiffened by studs, jacks, cripples and bending. S
 unsheathed wall has one exterior zero-energy mode, racking. The model must restrain it, for example with `ux`
 fixes or a lateral system. There is no `rackingStiffness`.
 
-### 4.3 Sheathing: one shear field per pier
+### 4.3 Sheathing law: one shear field per pier
 
 **Piers.** A pier is a maximal run of full-height studs not interrupted by an opening. Its extent is
 `[xa, xb]`, from its first to its last full-height stud, so `b = xb − xa`. A pier with fewer than two studs
@@ -122,11 +126,46 @@ c_p = H³/12 · (1/EA(xa) + 1/EA(xb)) + Σ_top ℓ_k³/(12 EA_top) + Σ_bottom �
 
 Interior studs of a pier get equal and opposite traction from the two sides, so they have no lag term.
 
-**Stiffness.** With `A_p = b H`, the term is stationary in `q_p`:
+**Law and series lag.** With `A_p = b H`, `q_p` is shear flow and `γ_sh,p` is the sheathing strain. The
+frame's lag compliance is in series with the sheathing law:
 
 ```text
-q_p = A_p β_pᵀ u / (A_p/ga + c_p),     K += A_p² β_p β_pᵀ / (A_p/ga + c_p)
+β_pᵀu = γ_sh,p + c_p q_p/A_p
 ```
+
+For `Linear { ga }`, `q = ga γ_sh`, giving the existing closed form
+`q = A βᵀu/(A/ga + c)` and rank-one stiffness `A² β βᵀ/(A/ga+c)`. This path retains the original
+one-time condensation. `O86` uses `γ_sh = q/Bv + a q |q|`, with
+`a = 0.0025·(0.013·nail_spacing/nail_diameter²)²`; its inverse is
+`q = 2γ_sh/(1/Bv + sqrt(1/Bv² + 4a|γ_sh|))`. `Material` evaluates `q = σ(γ_sh)` from each pier's
+committed uniaxial material state and commits only after a converged analysis step. A singular local Jacobian
+or failed local solve has no element-failure channel; the implementation propagates NaNs into the element
+contribution.
+
+**Nonlinear laws: local pier solve.** The frame is condensed without sheathing (`K_ii` is non-singular
+without it, see 4.2). Write `B_i` for the internal rows of the pier strain vectors `β_p` (free internal DOFs
+only) and `A = diag(A_p)`. Eliminating the internal DOFs leaves a P×P system in the pier sheathing strains:
+
+```text
+γ_sh + S q(γ_sh) = y,     S = B_iᵀ K_ii⁻¹ B_i A + diag(c_p/A_p),     y = G u_e + Σ_k λ_k y_k
+```
+
+- `y` is the pier strain of the unsheathed frame: `G = B_eᵀ − B_iᵀ K_ii⁻¹ K_ie` (the exterior map) and
+  `y_k = B_iᵀ K_ii⁻¹ p_i,k` (slot `k`).
+- A local Newton solve (fixed-size buffers, hand-written LU with partial pivoting, residual `≤ 1e-14 (1 + max|y|)`,
+  at most 40 iterations) starts from `γ_sh = y` and evaluates each law and its tangent `D = diag(dq/dγ_sh)`.
+  `Material` laws are evaluated as trials from their committed state.
+- Exterior resisting force: `K_c,frame u_e + C q`, with `C = G ᵀ A`, the condensed force map of the pier
+  fields. The slot loads are applied by `assemble_load` as in the linear path.
+- Consistent tangent: `K_e = K_c,frame + C D (I + S D)⁻¹ G` (implicit derivative of the local system; `S`
+  is not symmetric, so the order matters).
+- Internal recovery: `u_i = Σ_k λ_k w_k − R u_e − K_ii⁻¹ B_i A q`.
+
+Nonlinear walls are capped at 16 piers and 32 exterior nodes (64 translational DOFs). They need an iterative
+algorithm such as Newton; `Algorithm::Linear` performs one tangent solve and does not iterate to equilibrium.
+The nonlinear tangent assembly uses a 64×64 `f64` stack buffer (32 KiB), plus fixed local solve buffers for a
+16×16 Jacobian (2 KiB) and its vectors. `prepare` caches rotated frame and pier maps, so prepared assembly does
+not allocate. Preparation and unprepared calls may allocate, as in the linear path.
 
 **Member force recovery.** Each member's mean force comes from its own stiffness, and the field adds a linear
 part. Tension is positive; `q_L`, `q_R` are the fields left and right of a stud, with 0 where there is none:
@@ -141,8 +180,8 @@ Eq. 4.3-1 in consistent units; hold-down springs outside the element give the th
 
 ### 4.4 Condensation
 
-Built once, in the constructor, in the local frame. It depends only on the layout and the station list;
-orientation comes from the corner coordinates at call time.
+For linear sheathing, condensation is built once, in the constructor, in the local frame. It depends only on the layout and the station list;
+orientation comes from the corner coordinates at call time. The linear path retains its 256-exterior-node limit.
 
 - `K_c = K_ee − K_ei K_ii⁻¹ K_ie` (dense is fine; walls have at most a few hundred internal DOFs).
 - `R = K_ii⁻¹ K_ie`, stored for recovery.
@@ -150,6 +189,9 @@ orientation comes from the corner coordinates at call time.
 - Recovery: `u_i = Σ_k λ_k w_k − R u_e`, where `λ_k` are the effective slot factors.
 
 Every element method gives the same answer whether or not `prepare` has run.
+
+For nonlinear sheathing, the constructor instead condenses the bare frame and stores the pier coupling and
+compliance maps. The pier Newton solve and consistent correction run at each tangent evaluation.
 
 ## 5. Loads: pattern slots
 
@@ -168,13 +210,16 @@ Every element method gives the same answer whether or not `prepare` has run.
 - **Assembly.**
   - `assemble_load` emits `Σ_k wall[k] · f_k` on the exterior DOFs.
   - `assemble_tangent` emits `K_c` and resisting force `K_c u_e`. It never subtracts the load.
-  - `local_load_force` returns `Σ_k wall[k] · f_k` in local axes, and `local_force` returns `K_c u_e` in local
-    axes, so `element_end_force` behaves as for a loaded beam.
+  - `local_load_force` returns `Σ_k wall[k] · f_k` in local axes. For nonlinear walls, `local_force` reads the
+    committed pier flows cached by `commit` and returns `K_c u_e + C q`; `element_end_force` subtracts the slot
+    load once, including its influence on the committed pier state.
 
 ## 6. Responses (core API)
 
-`StudWall::response(&self, nodes, load: Option<&ElementLoad>) -> StudWallResponse` uses the committed nodal
-state. It reports, in local axes with tension positive:
+`StudWall::response(&self, nodes, load: Option<&ElementLoad>) -> StudWallResponse` uses the current nodal
+state (`Domain::element_stud_wall_response(id, pseudo_time)` passes the effective slot factors). For nonlinear
+laws it runs the local pier solve from the committed law state, so after a converged, committed step it gives
+the committed response. It reports, in local axes with tension positive:
 
 - **Studs** (full-height): axial force at the bottom and top.
 - **Jacks and cripples:** axial force.
@@ -210,7 +255,14 @@ state. It reports, in local axes with tension positive:
 | Unsheathed, `Beam` and `Direct`, with openings, stations and doors. Condensed element vs the same frame built explicitly from `Truss` and `ElasticBeamColumn` (hinges as coincident nodes plus `equalDOF`). Displacements, reactions, member forces. | Explicit Carapace model | 1e-9 relative |
 | Loaded condensation. Points between nodes, partial trapezoids, three patterns with different factors in different slots. Exterior forces, reactions and recovered member forces. | Explicit model | 1e-9 |
 | One pier, rigid chords (`ea × 1e6`), end posts `EA`: top deflection and post forces. | `2vH³/(3EAb) + vH/ga`; post force `±qH` at the base, 0 at the top | 1e-6 |
+| One pier with O86 nonlinear-elastic law, solved by Newton. | CSA O86:19 11.7.1.2 shear and nail-slip terms | 1e-6 |
+| Elastic `Material` versus `Linear` on window and door walls with stations and slot loads. | Linear-law condensation | 1e-8 (the two condensation paths differ by roundoff, about 1e-9) |
+| Slot-loaded nonlinear `element_end_force` after commit. | Response exterior resistance | 1e-10 of applied load |
+| Two-pier door wall with slot load, O86 and hysteretic material. | Central-difference tangent | 1e-6 relative (2e-6 absolute floor for near-zero terms) |
+| Cyclic Steel01 sheathing under displacement control and trial reversion. | Standalone Steel01 at matching shear strains | 1e-5 relative (rigid stand-in conditioning) |
 | Two piers with a door and different `ga`; an unloaded station inserted inside a pier leaves the response unchanged. | Consistency | 1e-10 |
 | Foundation supports versus fixed bottom stations, including window and door walls; per-position reactions and member responses. | Equivalent restrained frame | 1e-10 relative |
 | Pier base/top stud-force moments and M/jd chord forces, 2- and 5-storey walls in every variant. | Section statics; O86 A.11.7.1 hold-down force | 1e-6 relative (rigid stand-in conditioning) |
-| Hand-calc takedowns (separate test file, written after the element). | Hand calculations | see file |
+| O86 law per storey against the matching secant walls, 2- and 5-storey, every variant (Newton, displacement-increment test). | Secant-at-design-load identity; code idealized also against the O86 A.11.7.1 hand calculation | 1e-8 with real plates; 1e-6 with rigid stand-ins (`EA × 1e6` plates, `RIGID` links); 1e-5 hand calculation |
+| Hand-calc takedowns (`stud_wall_takedown.rs`): uniform, point, packs, window and door headers, factored combinations, stacked storeys, wall on a beam. | Hand calculations | 1e-9 (1e-6 for the continuous-beam top plate) |
+| User-guide example (`stud_wall_guide_example.rs`): window wall on a foundation, O86 law, hold-down, gravity plus wind with Newton. | Statics: base reactions, pier shear sum, M/jd | 1e-8 |

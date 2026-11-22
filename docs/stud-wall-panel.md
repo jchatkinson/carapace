@@ -1,8 +1,11 @@
 # Stud-wall macro-element
 
-Status: background and long-term design. **The implementation target is `docs/stud-wall-v1.md`** (a linear
-element scoped for design use), which supersedes this document wherever they differ. Revised after review (Codex;
-Bentley's RAM Structural System walls FAQ, KB0112985).
+Status: background and long-term design. **What is implemented is specified in `docs/stud-wall-v1.md`**
+(linear elastic framing, per-pier sheathing laws: linear, CSA O86 nail slip, or any uniaxial material), which
+supersedes this document wherever they differ; how to use it is in the user guide, `docs/stud-wall.md`. This
+document keeps the rationale and the features still deferred (staged installation, nonlinear framing,
+out-of-plane output, wire format). Revised after review (Codex; Bentley's RAM Structural System walls FAQ,
+KB0112985).
 
 A 2D element for light-frame walls (wood or cold-formed steel) that covers one wall segment for one storey and
 is defined by its framing layout: studs and stud packs, top and bottom chords (plates, rim), openings with

@@ -1,7 +1,7 @@
 //! Stud-wall v1 layout, kinematics, condensation, load, and explicit-frame verification.
 
 use carapace_core::analysis::{
-    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
+    Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
 };
 use carapace_core::model::{
     ChordDistribution, ElementLoad, StudWall, StudWallLayout, WallChord, WallLoad, WallStation,
@@ -49,6 +49,17 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
     let error = StudWall::new(c, vec![], l, std::array::from_fn(|_| vec![])).unwrap_err();
     assert!(error.to_string().contains("studs[1]"));
 
+    let mut bad_law = layout();
+    bad_law.sheathing = Some(carapace_core::model::WallSheathing {
+        law: carapace_core::model::WallShearLaw::O86 {
+            bv: 0.,
+            nail_spacing: 100.,
+            nail_diameter: 3.25,
+        },
+    });
+    let error = StudWall::new(c, vec![], bad_law, std::array::from_fn(|_| vec![])).unwrap_err();
+    assert!(error.to_string().contains("O86 bv"));
+
     let mut l = layout();
     l.foundation = true;
     let station = d.add_node(Node::new([5., 0.]));
@@ -66,6 +77,69 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
     assert!(error
         .to_string()
         .contains("bottom station duplicates internal foundation support"));
+
+    let mut many_piers = StudWallLayout {
+        length: 390.,
+        height: 100.,
+        studs: (0..65)
+            .flat_map(|i| {
+                let x = i as f64 * 6.;
+                [WallStud { x, ea: 1e4 }, WallStud { x: x + 2., ea: 1e4 }]
+            })
+            .collect(),
+        top_ea: 1e8,
+        top_ei: Some(1e8),
+        top_distribution: ChordDistribution::Beam,
+        bottom_ea: 1e8,
+        bottom_ei: 1e8,
+        openings: (0..64)
+            .map(|i| carapace_core::model::WallOpening {
+                x0: i as f64 * 6. + 2.5,
+                x1: i as f64 * 6. + 3.5,
+                head_height: 50.,
+                header_ei: 1e6,
+                jack_ea: 1e4,
+                door: true,
+            })
+            .collect(),
+        sheathing: Some(carapace_core::model::WallSheathing {
+            law: carapace_core::model::WallShearLaw::O86 {
+                bv: 1e4,
+                nail_spacing: 100.,
+                nail_diameter: 3.25,
+            },
+        }),
+        foundation: false,
+    };
+    many_piers.studs.last_mut().unwrap().x = 390.;
+    let error = StudWall::new(c, vec![], many_piers, std::array::from_fn(|_| vec![])).unwrap_err();
+    assert!(error.to_string().contains("pier count 65"));
+
+    let mut nonlinear_layout = layout();
+    nonlinear_layout.sheathing = Some(carapace_core::model::WallSheathing {
+        law: carapace_core::model::WallShearLaw::O86 {
+            bv: 100.,
+            nail_spacing: 100.,
+            nail_diameter: 3.25,
+        },
+    });
+    let stations: Vec<_> = (1..=29)
+        .map(|i| WallStation {
+            chord: WallChord::Top,
+            x: i as f64 / 3.,
+            node: d.add_node(Node::new([i as f64 / 3., 8.])),
+        })
+        .collect();
+    let error = StudWall::new(
+        c,
+        stations,
+        nonlinear_layout,
+        std::array::from_fn(|_| vec![]),
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("exceeds nonlinear stud-wall limit of 32 (64 DOFs)"));
 
     let a = ElementLoad {
         wall: [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -133,7 +207,9 @@ fn kinematic_wall(
     if !sheathing {
         layout.sheathing = None;
     } else {
-        layout.sheathing = Some(carapace_core::model::WallSheathing { ga: 100. });
+        layout.sheathing = Some(carapace_core::model::WallSheathing {
+            law: carapace_core::model::WallShearLaw::Linear { ga: 100. },
+        });
     }
     let wall = StudWall::new(corners, vec![], layout, std::array::from_fn(|_| vec![])).unwrap();
     let id = d.add_element(Element::StudWall(wall));
@@ -700,6 +776,147 @@ fn loaded_condensation_matches_explicit_frame_across_slots() {
     }
 }
 
+/// Elastic material sheathing reproduces the linear law for a station-loaded window/door wall.
+/// Reference: the Linear law path; exterior displacements, pier flow and member forces at 1e-8 relative.
+#[test]
+fn elastic_material_law_reproduces_linear_window_and_door_walls() {
+    for door in [false, true] {
+        let solve = |material: bool| {
+            let (mut d, corners, ts, bs) = supported_domain();
+            let mut layout = frame_layout(ChordDistribution::Beam, door);
+            layout.sheathing = Some(carapace_core::model::WallSheathing {
+                law: if material {
+                    carapace_core::model::WallShearLaw::Material(Material::Elastic { e: 75. })
+                } else {
+                    carapace_core::model::WallShearLaw::Linear { ga: 75. }
+                },
+            });
+            let mut loads = wall_loads();
+            loads[1] = loads[0]
+                .iter()
+                .copied()
+                .map(|l| scaled_wall_load(l, 2.))
+                .collect();
+            loads[2] = loads[0]
+                .iter()
+                .copied()
+                .map(|l| scaled_wall_load(l, 3.))
+                .collect();
+            let wall = StudWall::new(
+                corners,
+                vec![
+                    WallStation {
+                        chord: WallChord::Top,
+                        x: 1.,
+                        node: ts,
+                    },
+                    WallStation {
+                        chord: WallChord::Bottom,
+                        x: 5.,
+                        node: bs,
+                    },
+                ],
+                layout,
+                loads,
+            )
+            .unwrap();
+            let id = d.add_element(Element::StudWall(wall));
+            for (slot, factor) in [(0, 0.001), (1, 0.0005), (2, 0.0001)] {
+                let pattern = if slot == 0 {
+                    d.default_pattern()
+                } else {
+                    d.add_load_pattern_scaled(
+                        carapace_core::model::LoadSeries::Linear { slope: 1. },
+                        factor,
+                    )
+                };
+                let mut selector = [0.; WALL_SLOTS];
+                selector[slot] = 1.;
+                d.add_element_load(
+                    pattern,
+                    id,
+                    ElementLoad {
+                        wall: selector,
+                        ..Default::default()
+                    },
+                );
+            }
+            let mut a = AnalysisBuilder::new()
+                .constraint_handler(ConstraintHandler::Transformation)
+                .integrator(Integrator::LoadControl { increment: 1. })
+                .algorithm(if material {
+                    Algorithm::Newton {
+                        tangent: TangentStrategy::Current,
+                        line_search: None,
+                    }
+                } else {
+                    Algorithm::Linear
+                })
+                .test(if material {
+                    ConvergenceTest::NormDispIncr {
+                        tol: 1e-13,
+                        max_iter: 100,
+                    }
+                } else {
+                    ConvergenceTest::NormUnbalance {
+                        tol: 1e-11,
+                        max_iter: 20,
+                    }
+                })
+                .build(d);
+            a.step().expect("linear wall solve");
+            let domain = a.domain();
+            let displacements: Vec<[f64; 2]> = corners
+                .into_iter()
+                .chain([ts, bs])
+                .map(|n| {
+                    [
+                        domain.node(n).displacement[0],
+                        domain.node(n).displacement[1],
+                    ]
+                })
+                .collect();
+            let response = domain.element_stud_wall_response(id, 1.).unwrap();
+            (displacements, response)
+        };
+        let (u_linear, r_linear) = solve(false);
+        let (u_material, r_material) = solve(true);
+        for (a, b) in u_linear.iter().flatten().zip(u_material.iter().flatten()) {
+            near(*a, *b, 1e-8);
+        }
+        for (a, b) in r_linear.piers.iter().zip(&r_material.piers) {
+            near(a.q, b.q, 1e-8);
+            near(a.gamma, b.gamma, 1e-8);
+        }
+        for (a, b) in r_linear.studs.iter().zip(&r_material.studs) {
+            near(a.bottom, b.bottom, 1e-8);
+            near(a.top, b.top, 1e-8);
+        }
+        for (a, b) in r_linear
+            .jacks
+            .iter()
+            .chain(&r_linear.cripples)
+            .zip(r_material.jacks.iter().chain(&r_material.cripples))
+        {
+            near(a.axial, b.axial, 1e-8);
+        }
+        for (a, b) in r_linear.header.iter().zip(&r_material.header) {
+            near(a.moment, b.moment, 1e-8);
+            near(a.shear, b.shear, 1e-8);
+        }
+        for (a, b) in r_linear
+            .top_chord
+            .iter()
+            .chain(&r_linear.bottom_chord)
+            .zip(r_material.top_chord.iter().chain(&r_material.bottom_chord))
+        {
+            near(a.axial, b.axial, 1e-8);
+            near(a.moment, b.moment, 1e-8);
+            near(a.shear, b.shear, 1e-8);
+        }
+    }
+}
+
 /// Beam and Direct walls with a window/door, a station on each chord, a stud pack and top point/line loads match an explicit Truss/beam frame.
 /// Reference: explicit Carapace frame with equalDOF hinge nodes; exterior translations/reactions and stud forces relative tolerance 1e-9.
 #[test]
@@ -882,7 +1099,9 @@ fn single_sheathed_pier_matches_sdpws_terms() {
         bottom_ea: ea * 1e6,
         bottom_ei: 5e10,
         openings: vec![],
-        sheathing: Some(carapace_core::model::WallSheathing { ga }),
+        sheathing: Some(carapace_core::model::WallSheathing {
+            law: carapace_core::model::WallShearLaw::Linear { ga },
+        }),
         foundation: false,
     };
     l.height = height;
@@ -937,6 +1156,235 @@ fn single_sheathed_pier_matches_sdpws_terms() {
     near(response.piers[0].moment_top, 0., 1e-6);
 }
 
+/// One-pier O86 response follows the code shear and nail-slip terms over a Newton load step.
+/// Reference: CSA O86:19 11.7.1.2 single segment with rigid stand-ins; relative tolerance 1e-6.
+#[test]
+fn single_o86_pier_matches_nonlinear_deflection() {
+    let (length, height, ea, bv, nail_spacing, diameter, lateral) =
+        (1200., 2440., 30e6, 11_000., 100., 3.25, 12e3);
+    let mut l = StudWallLayout {
+        length,
+        height,
+        studs: (0..=3)
+            .map(|i| WallStud {
+                x: i as f64 * 400.,
+                ea: if i == 0 || i == 3 { ea } else { 1. },
+            })
+            .collect(),
+        top_ea: ea * 1e6,
+        top_ei: Some(5e10),
+        top_distribution: ChordDistribution::Beam,
+        bottom_ea: ea * 1e6,
+        bottom_ei: 5e10,
+        openings: vec![],
+        sheathing: Some(carapace_core::model::WallSheathing {
+            law: carapace_core::model::WallShearLaw::O86 {
+                bv,
+                nail_spacing,
+                nail_diameter: diameter,
+            },
+        }),
+        foundation: false,
+    };
+    l.height = height;
+    let mut d: D2 = Domain::new();
+    let corners = [
+        d.add_node(Node::new([0., 0.]).fix(0).fix(1)),
+        d.add_node(Node::new([length, 0.]).fix(0).fix(1)),
+        d.add_node(Node::new([length, height])),
+        d.add_node(Node::new([0., height])),
+    ];
+    let id = d.add_element(Element::StudWall(
+        StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap(),
+    ));
+    let pattern = d.default_pattern();
+    d.add_nodal_load(pattern, corners[2], 0, lateral / 2.);
+    d.add_nodal_load(pattern, corners[3], 0, lateral / 2.);
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Transformation)
+        .integrator(Integrator::LoadControl { increment: 0.1 })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-4,
+            max_iter: 100,
+        })
+        .build(d);
+    for _ in 0..10 {
+        analysis.step().expect("O86 nonlinear pier solve");
+    }
+    let top_v = (analysis.domain().node(corners[2]).displacement[0]
+        + analysis.domain().node(corners[3]).displacement[0])
+        / 2.;
+    let v = lateral / length;
+    let nail_slip = 0.0025 * height * (0.013 * v * nail_spacing / diameter.powi(2)).powi(2);
+    let expected = 2. * v * height.powi(3) / (3. * ea * length) + v * height / bv + nail_slip;
+    near(top_v, expected, 1e-6);
+    let response = analysis
+        .domain()
+        .element_stud_wall_response(id, 1.)
+        .unwrap();
+    near(response.piers[0].q, v, 1e-6);
+}
+
+/// Committed nonlinear pier forces include the slot-load-dependent pier state used by reactions.
+/// Reference: response base-node exterior resistance; absolute tolerance 1e-10 of the applied load.
+#[test]
+fn nonlinear_wall_end_force_matches_slot_loaded_response_after_commit() {
+    let (length, height) = (1200., 2440.);
+    let mut d: D2 = Domain::new();
+    let corners = [
+        d.add_node(Node::new([0., 0.]).fix(0).fix(1)),
+        d.add_node(Node::new([length, 0.]).fix(0).fix(1)),
+        d.add_node(Node::new([length, height])),
+        d.add_node(Node::new([0., height])),
+    ];
+    let mut layout = layout();
+    layout.length = length;
+    layout.height = height;
+    layout.studs = vec![
+        WallStud { x: 0., ea: 30e6 },
+        WallStud { x: 400., ea: 1. },
+        WallStud { x: 800., ea: 1. },
+        WallStud {
+            x: length,
+            ea: 30e6,
+        },
+    ];
+    layout.sheathing = Some(carapace_core::model::WallSheathing {
+        law: carapace_core::model::WallShearLaw::O86 {
+            bv: 11_000.,
+            nail_spacing: 100.,
+            nail_diameter: 3.25,
+        },
+    });
+    let mut slots: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    slots[0].push(WallLoad::TopLine {
+        x0: 0.,
+        x1: length,
+        wx0: 12_000. / length,
+        wx1: 12_000. / length,
+        wy0: 0.,
+        wy1: 0.,
+    });
+    let id = d.add_element(Element::StudWall(
+        StudWall::new(corners, vec![], layout, slots).unwrap(),
+    ));
+    let pattern = d.default_pattern();
+    d.add_element_load(
+        pattern,
+        id,
+        ElementLoad {
+            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            ..Default::default()
+        },
+    );
+    let mut a = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Transformation)
+        .integrator(Integrator::LoadControl { increment: 0.1 })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-7,
+            max_iter: 100,
+        })
+        .build(d);
+    for _ in 0..10 {
+        a.step().expect("slot-loaded nonlinear wall");
+    }
+    let end = a.domain().element_end_force(id, 1.);
+    let response = a.domain().element_stud_wall_response(id, 1.).unwrap();
+    assert_eq!(response.base_nodes.len(), 2);
+    for i in 0..2 {
+        near(end[2 * i], response.base_nodes[i].fx, 1e-10);
+        near(end[2 * i + 1], response.base_nodes[i].fy, 1e-10);
+    }
+}
+
+/// Cyclic displacement control commits the material law once per step and preserves trial reversion.
+/// Reference: standalone Steel01 driven through the same shear strains; 1e-5 relative for rigid stand-ins.
+#[test]
+fn material_sheathing_tracks_cyclic_steel01_shear_history() {
+    let (length, height) = (10., 8.);
+    let material = Material::steel01(100., 40_000., 0.01, 0., 1., 0., 1.);
+    let mut d: D2 = Domain::new();
+    let corners = [
+        d.add_node(Node::new([0., 0.]).fix(0).fix(1)),
+        d.add_node(Node::new([length, 0.]).fix(0).fix(1)),
+        d.add_node(Node::new([length, height])),
+        d.add_node(Node::new([0., height])),
+    ];
+    let mut l = layout();
+    l.length = length;
+    l.height = height;
+    l.studs = vec![
+        WallStud { x: 0., ea: 1e12 },
+        WallStud {
+            x: length,
+            ea: 1e12,
+        },
+    ];
+    l.top_ea = 1e12;
+    l.top_ei = Some(1e12);
+    l.bottom_ea = 1e12;
+    l.bottom_ei = 1e12;
+    l.sheathing = Some(carapace_core::model::WallSheathing {
+        law: carapace_core::model::WallShearLaw::Material(material.clone()),
+    });
+    let wall = d.add_element(Element::StudWall(
+        StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap(),
+    ));
+    let pattern = d.add_load_pattern(carapace_core::model::LoadSeries::Linear { slope: 1. });
+    d.add_nodal_load(pattern, corners[2], 0, 1.);
+    d.add_nodal_load(pattern, corners[3], 0, 1.);
+    let mut analysis = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Transformation)
+        .integrator(Integrator::DisplacementControl {
+            node: corners[3],
+            dof: 0,
+            increment: 0.,
+        })
+        .algorithm(Algorithm::Newton {
+            tangent: TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-6,
+            max_iter: 100,
+        })
+        .build(d);
+    let targets = [0.01, 0.02, 0.03, 0.02, 0., -0.01, -0.02, -0.03];
+    let mut prev = 0.;
+    let mut standalone = material;
+    for target in targets {
+        analysis.set_integrator(Integrator::DisplacementControl {
+            node: corners[3],
+            dof: 0,
+            increment: target - prev,
+        });
+        analysis.step().expect("cyclic wall displacement step");
+        let response = analysis
+            .domain()
+            .element_stud_wall_response(wall, 1.)
+            .unwrap();
+        let strain = target / height;
+        let expected = standalone.trial_stress_tangent(strain).0;
+        near(length * response.piers[0].q, length * expected, 1e-5);
+        standalone = standalone.commit(strain);
+        prev = target;
+    }
+    let probe = standalone.trial_stress_tangent(0.004);
+    let trial_then_new = standalone.clone();
+    let _ = trial_then_new.trial_stress_tangent(-0.003);
+    let second = trial_then_new.trial_stress_tangent(0.004);
+    near(probe.0, second.0, 1e-14);
+    near(probe.1, second.1, 1e-14);
+}
+
 /// Door piers balance lateral load through their `q·b` fields and report the same total base shear.
 /// Reference: applied nodal resultant and the element base response; relative tolerance 1e-9.
 #[test]
@@ -950,7 +1398,9 @@ fn door_piers_sum_to_applied_and_reported_base_shear() {
         d.add_node(Node::new([0., 3.])),
     ];
     let mut l = frame_layout(ChordDistribution::Beam, true);
-    l.sheathing = Some(carapace_core::model::WallSheathing { ga: 8e4 });
+    l.sheathing = Some(carapace_core::model::WallSheathing {
+        law: carapace_core::model::WallShearLaw::Linear { ga: 8e4 },
+    });
     l.foundation = true;
     let wall = StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap();
     let id = d.add_element(Element::StudWall(wall));
@@ -1008,7 +1458,9 @@ fn adjacent_walls_with_different_ga_balance_individually_and_together() {
         bottom_ea: 30e6 * 1e6,
         bottom_ei: 5e10,
         openings: vec![],
-        sheathing: Some(carapace_core::model::WallSheathing { ga }),
+        sheathing: Some(carapace_core::model::WallSheathing {
+            law: carapace_core::model::WallShearLaw::Linear { ga },
+        }),
         foundation: false,
     };
     let make_wall = |corners, ga| {
@@ -1089,7 +1541,9 @@ fn unloaded_stations_inside_a_pier_leave_response_unchanged() {
             bottom_ea: 30e6 * 1e4,
             bottom_ei: 5e10,
             openings: vec![],
-            sheathing: Some(carapace_core::model::WallSheathing { ga: 2e5 }),
+            sheathing: Some(carapace_core::model::WallSheathing {
+                law: carapace_core::model::WallShearLaw::Linear { ga: 2e5 },
+            }),
             foundation: false,
         };
         let id = d.add_element(Element::StudWall(
