@@ -1,9 +1,9 @@
 # Floors for stud-wall buildings: plan
 
-Status: Phase 1 implemented in the core Rust API. `FloorBand` provides the floor depth, bay shear fields and rim
-axial stiffness. Per-position bearing and hold-down links are external `ZeroLength` elements (the initial plan's
-internal vertical links are deliberately not part of the band). Phases 2–4 remain planned. Companion to
-`stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
+Status: Phases 1 (floor band) and 2 (one-way gravity transfer) are implemented in the core Rust API; phases 3–4
+remain planned. User guide: [floors.md](floors.md). Per-position bearing and hold-down links of the band are
+external `ZeroLength` elements (the initial plan's internal vertical links are deliberately not part of the
+band). Companion to `stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
 
 ## 1. What a floor has to do
 
@@ -59,8 +59,8 @@ whatever the header's stiffness.
 The alternative, joists as beams on flexible supports, sends load toward stiff supports and away from
 deflecting headers. Its results stop matching hand calculations, so it is not the first choice.
 
-Because the transfer is statically determinate, it needs no element stiffness. It belongs in the input layer
-(`carapace-input`), resolved into existing loads when the model is decoded:
+Because the transfer is statically determinate, it needs no element stiffness. `carapace-core` provides a pure
+transfer function in `model::floor`; a future builder/input layer can resolve its reactions into existing loads:
 
 - onto walls as `WallLoad::TopLine` (trapezoidal, partial) and `WallLoad::TopPoint`, in the wall's own load
   slot;
@@ -107,6 +107,16 @@ Each compares against a hand calculation, at 1e-9:
 - joists over a window header (header reaction and jack loads);
 - a girder with a post below;
 - a two-storey takedown through the band.
+
+### Phase 2 implementation and deviations
+
+The current core API supports rectangular floor bounds, area patches, cross-joist line loads, joist-aligned
+line loads and point loads, with eight wall load slots. Supports are clipped to the floor width. Reactions can
+be mapped to `WallLoad`s or returned as beam segments. The transfer is not on the wire format because the
+stud-wall builder and its identifiers are not on the wire format yet. Polygon outlines, automatic support
+discovery remain future builder work. The end-to-end test maps D/L floor reactions to a windowed stud wall,
+applies a factored combination, and checks the header jack and base forces against the hand takedown. The API
+is usable before a builder can discover supports automatically.
 
 ## 4. Floor depth: the floor band (Phase 1)
 

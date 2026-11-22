@@ -161,6 +161,11 @@ on with a scale factor.
 - The wall rejects other element-load kinds (beam, body, edge), and other elements reject a nonzero `wall`.
 - There is no self-weight or mass: include wall weight as a top line load, or as nodal loads.
 
+### Floor loads
+
+Floor gravity loads reach a wall as top-plate loads computed by the one-way floor transfer; see
+[floors.md](floors.md#2-gravity-one-way-joist-transfer).
+
 ## 6. Analysis setup
 
 | Sheathing | Algorithm | Notes |

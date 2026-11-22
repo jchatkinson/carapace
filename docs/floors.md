@@ -63,3 +63,43 @@ stand-ins limit the solution to about 1e-9 relative.
 `FloorBandResponse` reports each bay's `gamma` and shear flow `q` (zero for inactive bays), plus rim axial force
 per segment (tension positive). The band is linear and stateless; it has no element loads.
 
+## 2. Gravity: one-way joist transfer
+
+`model::transfer_floor` sends one-way joist-floor gravity loads to bearing lines using hand-calculation
+reactions. It creates no floor element and does not use support stiffness. Define a rectangular `FloorBounds`
+in span-aligned `(s, t)` coordinates, list the bearing lines as `FloorSupport`s, then provide `FloorLoad`s by
+slot. `FloorContinuity::Simple` shares each span by statics; `Continuous` solves a constant-EI beam on rigid
+supports. EI cancels from the reaction calculation. Reactions preserve support input order.
+
+```rust
+let floor = FloorBounds { s0: 0.0, s1: 3600.0, t0: 0.0, t1: 2400.0 };
+let supports = [
+    FloorSupport { s: 0.0, t0: 0.0, t1: 2400.0 },
+    FloorSupport { s: 3600.0, t0: 0.0, t1: 2400.0 },
+];
+let reactions = transfer_floor(
+    floor,
+    &supports,
+    &[FloorLoad::Area { slot: 0, w: 2.0, region: None }],
+    FloorContinuity::Simple,
+)?;
+let wall_top_loads = reactions.per_support[0].wall_loads(0.0, false);
+```
+
+For this 3.6 m by 2.4 m floor with pressure 2 force/area, each wall receives 3.6 force/length over its
+2.4 m support length: 8.64 force total per wall. A wall with a window receives that `TopLine` on its top
+plate; the existing stud-wall takedown sends the opening tributary to the header and jacks. Put dead and live
+loads in separate slots, then select/factor them with `ElementLoad::wall`, as with any other wall load.
+
+Floor joists in platform framing bear on the top plate of the wall below, so map their reactions to that
+wall. `wall_loads` converts downward-positive reactions to the wall's upward-positive local axes. Set
+`reversed` when the floor's increasing `t` direction runs opposite the wall's increasing local `x`.
+`beam_segments(slot)` returns uniform line-load pieces for a beam; split the beam at each piece endpoint before
+applying `ElementLoad::beam_uniform` or `beam_taper`.
+
+This phase supports rectangles only. Supports must lie within the span bounds and overlap the floor width;
+their `t` extents are clipped to the floor. Loaded strips or concentrated joist lines need at least two
+supports. Non-finite values, zero/negative extents, loads outside the floor and slots outside `0..WALL_SLOTS`
+return `FloorError`. Free floor edges are allowed and become overhangs when they extend beyond an end support;
+negative support reactions are returned as uplift without clamping. The idealizations are simple spans or a
+continuous beam on rigid supports, constant EI, and no joist/support stiffness interaction.
