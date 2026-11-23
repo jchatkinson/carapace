@@ -119,9 +119,23 @@ anchored by whatever holds the bottom plate there. On a foundation that support 
 that hold-down's elongation (`d_a`) and makes the wall too stiff: 23% too stiff for a 3.6 m wall with one
 window in a probe. The M/jd forces are right either way.
 
-A hold-down is a `ZeroLength` from a fixed ground node (or the storey below) to the post node: `uy` at the
-hold-down stiffness `k_hd` (anchor rod, device and fastener slip: O86's `d_a`, SDPWS's `Δa`), and `ux` fixed or
-rigid.
+Use `Material::anchorage(tension, slack, bearing)` on a vertical `ZeroLength` at every pier end, at the
+foundation and between storeys. It combines tension-only hold-down action and compression bearing/crushing in
+one path-independent law. Positive relative `uy` is uplift. In a between-storey link, order nodes so positive
+`uy` means the upper post rises relative to the lower one. Use the same link for each pier end of a `FloorBand`.
+
+`tension` is the effective hold-down stiffness in N/mm: combine device stiffness (`T_cap / delta_max`), rod
+stiffness (`A E / L`) and fastener slip in series. Set it to zero for bearing only. `slack` is shrinkage plus
+physical gaps in mm; estimate shrinkage as `0.002 * (MC_fab - MC_service) * L_shrink` (moisture contents in
+percent). For compression use `AnchorageBearing::O86Crush { qr }` with `qr = K_D K_S K_Z f_cp A` in N, or
+`Linear { k }` with `k` in N/mm. The O86 crush curve is the WoodWorks Shearwalls 11 design-report legend
+“Crush – Deformation of bottom plate at compression end of wall segment.” O86:19 11.7.1.2's `d_a` is total
+anchorage-system displacement; WoodWorks adds hold-down elongation, slip, shrinkage and crush. A single link at
+each pier end gives the wall's rotation `(uplift + crush) / jd` directly.
+
+For seismic drift, separate the slack contribution: shrinkage drift is not amplified by `RdRo/Ie`. The
+`anchorage_split` helper reports slack and remaining deformation. For a linear wall after all hold-downs engage,
+the two-run difference (specified slack minus zero slack) gives the same constant shrinkage drift.
 
 **On a foundation** (`foundation: true`), interior studs and jacks bear and are anchored internally, and their
 reactions are reported in `base_nodes`. Put hold-downs at the corners and at bottom stations on the other
@@ -137,12 +151,9 @@ springs for bearing and slip), with hold-downs at the pier ends. For stacked sto
 it acts as a drag strut, and the wall comes out 1–5% more flexible than the code equations. `foundation: true`
 does this; between storeys, connect the bottom-plate stations sideways as well.
 
-**Hold-down springs are bilateral and linear** unless you give them a nonlinear material. A plain `Elastic`
-hold-down also resists in compression, in series with the bearing below. For a tension-only hold-down, use
-`Material::Ent` (no tension) on `ZeroLength::new(c0, ground)`: with the wall node first, uplift is a negative
-(compressive) strain, which `Ent` resists. Add separate compression bearing at that corner. That makes the
-model nonlinear ([Section 6](#6-analysis-setup)). Don't rely on hold-down spring forces for design: use the
-pier M/jd force ([Section 7](#7-results)).
+If a separate tension-only idealization is needed, `Material::Ent` on `ZeroLength::new(c0, ground)` resists
+uplift when the wall node is first; add separate compression bearing. That legacy recipe is an alternative to
+`Anchorage`. The wall's reported pier M/jd force remains the design chord force ([Section 7](#7-results)).
 
 ## 5. Loads
 
@@ -440,6 +451,8 @@ Each check below is a test in `core/tests/elements/stud_wall*.rs`. The docs site
 | One-storey wall on FloorBand: base moment versus `V(H+d)` | 1e-9 |
 | 2- and 5-storey walls with 254 mm floor bands vs an exact hand walk (A.11.7.1 terms, rigid band) | 1e-5 |
 | Window wall under a floor band: pier moments vs `V_p(H+d)` (rim and top-plate drag couple) | 1% |
+| Single-storey wall on `Anchorage` links vs O86 11.7.1.2 with `d_a = slack + T/k + crush(C)` | 1e-5 |
+| Window wall with nonlinear `Anchorage` at all pier ends vs separate pier walls | 1e-10 |
 
 Realistic variants of the 2- and 5-storey walls, compared with O86 A.11.7.1:
 

@@ -16,7 +16,7 @@ there. Supply the bottom and top node rows to `FloorBand::new` in station order.
 analysis is built.
 
 The band has a constant shear field in each active bay and an axial rim bar along each bay. It has **no vertical
-stiffness**: add a `ZeroLength` between corresponding bottom and top nodes for bearing, and hold-down springs at
+stiffness**: add a `ZeroLength` between corresponding bottom and top nodes for bearing, and anchorage links at
 pier ends. Without vertical links the stacked system is a mechanism. Apply lateral diaphragm loads as nodal loads
 on the band's top row (the sheathing level), spread along it the way the diaphragm delivers it.
 
@@ -50,7 +50,7 @@ about 5%.
 let layout = FloorBandLayout::between(&below_layout, &above_layout, 254.0, 1e10, 1e12)?;
 let band = FloorBand::new(bottom_nodes, top_nodes, layout)?;
 let id = domain.add_element(Element::FloorBand(band));
-// Add a vertical bearing ZeroLength at each station and hold-down springs at pier ends.
+// Add a vertical bearing ZeroLength at each station and Anchorage links at pier ends.
 // Apply diaphragm shear as nodal loads on the top-node row.
 let response = domain.element_floor_band_response(id).unwrap();
 ```
@@ -103,3 +103,31 @@ supports. Non-finite values, zero/negative extents, loads outside the floor and 
 return `FloorError`. Free floor edges are allowed and become overhangs when they extend beyond an end support;
 negative support reactions are returned as uplift without clamping. The idealizations are simple spans or a
 continuous beam on rigid supports, constant EI, and no joist/support stiffness interaction.
+
+## 3. Pier-end anchorage
+
+Use one `Material::anchorage(tension, slack, bearing)` on a vertical `ZeroLength` at every pier end. The same
+link supplies tension-only hold-down response after slack closes and compression bearing/crushing below the
+post. Positive relative `uy` is uplift; negative is compression. For a between-storey link, order its nodes so
+positive `uy` means the upper post rises relative to the lower one. The constructor validates all parameters.
+
+`tension` is the effective series stiffness in N/mm: combine device stiffness (`T_cap / delta_max`), rod
+stiffness (`A E / L`) and fastener slip as series springs. Use zero for bearing-only support. `slack` is mm of
+framing shrinkage and any physical gap; an estimate is `0.002 * (MC_fab - MC_service) * L_shrink`, with
+moisture contents in percent. `AnchorageBearing::Linear { k }` uses N/mm. `AnchorageBearing::O86Crush { qr }`
+uses `qr = K_D K_S K_Z f_cp A` in N and crush in mm. The crush curve is the WoodWorks Shearwalls 11 design-report
+legend “Crush – Deformation of bottom plate at compression end of wall segment.” CSA O86:19 11.7.1.2 defines
+`d_a` as total anchorage displacement; WoodWorks composes elongation, slip, shrinkage and crush. One link at
+each pier end lets the wall produce the rotation `(uplift + crush) / jd` directly. `anchorage_split` reports the
+current slack and remaining strain portions for drift reporting.
+
+The slack portion is constant shrinkage drift and is not amplified by `RdRo/Ie` in NBC seismic drift. For a
+linear wall after all hold-downs are engaged, it may also be isolated by two runs: drift with the specified
+slack minus drift with `slack = 0`.
+
+Analysis: the law is nonlinear (slack, bilinear tension, crush curve), so use Newton with load steps. With
+rigid stand-ins elsewhere, use an absolute displacement-increment test no tighter than about 1e-7 mm. Verified
+in `core/tests/elements/stud_wall_anchorage.rs`: a single-storey wall's drift equals the O86 11.7.1.2 hand total
+with `d_a = slack + T/k + crush(C)` from statics, with and without uplift, both directions (1e-5, observed 2e-8),
+and the slack adds exactly `H·slack/L`. The window wall with anchorage at all four pier ends equals two separate
+pier walls (1e-10).

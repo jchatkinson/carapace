@@ -1,3 +1,4 @@
+mod anchorage;
 mod committed_trial;
 mod csfm_concrete;
 mod csfm_rebar;

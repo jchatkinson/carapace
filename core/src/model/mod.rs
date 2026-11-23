@@ -37,10 +37,10 @@ pub use load_pattern::{
     ElementLoad, ElementLoad3, ElementLoadComponents, LoadPatternId, LoadSeries, WALL_SLOTS,
 };
 pub use materials::{
-    CsfmConcreteFields, CsfmConcreteLaw, CsfmRebarFields, CsfmRebarRouting, LimitKind,
-    LimitStateConfig, Material, MaterialError, Pinching4DmgCyc, Pinching4State, PlaneMaterial,
-    PlaneMaterialError, PlaneMatrix, PlaneVector, ShellMatrix, ShellModifiers, ShellSection,
-    ShellSectionError, ShellVector,
+    AnchorageBearing, CsfmConcreteFields, CsfmConcreteLaw, CsfmRebarFields, CsfmRebarRouting,
+    LimitKind, LimitStateConfig, Material, MaterialError, Pinching4DmgCyc, Pinching4State,
+    PlaneMaterial, PlaneMaterialError, PlaneMatrix, PlaneVector, ShellMatrix, ShellModifiers,
+    ShellSection, ShellSectionError, ShellVector,
 };
 pub use node::{
     Axis3, Node, Node2, Node3, Node3Id, NodeId, SpatialDof, PLANAR_NDIM, SPATIAL_ELEMENT_DOF,

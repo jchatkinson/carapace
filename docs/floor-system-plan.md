@@ -1,7 +1,8 @@
 # Floors for stud-wall buildings: plan
 
-Status: Phases 1 (floor band) and 2 (one-way gravity transfer) are implemented in the core Rust API; phases 3–4
-remain planned. User guide: [floors.md](floors.md). Per-position bearing and hold-down links of the band are
+Status: Phases 1 (floor band), 2 (one-way gravity transfer), and 3 (pier-end anchorage material) are implemented
+in the core Rust API; Phase 4 remains planned. User guide: [floors.md](floors.md). Per-position bearing and
+anchorage links of the band are
 external `ZeroLength` elements (the initial plan's internal vertical links are deliberately not part of the
 band). Companion to `stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
 
@@ -176,8 +177,8 @@ with the bearing link. In Phase 3 the two merge into one anchorage law.
 
 ## 5. Pier-end anchorage law (Phase 3)
 
-This is one uniaxial law used everywhere a pier end meets what is below it: the foundation, a band, or the
-storey below. It replaces the plain `ZeroLength` hold-down spring.
+Implemented as `Material::Anchorage`, one uniaxial law used wherever a pier end meets what is below it: the
+foundation, a band, or the storey below. It replaces separate plain `ZeroLength` hold-down and bearing springs.
 
 - **Tension:** hold-down elongation, either the manufacturer's `(T/T_cap)·Δ_max` or a stiffness, plus rod
   stretch `TL/(A·E)` and fastener slip.
@@ -185,9 +186,10 @@ storey below. It replaces the plain `ZeroLength` hold-down spring.
 - **Shrinkage:** a constant slack, `0.002·ΔMC·L_shrink`, which closes before the hold-down engages. It is
   reported separately because it is not amplified by `RdRo/Ie` for seismic drift.
 
-The wall can then use it at every pier end automatically, closing WoodWorks gap F: an `anchorage` field on
-the layout generates the stations and links at `pier_ends()` internally. This is the "internal pier-end
-hold-down" open item in the memory notes.
+The material is available for explicit `ZeroLength` links now. Automatic pier-end placement (`anchorage` on a
+wall layout generating stations and links at `pier_ends()`) moves to the Phase 4 builder. The material has no
+OpenSees counterpart and is not added to the Python API or `input_v1` wire format in this phase; wire exposure
+can be considered when the wall/builder input format is designed.
 
 Tests:
 
@@ -244,12 +246,12 @@ Tests:
 
 ## 7. Wire format and PySees
 
-Each phase extends `input_v1` and must be mirrored in PySees (`carapaceInputV1.ts`, `compileInputV1.ts`),
+Each wire-visible phase extends `input_v1` and must be mirrored in PySees (`carapaceInputV1.ts`, `compileInputV1.ts`),
 `docs/input-format.md`, the CLI schema and the wasm build:
 
 - Phase 1: the band;
 - Phase 2: `Floor`;
-- Phase 3: the anchorage law;
+- Phase 3: the anchorage law (core only; no OpenSees material-name or wire counterpart);
 - Phase 4: 3D walls, the diaphragm and the builder.
 
 The stud wall itself is not on the wire yet, so that comes first, or together with Phase 1.

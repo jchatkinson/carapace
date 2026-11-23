@@ -100,6 +100,8 @@ pub use steel02::Steel02Kon;
 /// the material exists.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MaterialError {
+    /// Anchorage stiffness, slack, or bearing inputs are invalid.
+    InvalidAnchorageProperties,
     /// A steel modulus/yield/ultimate parameter is not finite and
     /// positive, or `ft <= fy`, or `eps_u <= fy / es` (so the hardening
     /// branch would have a non-positive or infinite modulus).
@@ -119,6 +121,9 @@ pub enum MaterialError {
 impl MaterialError {
     pub fn message(&self) -> &'static str {
         match self {
+            MaterialError::InvalidAnchorageProperties => {
+                "anchorage tension and bearing parameters must be finite and non-negative, slack must be finite and non-negative, and bearing stiffness/resistance must be positive"
+            }
             MaterialError::InvalidSteelProperties => {
                 "steel properties must be finite and positive with ft > fy and eps_u > fy / es"
             }
@@ -142,6 +147,47 @@ impl std::fmt::Display for MaterialError {
 }
 
 impl std::error::Error for MaterialError {}
+
+fn anchorage_response(
+    tension: f64,
+    slack: f64,
+    bearing: AnchorageBearing,
+    strain: f64,
+) -> (f64, f64) {
+    if strain > 0.0 {
+        let extension = (strain - slack).max(0.0);
+        if extension == 0.0 {
+            (0.0, 0.0)
+        } else {
+            (tension * extension, tension)
+        }
+    } else {
+        match bearing {
+            AnchorageBearing::Linear { k } => (k * strain, k),
+            AnchorageBearing::O86Crush { qr } => {
+                let crush = -strain;
+                let (r, tangent) = if crush <= 0.5 {
+                    (0.73 * crush / 0.5, 0.73 * qr / 0.5)
+                } else if crush <= 1.0 {
+                    (0.73 + 0.27 * (crush / 0.5 - 1.0), 0.27 * qr / 0.5)
+                } else {
+                    (crush.cbrt(), qr / (3.0 * crush.powf(2.0 / 3.0)))
+                };
+                (-r * qr, tangent)
+            }
+        }
+    }
+}
+
+/// Compression response for [`Material::Anchorage`], in N and mm.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnchorageBearing {
+    /// Linear compression spring, stiffness in N/mm.
+    Linear { k: f64 },
+    /// WoodWorks Shearwalls bottom-plate crushing curve, with factored
+    /// compression-perpendicular resistance `qr` in N. Crush is in mm.
+    O86Crush { qr: f64 },
+}
 
 #[derive(Debug, Clone)]
 pub enum Material {
@@ -173,6 +219,15 @@ pub enum Material {
     /// element wiring tests). Stateless, same reasoning as `Gap`.
     Ent {
         e: f64,
+    },
+    /// Stateless pier-end hold-down and bottom-plate bearing law. Positive
+    /// strain is uplift: tension engages after `slack`; negative strain is
+    /// compression and follows `bearing`. Construct with
+    /// [`Material::anchorage`] so parameters are validated.
+    Anchorage {
+        tension: f64,
+        slack: f64,
+        bearing: AnchorageBearing,
     },
     /// Bilinear kinematic hardening with isotropic hardening on load
     /// reversal (Filippou 1983), ported from OpenSees' `Steel01`. Construct
@@ -388,6 +443,44 @@ pub enum Material {
 }
 
 impl Material {
+    /// Construct a stateless pier-end anchorage law. `tension` is the
+    /// effective hold-down stiffness in N/mm, `slack` is shrinkage/gap in
+    /// mm, and bearing parameters use N and mm.
+    pub fn anchorage(
+        tension: f64,
+        slack: f64,
+        bearing: AnchorageBearing,
+    ) -> Result<Self, MaterialError> {
+        let bearing_valid = match bearing {
+            AnchorageBearing::Linear { k } => k.is_finite() && k > 0.0,
+            AnchorageBearing::O86Crush { qr } => qr.is_finite() && qr > 0.0,
+        };
+        if !tension.is_finite()
+            || tension < 0.0
+            || !slack.is_finite()
+            || slack < 0.0
+            || !bearing_valid
+        {
+            return Err(MaterialError::InvalidAnchorageProperties);
+        }
+        Ok(Material::Anchorage {
+            tension,
+            slack,
+            bearing,
+        })
+    }
+
+    /// For an anchorage, split current strain into the positive slack
+    /// portion and the remaining deformation. Compression is returned wholly
+    /// as the second component. Returns `None` for other materials.
+    pub fn anchorage_split(&self, strain: f64) -> Option<(f64, f64)> {
+        let Material::Anchorage { slack, .. } = self else {
+            return None;
+        };
+        let slack_part = strain.max(0.0).min(*slack);
+        Some((slack_part, strain - slack_part))
+    }
+
     /// `(stress, tangent)` for a trial evaluation at `strain` — read-only,
     /// safe to call any number of times from any Newton iteration. See the
     /// type-level doc comment for why this must never mutate `self`.
@@ -413,6 +506,10 @@ impl Material {
             Material::ElasticPP { e, .. } => *e,
             Material::Gap { e, .. } => *e,
             Material::Ent { e } => *e,
+            Material::Anchorage { bearing, .. } => match bearing {
+                AnchorageBearing::Linear { k } => *k,
+                AnchorageBearing::O86Crush { qr } => 0.73 / 0.5 * qr,
+            },
             Material::Steel01 { e0, .. } => *e0,
             Material::Concrete01 { fpc, epsc0, .. } => 2.0 * fpc / epsc0,
             Material::Steel02 { e0, .. } => *e0,
@@ -482,6 +579,14 @@ impl Material {
             }
             Material::Gap { e, gap } => elastic_like::evaluate_gap(*e, *gap, strain),
             Material::Ent { e } => elastic_like::evaluate_ent(*e, strain),
+            Material::Anchorage {
+                tension,
+                slack,
+                bearing,
+            } => {
+                let (stress, tangent) = anchorage_response(*tension, *slack, *bearing, strain);
+                (stress, tangent, self.clone())
+            }
             Material::Steel01 { .. } => steel01::evaluate(self, strain),
             Material::Concrete01 { .. } => concrete01::evaluate(self, strain),
             Material::Steel02 { .. } => steel02::evaluate(self, strain),

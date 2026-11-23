@@ -63,6 +63,7 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
 - [x] Elastic
 - [x] ElasticPP (elastic-perfectly-plastic, with permanent set)
 - [x] Gap (one-sided gap) / Ent (no-tension)
+- [x] Anchorage (pier-end hold-down with slack and linear or O86 crushing bearing; core Rust API only)
 - [x] Steel01 (bilinear kinematic + isotropic hardening)
 - [x] Steel02 (Menegotto-Pinto smooth transition curve)
 - [x] Concrete01 (Kent-Scott-Park envelope, no tension)

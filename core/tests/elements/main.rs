@@ -9,6 +9,7 @@ mod force_beam_loads;
 mod local_force;
 mod multi_node;
 mod stud_wall;
+mod stud_wall_anchorage;
 mod stud_wall_guide_example;
 mod stud_wall_multistorey;
 mod stud_wall_openings;
