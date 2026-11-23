@@ -467,6 +467,8 @@ Each check below is a test in `core/tests/elements/stud_wall*.rs`. The docs site
 | Single-storey wall on `Anchorage` links vs O86 11.7.1.2 with `d_a = slack + T/k + crush(C)` | 1e-5 |
 | Window wall with nonlinear `Anchorage` at all pier ends vs separate pier walls | 1e-10 |
 | 3D walls (along X, Z, 30°: window wall, takedown, O86 law, L corner) vs the 2D wall | 1e-10 (1e-9 nonlinear) |
+| Semi-rigid `Diaphragm` vs O86 11.7.2 bending + shear (grid refinement, order 2) | 1.4e-4 at 64 bays |
+| Rigid diaphragm over four 3D walls vs hand stiffness + torsion split | 1e-9 |
 
 Realistic variants of the 2- and 5-storey walls, compared with O86 A.11.7.1:
 

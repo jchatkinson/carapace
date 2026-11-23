@@ -1,3 +1,4 @@
+mod diaphragm;
 mod disp_beam;
 mod disp_beam_loads;
 mod elastic_beam;

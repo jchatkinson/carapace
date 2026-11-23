@@ -98,6 +98,30 @@ pub enum WallShearLaw {
     /// The initial tangent must be positive. Needs an iterative algorithm (Newton).
     Material(Material),
 }
+
+/// Evaluate a shared wall or diaphragm bay shear law at one generalized strain.
+pub(crate) fn shear_law_response(
+    law: &WallShearLaw,
+    material: Option<&Material>,
+    gamma: f64,
+) -> (f64, f64) {
+    match law {
+        WallShearLaw::Linear { ga } => (*ga * gamma, *ga),
+        WallShearLaw::O86 {
+            bv,
+            nail_spacing,
+            nail_diameter,
+        } => {
+            let a = 0.0025 * (0.013 * nail_spacing / nail_diameter.powi(2)).powi(2);
+            let den = 1. / bv + (1. / (bv * bv) + 4. * a * gamma.abs()).sqrt();
+            let q = 2. * gamma / den;
+            (q, 1. / (1. / bv + 2. * a * q.abs()))
+        }
+        WallShearLaw::Material(_) => material
+            .expect("material law has a state")
+            .trial_stress_tangent(gamma),
+    }
+}
 /// Sheathing of the wall's full-height piers. Sheathing over and under openings is not modelled.
 #[derive(Debug, Clone)]
 pub struct WallSheathing {
@@ -1329,24 +1353,9 @@ impl<K: NodeKey> StudWall<K> {
         jac.extend((0..count * count).map(|_| 0.));
         for _ in 0..40 {
             for i in 0..count {
-                let (stress, tangent) = match &self.layout.sheathing.as_ref()?.law {
-                    WallShearLaw::O86 {
-                        bv,
-                        nail_spacing,
-                        nail_diameter,
-                    } => {
-                        let a = 0.0025 * (0.013 * nail_spacing / nail_diameter.powi(2)).powi(2);
-                        let den = 1. / bv + (1. / (bv * bv) + 4. * a * gamma[i].abs()).sqrt();
-                        let stress = 2. * gamma[i] / den;
-                        (stress, 1. / (1. / bv + 2. * a * stress.abs()))
-                    }
-                    WallShearLaw::Material(_) => {
-                        self.material_states[i].trial_stress_tangent(gamma[i])
-                    }
-                    WallShearLaw::Linear { .. } => {
-                        unreachable!("linear law bypasses nonlinear solve")
-                    }
-                };
+                let law = &self.layout.sheathing.as_ref()?.law;
+                let (stress, tangent) =
+                    shear_law_response(law, self.material_states.get(i), gamma[i]);
                 q[i] = stress;
                 d[i] = tangent;
             }

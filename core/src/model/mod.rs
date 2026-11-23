@@ -14,13 +14,14 @@ mod transform;
 
 pub use domain::{Domain, Domain3};
 pub use elements::{
-    two_node_dofs, ChordDistribution, DispBeamColumn, DispBeamColumn3, DofMask, DofRef,
-    ElasticBeamColumn, ElasticBeamColumn3, Element, Element3, Element3Id, ElementForce, ElementId,
-    ElementOps, EmbeddedBar, EmbeddedBarHost, FloorBand, FloorBandBay, FloorBandError,
-    FloorBandLayout, FloorBandResponse, ForceBeamColumn, ForceBeamColumn3, Friction, Friction3,
-    GaussResponse, NodeList, NodeView, Orientation, OrientationError, Quad4, Quad4Formulation,
-    Shell3, Shell4, ShellResponse, SpatialElementMatrix, SpatialElementVector, StudWall,
-    StudWallError, StudWallLayout, StudWallResponse, TangentSink, Tri3, Truss, Truss3, VectorSink,
+    two_node_dofs, ChordDistribution, Diaphragm, DiaphragmBayResponse, DiaphragmLayout,
+    DiaphragmResponse, DispBeamColumn, DispBeamColumn3, DofMask, DofRef, ElasticBeamColumn,
+    ElasticBeamColumn3, Element, Element3, Element3Id, ElementForce, ElementId, ElementOps,
+    EmbeddedBar, EmbeddedBarHost, FloorBand, FloorBandBay, FloorBandError, FloorBandLayout,
+    FloorBandResponse, ForceBeamColumn, ForceBeamColumn3, Friction, Friction3, GaussResponse,
+    NodeList, NodeView, Orientation, OrientationError, Quad4, Quad4Formulation, Shell3, Shell4,
+    ShellResponse, SpatialElementMatrix, SpatialElementVector, StudWall, StudWallError,
+    StudWallLayout, StudWallResponse, TangentSink, Tri3, Truss, Truss3, VectorSink,
     WallAxialResponse, WallBaseResponse, WallChord, WallChordResponse, WallHeaderResponse,
     WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallPlane, WallShearLaw,
     WallSheathing, WallStation, WallStud, ZeroLength, ZeroLength3, ZeroLengthSection,
@@ -29,8 +30,9 @@ pub use elements::{
 pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
 pub use floor::{
-    transfer_floor, FloorBounds, FloorContinuity, FloorError, FloorLoad, FloorReactions,
-    FloorSupport, ReactionLine, ReactionPoint, SupportReaction,
+    flexible_diaphragm_loads, lump_line_reaction, transfer_floor, FloorBounds, FloorContinuity,
+    FloorError, FloorLoad, FloorReactions, FloorSupport, ReactionLine, ReactionPoint,
+    SupportReaction,
 };
 pub use integration::BeamIntegration;
 pub use load_pattern::{

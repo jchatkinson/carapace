@@ -138,3 +138,68 @@ in `core/tests/elements/stud_wall_anchorage.rs`: a single-storey wall's drift eq
 with `d_a = slack + T/k + crush(C)` from statics, with and without uplift, both directions (1e-5, observed 2e-8),
 and the slack adds exactly `H·slack/L`. The window wall with anchorage at all four pier ends equals two separate
 pier walls (1e-10).
+
+## 4. Diaphragms
+
+Global `Y` is up, so horizontal floor grids lie in the `X-Z` plane. Choose one of three idealizations and
+bracket wall-line forces when they matter: the FPInnovations guide reports differences up to 60% between
+idealizations.
+
+### Rigid
+
+`Domain3::rigid_diaphragm(master, slaves)` constrains each slave's `ux` and `uz` to the retained node's
+translation and in-plane rotation about global `Y`. Apply the storey force and any accidental torsion as
+loads on the retained node. This distributes forces by wall-line stiffness and torsion. The retained node
+must have rotational `ry` active through the rigid constraint.
+
+Verified (`rigid_diaphragm_matches_stiffness_and_torsion_split`): four 3D walls (two X lines of unequal length, two
+Z lines) under an eccentric X force give wall-line shears equal to the hand rigid-body split
+`V_i = k_i r_i · K⁻¹ F`, `K = Σ k_i r_iᵀ r_i`, with each line's stiffness `k_i` from a run of that wall alone (1e-9).
+
+```rust,ignore
+domain.rigid_diaphragm(master, &level_nodes);
+```
+
+### Flexible
+
+`flexible_diaphragm_loads` wraps the simple-span statics in [`transfer_floor`](../core/src/model/floor.rs).
+Supports are wall lines perpendicular to the lateral load, and area loads represent lateral force per floor
+area. Returned line reactions are distributed to those supports without using wall stiffness. Use
+`lump_line_reaction` to distribute each uniform reaction piece to ordered band-top nodes by midpoint
+tributary length; the nodal forces sum exactly to the line reaction.
+
+```rust,ignore
+let reactions = flexible_diaphragm_loads(bounds, &wall_lines, &wind_area_loads)?;
+let nodal = lump_line_reaction(&top_node_coordinates, reaction_line)?;
+```
+
+### Semi-rigid
+
+`Diaphragm` is a 3D-only finite element on a rectangular, axis-aligned global X-Z grid at elevation `y`.
+Nodes are ordered `i + j * nx`; each node has active translations `ux, uz` only. Each bay has an independent
+`WallShearLaw` or `None` for an opening. Engineering shear is the symmetric bilinear average
+`gamma = du/dz + dw/dx`; the bay energy is `area * integral(q dgamma)`. Every grid segment has an axial
+bar with its line's `EA`: `ea_x` for constant-Z lines and `ea_z` for constant-X lines. Interior grid lines
+need positive axial stiffness. There are no element loads: lump floor-level lateral loads to grid nodes, or
+use the flexible transfer helper when a distribution by statics is wanted.
+
+```rust,ignore
+let layout = DiaphragmLayout {
+    xs: vec![0., 3000., 6000.], zs: vec![0., 2400.], y: 3000.,
+    bays: vec![Some(WallShearLaw::Linear { ga: 2.0e5 }); 2],
+    ea_x: vec![1.0e8; 2], ea_z: vec![1.0e8; 3],
+};
+let id = domain.add_element(Element3::Diaphragm(Diaphragm::new(grid, layout)?));
+let response = domain.element_diaphragm_response(id).unwrap();
+```
+
+The response reports bay `gamma` and shear flow `q`, axial force on every segment, boundary shear flow, and
+chord force. For `Linear { ga: Bv }`, compare mid-span deflection with CSA O86:19 11.7.2 (p. 156):
+`Delta_d = 5 v L^3/(96 E A L_D) + v L/(4 B_v) + 0.00061 L e_n + sum(Delta_c x)/(2 L_D)`.
+Verified (`simply_supported_diaphragm_converges_to_o86_11_7_2`): a 12 m × 6 m diaphragm, one bay deep, with
+`ga = B_v` converges to the first two terms at second order in the number of bays (1.4e-4 at 64 bays). The shear
+term is exact for nodal load lumping; the chord term carries the discretization error.
+
+Nail slip: with the `O86` law the model integrates the slip of the actual shear distribution. For `e_n ∝ v²` and a
+shear that falls linearly to zero at mid-span, that is `0.0025 · e_n · L/6 ≈ 0.000417 L e_n`, i.e. 0.68 of the
+code's `0.00061 L e_n` (the test reproduces 0.683). The code term is the more conservative of the two.

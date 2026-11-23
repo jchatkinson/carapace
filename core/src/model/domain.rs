@@ -12,10 +12,10 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, FloorBandResponse, GaussResponse,
-    LimitKind, LimitStateConfig, LoadPatternId, LoadSeries, ModelError, Node, Node3Id, NodeId,
-    NodeView, ShellResponse, SparseMatrix, StudWallResponse, TangentSink, VectorSink, NDF,
-    PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DiaphragmResponse, DofRef, Element, Element3, ElementForce, ElementOps,
+    FloorBandResponse, GaussResponse, LimitKind, LimitStateConfig, LoadPatternId, LoadSeries,
+    ModelError, Node, Node3Id, NodeId, NodeView, ShellResponse, SparseMatrix, StudWallResponse,
+    TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -1957,10 +1957,25 @@ impl Domain3 {
         Some(band.response(&self.node_view()))
     }
 
+    /// Recovered bay shear and axial grid-member forces for a 3D diaphragm.
+    pub fn element_diaphragm_response(
+        &self,
+        id: crate::model::Element3Id,
+    ) -> Option<DiaphragmResponse> {
+        let Element3::Diaphragm(diaphragm) = self.elements.get(id)? else {
+            return None;
+        };
+        Some(diaphragm.response(&self.node_view()))
+    }
+
     /// `rigid_diaphragm_about` with `normal = Axis3::Y` — the "up" axis in
     /// this crate's y-up global convention,
     /// so the diaphragm plane is the horizontal `x`-`z` plane: the common
     /// case (an ordinary floor diaphragm).
+    /// Tie level nodes to a retained node as a rigid horizontal floor in the global X-Z plane (global Y up).
+    /// The retained node's `ux`, `uz`, and `ry` define the floor motion; constrained nodes' `ux` and `uz` are
+    /// slaved with the rigid-body lever arm. Loads may be applied directly to the retained node, including an
+    /// offset force for accidental torsion. Vertical motion is not constrained.
     pub fn rigid_diaphragm(&mut self, retained: Node3Id, constrained: &[Node3Id]) {
         self.rigid_diaphragm_about(retained, constrained, Axis3::Y);
     }

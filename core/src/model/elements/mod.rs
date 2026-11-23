@@ -12,6 +12,7 @@ pub use ops::{
     ShellResponse, TangentSink, VectorSink, MAX_ELEMENT_NODES,
 };
 
+mod diaphragm;
 mod disp_beam_column;
 mod elastic_beam_column;
 mod embedded_bar;
@@ -28,6 +29,7 @@ mod uniform_load;
 mod wall_plane;
 mod zero_length;
 
+pub use diaphragm::{Diaphragm, DiaphragmBayResponse, DiaphragmLayout, DiaphragmResponse};
 pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use embedded_bar::{EmbeddedBar, EmbeddedBarHost};
@@ -593,6 +595,8 @@ pub enum Element3 {
     StudWall(StudWall<Node3Id>),
     /// A floor band in a vertical wall plane.
     FloorBand(FloorBand<Node3Id>),
+    /// Semi-rigid horizontal shear-panel diaphragm.
+    Diaphragm(Diaphragm<Node3Id>),
 }
 
 const SHELL: &str = "shell elements assemble through ElementOps, not the two-node path";
@@ -605,6 +609,7 @@ impl Element3 {
             Element3::Shell4(s) => s.nodes.into_iter().collect(),
             Element3::StudWall(w) => NodeList::Borrowed(w.nodes()),
             Element3::FloorBand(b) => NodeList::Borrowed(b.nodes()),
+            Element3::Diaphragm(d) => NodeList::Borrowed(d.nodes()),
             _ => self.pair().into_iter().collect(),
         }
     }
@@ -615,7 +620,8 @@ impl Element3 {
             Element3::Shell3(_)
             | Element3::Shell4(_)
             | Element3::StudWall(_)
-            | Element3::FloorBand(_) => unreachable!("{SHELL}"),
+            | Element3::FloorBand(_)
+            | Element3::Diaphragm(_) => unreachable!("{SHELL}"),
             Element3::Truss3(t) => [t.node_i, t.node_j],
             Element3::ZeroLength3(z) => [z.node_i, z.node_j],
             Element3::ZeroLengthSection3(z) => [z.node_i, z.node_j],
@@ -644,7 +650,8 @@ impl Element3 {
             Element3::Shell3(_)
             | Element3::Shell4(_)
             | Element3::StudWall(_)
-            | Element3::FloorBand(_) => unreachable!("{SHELL}"),
+            | Element3::FloorBand(_)
+            | Element3::Diaphragm(_) => unreachable!("{SHELL}"),
         }
     }
 
@@ -711,7 +718,8 @@ impl Element3 {
             Element3::Shell3(_)
             | Element3::Shell4(_)
             | Element3::StudWall(_)
-            | Element3::FloorBand(_) => unreachable!("{SHELL}"),
+            | Element3::FloorBand(_)
+            | Element3::Diaphragm(_) => unreachable!("{SHELL}"),
         }
     }
 
@@ -726,7 +734,8 @@ impl Element3 {
             Element3::Shell3(_)
             | Element3::Shell4(_)
             | Element3::StudWall(_)
-            | Element3::FloorBand(_) => unreachable!("{SHELL}"),
+            | Element3::FloorBand(_)
+            | Element3::Diaphragm(_) => unreachable!("{SHELL}"),
         }
     }
 
@@ -742,7 +751,8 @@ impl Element3 {
             Element3::Shell3(_)
             | Element3::Shell4(_)
             | Element3::StudWall(_)
-            | Element3::FloorBand(_) => unreachable!("{SHELL}"),
+            | Element3::FloorBand(_)
+            | Element3::Diaphragm(_) => unreachable!("{SHELL}"),
         }
     }
 
@@ -758,7 +768,8 @@ impl Element3 {
             | Element3::Shell3(_)
             | Element3::Shell4(_)
             | Element3::StudWall(_)
-            | Element3::FloorBand(_) => None,
+            | Element3::FloorBand(_)
+            | Element3::Diaphragm(_) => None,
         }
     }
 }
@@ -783,6 +794,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell4(s) => s.dof_mask(),
             Element3::StudWall(w) => w.dof_mask(),
             Element3::FloorBand(b) => b.dof_mask(),
+            Element3::Diaphragm(d) => d.dof_mask(),
         }
     }
 
@@ -795,6 +807,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell4(s) => s.validate(nodes),
             Element3::StudWall(w) => w.validate(nodes),
             Element3::FloorBand(b) => b.validate(nodes),
+            Element3::Diaphragm(d) => d.validate(nodes),
             _ => Ok(()),
         }
     }
@@ -805,7 +818,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::StudWall(_) => {
                 !load.has_uniform() && !load.has_body() && !load.has_pressure()
             }
-            Element3::FloorBand(_) => {
+            Element3::FloorBand(_) | Element3::Diaphragm(_) => {
                 !load.has_uniform() && !load.has_body() && !load.has_pressure() && !load.has_wall()
             }
             _ => !load.has_body() && !load.has_pressure() && !load.has_wall(),
@@ -818,6 +831,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell4(s) => s.prepare(nodes),
             Element3::StudWall(w) => w.prepare(nodes),
             Element3::FloorBand(b) => b.prepare(nodes),
+            Element3::Diaphragm(d) => d.prepare(nodes),
             _ => {}
         }
     }
@@ -864,6 +878,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
                 return w.assemble_tangent(nodes, l.as_ref(), sink);
             }
             Element3::FloorBand(b) => return b.assemble_tangent(nodes, sink),
+            Element3::Diaphragm(d) => return d.assemble_tangent(nodes, sink),
             _ => {}
         }
         let [i, j] = Element3::pair(self);
@@ -896,6 +911,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
                 return w.assemble_load(nodes, l.as_ref(), sink);
             }
             Element3::FloorBand(b) => return b.assemble_load(nodes, None, sink),
+            Element3::Diaphragm(d) => return d.assemble_load(nodes, load, sink),
             _ => {}
         }
         let [i, j] = Element3::pair(self);
@@ -914,7 +930,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         match self {
             Element3::Shell3(s) => return s.assemble_mass(nodes, sink),
             Element3::Shell4(s) => return s.assemble_mass(nodes, sink),
-            Element3::StudWall(_) | Element3::FloorBand(_) => return,
+            Element3::StudWall(_) | Element3::FloorBand(_) | Element3::Diaphragm(_) => return,
             _ => {}
         }
         let [i, j] = Element3::pair(self);
@@ -941,6 +957,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
                 return w.commit(nodes, l.as_ref());
             }
             Element3::FloorBand(b) => return b.commit(nodes, None),
+            Element3::Diaphragm(d) => return d.commit(nodes, load),
             _ => {}
         }
         let [i, j] = Element3::pair(self);
@@ -953,6 +970,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell4(_) => 24,
             Element3::StudWall(w) => w.local_force_width(),
             Element3::FloorBand(b) => b.local_force_width(),
+            Element3::Diaphragm(d) => d.local_force_width(),
             _ => SPATIAL_ELEMENT_DOF,
         }
     }
@@ -966,6 +984,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell4(s) => return s.local_force(nodes),
             Element3::StudWall(w) => return w.local_force(nodes),
             Element3::FloorBand(b) => return b.local_force(nodes),
+            Element3::Diaphragm(d) => return d.local_force(nodes),
             _ => {}
         }
         let [i, j] = Element3::pair(self);
@@ -996,6 +1015,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
                 return w.local_load_force(nodes, l.as_ref());
             }
             Element3::FloorBand(b) => return b.local_load_force(nodes, None),
+            Element3::Diaphragm(d) => return d.local_load_force(nodes, load),
             _ => {}
         }
         let [i, j] = Element3::pair(self);
@@ -1009,7 +1029,8 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         if let Element3::Shell3(_)
         | Element3::Shell4(_)
         | Element3::StudWall(_)
-        | Element3::FloorBand(_) = self
+        | Element3::FloorBand(_)
+        | Element3::Diaphragm(_) = self
         {
             return None;
         }

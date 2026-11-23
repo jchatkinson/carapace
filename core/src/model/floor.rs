@@ -307,6 +307,53 @@ pub fn transfer_floor(
     Ok(out)
 }
 
+/// Transfer a horizontal diaphragm area load to wall lines as simple spans. Supports are the wall lines
+/// perpendicular to the load direction; the returned support reactions are positive in the input load's
+/// direction. This uses the same statics as gravity `transfer_floor`, with the load interpreted as force per
+/// floor area rather than weight.
+pub fn flexible_diaphragm_loads(
+    bounds: FloorBounds,
+    supports: &[FloorSupport],
+    area_loads: &[FloorLoad],
+) -> Result<FloorReactions, FloorError> {
+    transfer_floor(bounds, supports, area_loads, FloorContinuity::Simple)
+}
+
+/// Lump a piecewise-uniform line reaction onto ordered wall-top nodes using midpoint tributary boundaries.
+/// The returned nodal forces sum exactly to the integrated line reaction.
+pub fn lump_line_reaction(nodes: &[f64], line: ReactionLine) -> Result<Vec<f64>, FloorError> {
+    if nodes.is_empty()
+        || nodes.windows(2).any(|w| !w[0].is_finite() || w[1] <= w[0])
+        || !line.t0.is_finite()
+        || !line.t1.is_finite()
+        || line.t0 >= line.t1
+        || !line.w.is_finite()
+        || nodes.first().is_some_and(|x| *x > line.t0)
+        || nodes.last().is_some_and(|x| *x < line.t1)
+    {
+        return Err(err(
+            "line reaction and node coordinates must be finite, ordered, and covered by nodes",
+        ));
+    }
+    let mut out = vec![0.; nodes.len()];
+    for i in 0..nodes.len() {
+        let a = if i == 0 {
+            line.t0
+        } else {
+            (nodes[i - 1] + nodes[i]) * 0.5
+        }
+        .max(line.t0);
+        let b = if i + 1 == nodes.len() {
+            line.t1
+        } else {
+            (nodes[i] + nodes[i + 1]) * 0.5
+        }
+        .min(line.t1);
+        out[i] = (b - a).max(0.) * line.w;
+    }
+    Ok(out)
+}
+
 fn continuous(
     active: &[(usize, f64)],
     b: FloorBounds,
