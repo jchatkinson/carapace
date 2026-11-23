@@ -1,6 +1,6 @@
 # Floors
 
-Floor components for stud-wall models (core Rust API, 2D). The plan and its rationale are in
+Floor components for stud-wall models (core Rust API, 2D and vertical-plane `Domain3`). The plan and its rationale are in
 [floor-system-plan.md](floor-system-plan.md); the walls themselves are in [stud-wall.md](stud-wall.md).
 
 ## 1. Floor depth: the floor band
@@ -62,6 +62,13 @@ stand-ins limit the solution to about 1e-9 relative.
 
 `FloorBandResponse` reports each bay's `gamma` and shear flow `q` (zero for inactive bays), plus rim axial force
 per segment (tension positive). The band is linear and stateless; it has no element loads.
+
+### 3D wall planes
+
+For a vertical floor band in `Domain3`, use `FloorBand::new3(bottom, top, layout, plane)` with the same
+`WallPlane::vertical(ex, ez)` as the walls it joins. Global `Y` is up; the band maps its local wall direction
+onto the plan direction and leaves rotations unstiffened. Its plan-normal translation is unstiffened too, so the
+wall line needs support from a crossing wall, diaphragm or fixity.
 
 ## 2. Gravity: one-way joist transfer
 

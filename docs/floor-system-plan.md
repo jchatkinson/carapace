@@ -1,7 +1,7 @@
 # Floors for stud-wall buildings: plan
 
-Status: Phases 1 (floor band), 2 (one-way gravity transfer), and 3 (pier-end anchorage material) are implemented
-in the core Rust API; Phase 4 remains planned. User guide: [floors.md](floors.md). Per-position bearing and
+Status: Phases 1 (floor band), 2 (one-way gravity transfer), 3 (pier-end anchorage material) and 4a (walls and
+bands in 3D) are implemented in the core Rust API; 4b (diaphragms) and the builder remain. User guide: [floors.md](floors.md). Per-position bearing and
 anchorage links of the band are
 external `ZeroLength` elements (the initial plan's internal vertical links are deliberately not part of the
 band). Companion to `stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
@@ -212,6 +212,12 @@ is `Y`, as for `rigid_diaphragm`, and `along` is a unit vector in the `X–Z` pl
 This follows the rule "share assembly, split leaf kinematics": one frame builder, two thin node mappings.
 
 Test: walls along `X`, along `Z` and at 30° each equal the 2D wall exactly.
+
+**Phase 4a status: done.** One implementation for 2D and 3D: `StudWall<K>`/`FloorBand<K>` with a shared
+`WallPlane` map (`core/src/model/elements/wall_plane.rs`), 3D wall-slot loads (`ElementLoad3::wall`) and `Domain3`
+response accessors. `core/tests/elements/stud_wall_3d.rs` checks 3D against 2D: walls along X, Z and 30°, the
+window wall with pier-end hold-downs, a gravity takedown, the O86 nonlinear law, the floor-band stack (1e-7,
+stand-in limited) and an L corner sharing its post between planes, plus DOF numbering (no `uz` for an X wall).
 
 ### Diaphragm options
 

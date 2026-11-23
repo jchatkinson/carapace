@@ -5,8 +5,9 @@
 
 use nalgebra::{SMatrix, SVector};
 
-use super::{DofMask, DofRef, NodeView, TangentSink};
-use crate::model::{ElementForce, NodeId};
+use super::wall_plane::WallPlane;
+use super::{DofMask, NodeView, TangentSink, VectorSink};
+use crate::model::{ElementForce, Node3Id, NodeId, NodeKey};
 
 /// Stations and properties for a floor band.
 #[derive(Debug, Clone)]
@@ -104,19 +105,32 @@ pub struct FloorBandResponse {
 
 /// 2D floor-depth strip. Node order is bottom row followed by top row.
 #[derive(Debug, Clone)]
-pub struct FloorBand {
-    bottom: Vec<NodeId>,
-    top: Vec<NodeId>,
-    nodes: Vec<NodeId>,
+pub struct FloorBand<K: NodeKey = NodeId> {
+    bottom: Vec<K>,
+    top: Vec<K>,
+    nodes: Vec<K>,
     layout: FloorBandLayout,
+    plane: WallPlane,
+    prepared_tangents: Option<Vec<Vec<f64>>>,
 }
 
-impl FloorBand {
+impl FloorBand<NodeId> {
     /// Creates a band from bottom and top nodes in station order. Node geometry is checked by `validate`.
     pub fn new(
         bottom: Vec<NodeId>,
         top: Vec<NodeId>,
         layout: FloorBandLayout,
+    ) -> Result<Self, FloorBandError> {
+        Self::build(bottom, top, layout, WallPlane::Planar)
+    }
+}
+
+impl<K: NodeKey> FloorBand<K> {
+    fn build(
+        bottom: Vec<K>,
+        top: Vec<K>,
+        layout: FloorBandLayout,
+        plane: WallPlane,
     ) -> Result<Self, FloorBandError> {
         validate_layout(&layout)?;
         let n = layout.xs.len();
@@ -143,10 +157,12 @@ impl FloorBand {
             top,
             nodes,
             layout,
+            plane,
+            prepared_tangents: None,
         })
     }
     /// Connected nodes, bottom row then top row.
-    pub fn nodes(&self) -> &[NodeId] {
+    pub fn nodes(&self) -> &[K] {
         &self.nodes
     }
     /// Layout used to build the band.
@@ -154,87 +170,133 @@ impl FloorBand {
         &self.layout
     }
     pub fn dof_mask(&self) -> DofMask {
-        DofMask::none().with(0).with(1)
+        self.plane
+            .slots()
+            .into_iter()
+            .fold(DofMask::none(), |m, s| m.with(s as usize))
     }
-    pub fn validate(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> Result<(), &'static str> {
+    pub fn validate<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> Result<(), &'static str> {
         let p0 = nodes.get(self.bottom[0]).coords;
         let pn = nodes.get(*self.bottom.last().unwrap()).coords;
-        let dx = pn[0] - p0[0];
-        let dy = pn[1] - p0[1];
-        let l = dx.hypot(dy);
-        if !l.is_finite() || (l - self.layout.length).abs() > 1e-9 * self.layout.length {
+        let map = self.plane.map(p0, pn);
+        let (lx, ly, off) = map.point(&pn);
+        let tol = 1e-9 * self.layout.length.max(self.layout.depth).max(1.);
+        if !lx.is_finite() || (lx - self.layout.length).abs().max(ly.abs()).max(off.abs()) > tol {
             return Err("floor band bottom endpoints must match layout length");
         }
-        let ex = [dx / l, dy / l];
-        let ey = [-ex[1], ex[0]];
         for (i, &x) in self.layout.xs.iter().enumerate() {
             for (id, y) in [(self.bottom[i], 0.), (self.top[i], self.layout.depth)] {
                 let p = nodes.get(id).coords;
-                let lx = (p[0] - p0[0]) * ex[0] + (p[1] - p0[1]) * ex[1];
-                let ly = (p[0] - p0[0]) * ey[0] + (p[1] - p0[1]) * ey[1];
-                if (lx - x).abs().max((ly - y).abs()) > 1e-9 * self.layout.length {
+                let (lx, ly, off) = map.point(&p);
+                if (lx - x).abs().max((ly - y).abs()).max(off.abs()) > tol {
                     return Err("floor band node does not lie at its local station");
                 }
             }
         }
         Ok(())
     }
-    pub fn prepare(&mut self, _nodes: &NodeView<'_, 2, 3, NodeId>) {}
-    pub fn assemble_tangent<S: TangentSink<NodeId>>(
+    pub fn prepare<const NDIM: usize, const NDOF: usize>(
+        &mut self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) {
+        let map = self.basis(nodes);
+        self.prepared_tangents = Some(
+            (0..self.layout.bays.len())
+                .map(|i| {
+                    let bay = self.bay(nodes, &map, i);
+                    let local = nalgebra::DMatrix::from_fn(8, 8, |r, c| bay.k[(r, c)]);
+                    map.to_global_matrix(&local, 4)
+                })
+                .collect(),
+        );
+    }
+    pub fn assemble_tangent<const NDIM: usize, const NDOF: usize, S: TangentSink<K>>(
         &self,
-        nodes: &NodeView<'_, 2, 3, NodeId>,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
         sink: &mut S,
     ) {
-        let ex = self.basis(nodes);
-        for i in 0..self.layout.bays.len() {
-            let bay = self.bay(nodes, ex, i);
-            let dofs: [DofRef<NodeId>; 8] =
-                std::array::from_fn(|j| (bay.ids[j / 2], (j % 2) as u8));
-            sink.add(&dofs, &bay.k, &bay.r);
+        let map = self.basis(nodes);
+        let fallback = self.prepared_tangents.is_none().then(|| {
+            (0..self.layout.bays.len())
+                .map(|i| {
+                    let bay = self.bay(nodes, &map, i);
+                    let local = nalgebra::DMatrix::from_fn(8, 8, |r, c| bay.k[(r, c)]);
+                    map.to_global_matrix(&local, 4)
+                })
+                .collect::<Vec<_>>()
+        });
+        let stiffness = self
+            .prepared_tangents
+            .as_ref()
+            .unwrap_or_else(|| fallback.as_ref().unwrap());
+        for (i, global_k) in stiffness.iter().enumerate() {
+            let bay = self.bay(nodes, &map, i);
+            let mut rg = arrayvec::ArrayVec::<f64, 12>::new();
+            let mut dofs = arrayvec::ArrayVec::<(K, u8), 12>::new();
+            for node in 0..4 {
+                let f = map.global([bay.r[2 * node], bay.r[2 * node + 1]]);
+                rg.extend(f);
+                dofs.extend(map.slots.iter().map(|&slot| (bay.ids[node], slot)));
+            }
+            sink.add_dyn(&dofs, global_k, &rg);
         }
     }
     pub fn accepts_load(&self, _load: &crate::model::ElementLoad) -> bool {
         false
     }
-    pub fn assemble_load<S: super::VectorSink<NodeId>>(
+    pub fn assemble_load<const NDIM: usize, const NDOF: usize, S: VectorSink<K>>(
         &self,
-        _nodes: &NodeView<'_, 2, 3, NodeId>,
+        _nodes: &NodeView<'_, NDIM, NDOF, K>,
         _load: Option<&crate::model::ElementLoad>,
         _sink: &mut S,
     ) {
     }
-    pub fn commit(
+    pub fn commit<const NDIM: usize, const NDOF: usize>(
         &mut self,
-        _nodes: &NodeView<'_, 2, 3, NodeId>,
+        _nodes: &NodeView<'_, NDIM, NDOF, K>,
         _load: Option<&crate::model::ElementLoad>,
     ) {
     }
     pub fn local_force_width(&self) -> usize {
-        self.nodes.len() * 2
+        self.nodes.len() * self.plane.slots().len()
     }
-    pub fn local_force(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> ElementForce {
+    pub fn local_force<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> ElementForce {
         let n = self.layout.xs.len();
+        let map = self.basis(nodes);
+        let m = map.slots.len();
         let mut out = vec![0.; self.local_force_width()];
-        let ex = self.basis(nodes);
         for i in 0..n - 1 {
-            let r = self.bay(nodes, ex, i).r;
+            let r = self.bay(nodes, &map, i).r;
             for (j, station) in [i, i + 1, n + i, n + i + 1].into_iter().enumerate() {
-                out[2 * station] += r[2 * j];
-                out[2 * station + 1] += r[2 * j + 1];
+                let f = map.global([r[2 * j], r[2 * j + 1]]);
+                for (k, value) in f.iter().enumerate() {
+                    out[m * station + k] += value;
+                }
             }
         }
         ElementForce::from_vec(out)
     }
-    pub fn local_load_force(
+    pub fn local_load_force<const NDIM: usize, const NDOF: usize>(
         &self,
-        _nodes: &NodeView<'_, 2, 3, NodeId>,
+        _nodes: &NodeView<'_, NDIM, NDOF, K>,
         _load: Option<&crate::model::ElementLoad>,
     ) -> ElementForce {
         ElementForce::from_vec(vec![0.; self.local_force_width()])
     }
     /// Bay `i`'s stiffness and resisting force over `[bottom i, bottom i+1, top i, top i+1]`, its shear
     /// strain and flow, and the rim force (tension positive).
-    fn bay(&self, nodes: &NodeView<'_, 2, 3, NodeId>, ex: [f64; 2], i: usize) -> Bay {
+    fn bay<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+        map: &super::wall_plane::PlaneMap,
+        i: usize,
+    ) -> Bay<K> {
         let a = self.layout.xs[i + 1] - self.layout.xs[i];
         let ids = [
             self.bottom[i],
@@ -242,8 +304,9 @@ impl FloorBand {
             self.top[i],
             self.top[i + 1],
         ];
-        let u: [f64; 8] = std::array::from_fn(|j| nodes.get(ids[j / 2]).displacement[j % 2]);
-        let b = SVector::<f64, 8>::from(self.shear_b(a, ex));
+        let u: [f64; 8] =
+            std::array::from_fn(|j| map.local(&nodes.get(ids[j / 2]).displacement)[j % 2]);
+        let b = SVector::<f64, 8>::from(self.shear_b(a));
         let gamma = b.dot(&SVector::from(u));
         let ga = self.layout.bays[i].unwrap_or(0.);
         let scale = ga * a * self.layout.depth;
@@ -251,8 +314,8 @@ impl FloorBand {
         let mut r = b * (scale * gamma);
         // Rim bar between the two top nodes.
         let c = self.layout.rim_ea / a;
-        let q = [-ex[0], -ex[1], ex[0], ex[1]];
-        let strain = (u[6] - u[4]) * ex[0] + (u[7] - u[5]) * ex[1];
+        let q = [-1., 0., 1., 0.];
+        let strain = u[6] - u[4];
         for m in 0..4 {
             for n in 0..4 {
                 k[(4 + m, 4 + n)] += c * q[m] * q[n];
@@ -268,21 +331,20 @@ impl FloorBand {
             rim: c * strain,
         }
     }
-    fn basis(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> [f64; 2] {
+    fn basis<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> super::wall_plane::PlaneMap {
         let a = nodes.get(self.bottom[0]).coords;
         let b = nodes.get(*self.bottom.last().unwrap()).coords;
-        let dx = b[0] - a[0];
-        let dy = b[1] - a[1];
-        let l = dx.hypot(dy);
-        [dx / l, dy / l]
+        self.plane.map(a, b)
     }
     /// Shear strain operator over `[bottom i, bottom j, top i, top j]`:
     /// `gamma = (u_Ti + u_Tj - u_Bi - u_Bj)/(2d) + (v_Bj - v_Bi)/a`. The rotation term uses the bottom row only,
     /// so the vertical couple `q a d` of the bay lands on the wall below (where the rim bears), and a link
     /// across the band carries the moment at the band top: the base of the wall above, as in O86 Fig. 11.7
     /// (`R21 = F21 (H + h2)/L1`).
-    fn shear_b(&self, a: f64, ex: [f64; 2]) -> [f64; 8] {
-        let ey = [-ex[1], ex[0]];
+    fn shear_b(&self, a: f64) -> [f64; 8] {
         let d = self.layout.depth;
         let local = [
             (-1. / (2. * d), -1. / a),
@@ -292,14 +354,21 @@ impl FloorBand {
         ];
         std::array::from_fn(|j| {
             let (u, v) = local[j / 2];
-            u * ex[j % 2] + v * ey[j % 2]
+            if j % 2 == 0 {
+                u
+            } else {
+                v
+            }
         })
     }
-    pub fn response(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> FloorBandResponse {
-        let ex = self.basis(nodes);
+    pub fn response<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> FloorBandResponse {
+        let map = self.basis(nodes);
         let (bays, rim) = (0..self.layout.bays.len())
             .map(|i| {
-                let bay = self.bay(nodes, ex, i);
+                let bay = self.bay(nodes, &map, i);
                 let (x0, x1) = (self.layout.xs[i], self.layout.xs[i + 1]);
                 (
                     FloorBandBay {
@@ -316,8 +385,30 @@ impl FloorBand {
     }
 }
 
-struct Bay {
-    ids: [NodeId; 4],
+impl FloorBand<Node3Id> {
+    /// Creates a floor band in a vertical plane with global Y up.
+    pub fn new3(
+        bottom: Vec<Node3Id>,
+        top: Vec<Node3Id>,
+        layout: FloorBandLayout,
+        plane: WallPlane,
+    ) -> Result<Self, FloorBandError> {
+        let plane = match plane {
+            WallPlane::Planar => {
+                return Err(FloorBandError(
+                    "3D floor band requires a vertical wall plane".into(),
+                ))
+            }
+            WallPlane::Vertical { ex, ez } => {
+                WallPlane::vertical(ex, ez).map_err(FloorBandError)?
+            }
+        };
+        Self::build(bottom, top, layout, plane)
+    }
+}
+
+struct Bay<K> {
+    ids: [K; 4],
     k: SMatrix<f64, 8, 8>,
     r: SVector<f64, 8>,
     gamma: f64,

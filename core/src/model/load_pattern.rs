@@ -286,15 +286,17 @@ impl ElementLoadComponents for ElementLoad {
     }
 }
 
-/// Component layout: `[wx, wy, wz, bx, by, bz, pressure]` (beam uniform, shell body, shell pressure).
+/// Component layout: `[wx, wy, wz, bx, by, bz, pressure, wall0..wall7]` (beam uniform, shell body,
+/// shell pressure, then stud-wall slot factors).
 impl ElementLoadComponents for ElementLoad3 {
-    const COUNT: usize = 7;
+    const COUNT: usize = 7 + WALL_SLOTS;
 
     fn component(&self, index: usize) -> f64 {
         match index {
             0..=2 => self.uniform[index],
             3..=5 => self.body[index - 3],
             6 => self.pressure,
+            7..=14 => self.wall[index - 7],
             _ => 0.0,
         }
     }
@@ -330,6 +332,8 @@ pub struct ElementLoad3 {
     /// Shells: pressure per unit area, positive along the local normal `e3` (right-hand rule
     /// from the node order).
     pub pressure: f64,
+    /// Stud-wall top-plate load-slot factors. The wall element interprets these as local-axis load scales.
+    pub wall: [f64; WALL_SLOTS],
 }
 
 impl ElementLoad3 {
@@ -339,6 +343,7 @@ impl ElementLoad3 {
             uniform: [wx, wy, wz],
             body: [0.0; 3],
             pressure: 0.0,
+            wall: [0.0; WALL_SLOTS],
         }
     }
 
@@ -369,6 +374,10 @@ impl ElementLoad3 {
     pub fn has_pressure(&self) -> bool {
         self.pressure != 0.0
     }
+
+    pub fn has_wall(&self) -> bool {
+        self.wall != [0.0; WALL_SLOTS]
+    }
 }
 
 impl std::ops::Add for ElementLoad3 {
@@ -380,6 +389,7 @@ impl std::ops::Add for ElementLoad3 {
             uniform: std::array::from_fn(|i| self.uniform[i] + other.uniform[i]),
             body: std::array::from_fn(|i| self.body[i] + other.body[i]),
             pressure: self.pressure + other.pressure,
+            wall: std::array::from_fn(|i| self.wall[i] + other.wall[i]),
         }
     }
 }
@@ -392,6 +402,7 @@ impl std::ops::Mul<f64> for ElementLoad3 {
             uniform: self.uniform.map(|v| v * factor),
             body: self.body.map(|v| v * factor),
             pressure: self.pressure * factor,
+            wall: self.wall.map(|v| v * factor),
         }
     }
 }

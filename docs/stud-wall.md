@@ -13,7 +13,7 @@ It is built for design:
   11.7.1.2 deflection terms for one storey, and the O86 Annex A.11.7.1 multi-storey method for stacked walls;
 - **design forces** per pier: shear flow `q` and the M/jd chord (hold-down) force.
 
-Status: core Rust API only (`carapace-core`, 2D `Domain`). `FloorBand` supports stacking storeys with floor depth.
+Status: core Rust API only (`carapace-core`, 2D `Domain` and vertical-plane `Domain3`). `FloorBand` supports stacking storeys with floor depth.
 Neither element is yet in the JSON wire format, the CLI, the Python package or PySees. Implementation details
 are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
 design and its rationale in [`stud-wall-panel.md`](stud-wall-panel.md).
@@ -38,6 +38,19 @@ Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [3 She
   plate-to-floor connections are not moment connections. A node used only by stud walls has no rotational
   equation (Carapace activates only DOFs some element stiffens), so you need not fix `rz`.
 - Corners and stations must be distinct nodes. Two walls side by side or stacked can share corner nodes.
+
+### 3D models
+
+Use `StudWall::new3(..., plane)` for a wall in a vertical plane of `Domain3`. `WallPlane::vertical(ex, ez)` takes
+the unit plan direction from `c0` to `c1`; global `Y` is up. Corners and stations must lie in that plane at the
+same local `(x, y)` positions as in a 2D model. For example, the point at local `(x, y)` is
+`p0 + x * (ex, 0, ez) + y * (0, 1, 0)`.
+
+The wall stiffens global `uy` and the plan translation components present in its direction (`ux` when `ex != 0`,
+`uz` when `ez != 0`). It never stiffens rotations. A node on one wall line has no stiffness normal to that wall;
+provide that support with a crossing wall, a diaphragm constraint, or a fixity. Wall response quantities and
+`local_force` remain in wall-local axes. `ElementLoad3::wall` carries the same eight top-plate slot factors as
+`ElementLoad::wall`.
 
 ## 2. Layout
 
@@ -403,7 +416,7 @@ reports its M/jd chord forces for its two hold-downs.
 
 Not modelled, or not yet available:
 - JSON wire format, CLI, Python and PySees (core Rust API only).
-- 3D, out-of-plane loading and per-stud out-of-plane output.
+- Out-of-plane loading and per-stud out-of-plane output (a 3D wall has only its in-plane translations).
 - Mass and self-weight (no dynamics; add wall weight as a load).
 - Sills and cripples below windows; force transfer around openings and the perforated shear-wall method
   (segmented design only).
@@ -453,6 +466,7 @@ Each check below is a test in `core/tests/elements/stud_wall*.rs`. The docs site
 | Window wall under a floor band: pier moments vs `V_p(H+d)` (rim and top-plate drag couple) | 1% |
 | Single-storey wall on `Anchorage` links vs O86 11.7.1.2 with `d_a = slack + T/k + crush(C)` | 1e-5 |
 | Window wall with nonlinear `Anchorage` at all pier ends vs separate pier walls | 1e-10 |
+| 3D walls (along X, Z, 30°: window wall, takedown, O86 law, L corner) vs the 2D wall | 1e-10 (1e-9 nonlinear) |
 
 Realistic variants of the 2- and 5-storey walls, compared with O86 A.11.7.1:
 

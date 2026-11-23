@@ -39,11 +39,11 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
 - [x] ZeroLengthSection — fiber section with optional independent springs (2D + 3D)
 - [x] ForceBeamColumn — fiber-discretized, force-based/flexibility method
   (2D uniaxial, 3D biaxial)
-- [x] StudWall — 2D light-frame wall macro-element (studs, plates, openings with headers, jacks and cripples,
+- [x] StudWall — 2D and vertical-plane 3D light-frame wall macro-element (studs, plates, openings with headers, jacks and cripples,
   condensed onto corner and station nodes) for gravity takedowns and segmented shear-wall design: per-pier
   sheathing law (linear, CSA O86 nail slip, or any uniaxial material), M/jd chord forces, internal
   foundation bearing. Core Rust API only for now; see [`docs/stud-wall.md`](docs/stud-wall.md)
-- [x] FloorBand — 2D floor-depth strip with bay shear fields and rim axial force; bearing and hold-down links
+- [x] FloorBand — 2D and vertical-plane 3D floor-depth strip with bay shear fields and rim axial force; bearing and hold-down links
   are external `ZeroLength` elements. Core Rust API only; see [`docs/floors.md`](docs/floors.md)
 - [x] One-way floor gravity transfer — rectangular area, line and point loads to wall and beam supports by
   simple-span statics or continuous-beam reactions. Core Rust API only; see [`docs/floors.md`](docs/floors.md)

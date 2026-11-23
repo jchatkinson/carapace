@@ -12,20 +12,21 @@
 use arrayvec::ArrayVec;
 use nalgebra::{DMatrix, DVector};
 
+use super::wall_plane::{PlaneMap, WallPlane};
 use super::{DofMask, NodeView, TangentSink, VectorSink};
-use crate::model::{ElementForce, ElementLoad, Material, NodeId};
+use crate::model::{ElementForce, ElementLoad, Material, Node3Id, NodeId, NodeKey};
 
 /// Number of load slots per wall; see [`WallLoad`] and `ElementLoad::wall`.
 pub const WALL_SLOTS: usize = crate::model::WALL_SLOTS;
 /// Prepared assembly supports up to 256 exterior nodes (512 translational DOFs).
 const MAX_EXTERIOR_NODES: usize = 256;
-const MAX_EXTERIOR_DOFS: usize = MAX_EXTERIOR_NODES * 2;
+const MAX_EXTERIOR_DOFS: usize = MAX_EXTERIOR_NODES * 3;
 /// Maximum number of piers in a wall with a nonlinear sheathing law (`O86` or `Material`): the local pier
 /// solve uses fixed-size stack buffers.
 pub const MAX_WALL_PIERS: usize = 16;
 /// Nonlinear walls support at most 32 exterior nodes (64 translational DOFs).
 const MAX_NONLINEAR_EXTERIOR_NODES: usize = 32;
-const MAX_NONLINEAR_EXTERIOR_DOFS: usize = MAX_NONLINEAR_EXTERIOR_NODES * 2;
+const MAX_NONLINEAR_EXTERIOR_DOFS: usize = MAX_NONLINEAR_EXTERIOR_NODES * 3;
 
 /// Which plate a [`WallStation`] sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,13 +107,13 @@ pub struct WallSheathing {
 /// An extra exterior node on a plate (`ux, uy` only), where something connects between the corners: the floor
 /// or wall below at each stud, a drag strut, a beam bearing. The node must lie at the plate point.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WallStation {
+pub struct WallStation<K = NodeId> {
     /// Plate the station is on.
     pub chord: WallChord,
     /// Local position along the plate, strictly between the corners.
     pub x: f64,
     /// The exterior node; distinct from the corners and other stations.
-    pub node: NodeId,
+    pub node: K,
 }
 /// Framing of one wall, in its local frame (`x` along the bottom plate from `c0` to `c1`, `y` up the studs) and
 /// consistent units. Validated by [`StudWall::new`].
@@ -325,7 +326,6 @@ struct NonlinearCache {
 }
 #[derive(Debug, Clone)]
 struct PreparedNonlinear {
-    stiffness: Vec<f64>,
     coupling: Vec<f64>,
     strain_map: Vec<f64>,
 }
@@ -336,12 +336,13 @@ type CondensedSystem = (DMatrix<f64>, DMatrix<f64>, DMatrix<f64>);
 /// `Domain::element_stud_wall_response`. Exterior nodes are the corners `c0..c3` (counter-clockwise from
 /// bottom-left) then the stations, each with `ux, uy`. Limits: 256 exterior nodes; with a nonlinear law, 32
 /// exterior nodes and `MAX_WALL_PIERS` (16) piers.
-pub struct StudWall {
-    corners: [NodeId; 4],
-    stations: Vec<WallStation>,
-    nodes: Vec<NodeId>,
-    exterior_dofs: Vec<(NodeId, u8)>,
+pub struct StudWall<K: NodeKey = NodeId> {
+    corners: [K; 4],
+    stations: Vec<WallStation<K>>,
+    nodes: Vec<K>,
+    exterior_dofs: Vec<(K, u8)>,
     layout: StudWallLayout,
+    plane: WallPlane,
     stiffness: DMatrix<f64>,
     load_slots: Vec<DVector<f64>>,
     beam_load_slots: Vec<Vec<[f64; 6]>>,
@@ -366,7 +367,7 @@ pub struct StudWall {
     committed_q: ArrayVec<f64, MAX_WALL_PIERS>,
 }
 
-impl StudWall {
+impl StudWall<NodeId> {
     /// Builds and condenses the wall. `corners` are `[c0, c1, c2, c3]`, counter-clockwise from bottom-left;
     /// `loads[k]` are the top-plate loads of slot `k`. Fails with [`StudWallError`] for an invalid layout,
     /// station or load, a reused node, or a singular internal stiffness. Corner geometry is checked later,
@@ -376,6 +377,18 @@ impl StudWall {
         stations: Vec<WallStation>,
         layout: StudWallLayout,
         loads: [Vec<WallLoad>; WALL_SLOTS],
+    ) -> Result<Self, StudWallError> {
+        Self::build(corners, stations, layout, loads, WallPlane::Planar)
+    }
+}
+
+impl<K: NodeKey> StudWall<K> {
+    fn build(
+        corners: [K; 4],
+        stations: Vec<WallStation<K>>,
+        layout: StudWallLayout,
+        loads: [Vec<WallLoad>; WALL_SLOTS],
+        plane: WallPlane,
     ) -> Result<Self, StudWallError> {
         validate_layout(&layout, &stations)?;
         let is_nonlinear = layout
@@ -720,9 +733,13 @@ impl StudWall {
         Ok(Self {
             corners,
             stations,
-            exterior_dofs: nodes.iter().flat_map(|&id| [(id, 0), (id, 1)]).collect(),
+            exterior_dofs: nodes
+                .iter()
+                .flat_map(|&id| plane.slots().into_iter().map(move |s| (id, s)))
+                .collect(),
             nodes,
             layout,
+            plane,
             stiffness: kc,
             load_slots,
             beam_load_slots,
@@ -747,282 +764,176 @@ impl StudWall {
             committed_q: ArrayVec::new(),
         })
     }
-    pub fn nodes(&self) -> &[NodeId] {
+    pub fn nodes(&self) -> &[K] {
         &self.nodes
     }
     pub fn layout(&self) -> &StudWallLayout {
         &self.layout
     }
-    pub fn stations(&self) -> &[WallStation] {
+    pub fn stations(&self) -> &[WallStation<K>] {
         &self.stations
     }
     pub fn dof_mask(&self) -> DofMask {
-        DofMask::none().with(0).with(1)
+        self.plane
+            .slots()
+            .into_iter()
+            .fold(DofMask::none(), |m, s| m.with(s as usize))
     }
     pub fn accepts_load(&self, load: &ElementLoad) -> bool {
         !load.has_beam() && !load.has_body() && !load.has_edge()
     }
-    pub fn validate(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> Result<(), &'static str> {
+    pub fn validate<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> Result<(), &'static str> {
         let p = self.corners.map(|id| nodes.get(id).coords);
-        let dx = [p[1][0] - p[0][0], p[1][1] - p[0][1]];
-        let dy = [p[3][0] - p[0][0], p[3][1] - p[0][1]];
-        let l = dx[0].hypot(dx[1]);
-        let h = dy[0].hypot(dy[1]);
+        let map = self.plane.map(p[0], p[1]);
+        let l = self.layout.length;
+        let h = self.layout.height;
         let tol = 1e-9 * self.layout.length.max(self.layout.height).max(1.);
-        if (l - self.layout.length).abs() > tol || (h - self.layout.height).abs() > tol {
-            return Err("corner lengths do not match layout L and H");
+        let expected = [(0., 0.), (l, 0.), (l, h), (0., h)];
+        for (i, point) in p.iter().enumerate() {
+            let (x, y, off) = map.point(point);
+            if off
+                .abs()
+                .max((x - expected[i].0).abs())
+                .max((y - expected[i].1).abs())
+                > tol
+            {
+                return Err(if i == 1 || i == 3 {
+                    "corner lengths do not match layout L and H"
+                } else {
+                    "corner geometry is not a counter-clockwise rectangle"
+                });
+            }
         }
-        if (dx[0] * dy[0] + dx[1] * dy[1]).abs() > tol * l.max(h) {
-            return Err("corner rectangle is not orthogonal");
+        if NDIM == 3 {
+            let dx = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+            if dx[1].abs() > tol || (dx[0] * map.ex[0] + dx[2] * map.ex[2] - l).abs() > tol {
+                return Err("corner lengths do not match layout L and H");
+            }
         }
-        if ((p[2][0] - p[1][0]) - dy[0]).hypot((p[2][1] - p[1][1]) - dy[1]) > tol
-            || ((p[2][0] - p[3][0]) - dx[0]).hypot((p[2][1] - p[3][1]) - dx[1]) > tol
-        {
-            return Err("corner geometry is not a counter-clockwise rectangle");
-        }
-        let ux = [dx[0] / l, dx[1] / l];
-        let uy = [-ux[1], ux[0]];
         for s in &self.stations {
             let q = nodes.get(s.node).coords;
-            let x = (q[0] - p[0][0]) * ux[0] + (q[1] - p[0][1]) * ux[1];
-            let y = (q[0] - p[0][0]) * uy[0] + (q[1] - p[0][1]) * uy[1];
+            let (x, y, off) = map.point(&q);
             let target = if s.chord == WallChord::Top {
                 self.layout.height
             } else {
                 0.
             };
-            if (x - s.x).abs() > tol || (y - target).abs() > tol {
+            if (x - s.x).abs().max((y - target).abs()).max(off.abs()) > tol {
                 return Err("station does not lie at its declared chord location");
             }
         }
         Ok(())
     }
-    pub fn assemble_tangent<S: TangentSink<NodeId>>(
+    pub fn assemble_tangent<const NDIM: usize, const NDOF: usize, S: TangentSink<K>>(
         &self,
-        nodes: &NodeView<'_, 2, 3, NodeId>,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
         _load: Option<&ElementLoad>,
         sink: &mut S,
     ) {
-        let n = self.nodes.len() * 2;
-        let mut ug = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
-        let mut r = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
-        let (c, s) = self.frame(nodes);
+        let map = self.frame(nodes);
+        let mut u = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
+        for &id in &self.nodes {
+            u.extend(map.local(&nodes.get(id).displacement));
+        }
+        let n = self.nodes.len() * map.slots.len();
+        let p = self.piers.len();
+        let owned = self.prepared.is_none().then(|| self.prepared_for(&map));
+        let prepared = self
+            .prepared
+            .as_ref()
+            .unwrap_or_else(|| &owned.as_ref().unwrap().0);
+        let prepared_nonlinear = self
+            .prepared_nonlinear
+            .as_ref()
+            .or_else(|| owned.as_ref().and_then(|data| data.1.as_ref()));
+        let mut gd = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
         for &id in &self.nodes {
             let d = nodes.get(id).displacement;
-            ug.push(c * d[0] + s * d[1]);
-            ug.push(-s * d[0] + c * d[1]);
+            gd.extend(map.slots.iter().map(|&slot| d[slot as usize]));
         }
-        if let Some(cache) = &self.nonlinear {
-            let trial = self.nonlinear_trial(ug.as_slice(), _load);
-            let mut q = ArrayVec::<f64, MAX_WALL_PIERS>::new();
-            let mut m = ArrayVec::<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>::new();
-            if let Some((_, trial_q, trial_m)) = trial {
-                q = trial_q;
-                m = trial_m;
-            } else {
-                q.extend((0..self.piers.len()).map(|_| f64::NAN));
-                m.extend((0..self.piers.len() * self.piers.len()).map(|_| f64::NAN));
-            }
-            let p = self.piers.len();
-            let mut rl = ArrayVec::<f64, MAX_NONLINEAR_EXTERIOR_DOFS>::new();
-            for i in 0..n {
-                let mut v = (0..n).map(|j| self.stiffness[(i, j)] * ug[j]).sum::<f64>();
+        let trial = self.nonlinear_trial(u.as_slice(), _load);
+        let mut q = ArrayVec::<f64, MAX_WALL_PIERS>::new();
+        let mut m = ArrayVec::<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>::new();
+        if let Some((_, tq, tm)) = trial {
+            q = tq;
+            m = tm;
+        } else if self.nonlinear.is_some() {
+            q.extend((0..p).map(|_| f64::NAN));
+            m.extend((0..p * p).map(|_| f64::NAN));
+        }
+        let mut rg = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
+        for i in 0..n {
+            let mut v = (0..n)
+                .map(|j| prepared.stiffness[i * n + j] * gd[j])
+                .sum::<f64>();
+            if let Some(c) = prepared_nonlinear {
                 for a in 0..p {
-                    v += cache.coupling[(i, a)] * q[a];
+                    v += c.coupling[i * p + a] * q[a];
                 }
-                rl.push(v);
             }
+            rg.push(v);
+        }
+        if self.nonlinear.is_some() {
+            let c = prepared_nonlinear.expect("prepared nonlinear wall data");
             let mut kg = ArrayVec::<
                 f64,
                 { MAX_NONLINEAR_EXTERIOR_DOFS * MAX_NONLINEAR_EXTERIOR_DOFS },
             >::new();
-            kg.extend((0..n * n).map(|_| 0.));
-            if let Some(prepared) = &self.prepared_nonlinear {
-                for i in 0..n {
-                    for j in 0..n {
-                        let mut v = prepared.stiffness[i * n + j];
-                        for a in 0..p {
-                            for b in 0..p {
-                                v += prepared.coupling[i * p + a]
-                                    * m[a * p + b]
-                                    * prepared.strain_map[b * n + j];
-                            }
-                        }
-                        kg[i * n + j] = v;
-                    }
-                }
-            } else {
-                let t = [[c, s], [-s, c]];
-                for ni in 0..self.nodes.len() {
-                    for gi in 0..2 {
-                        let row = 2 * ni + gi;
-                        for nj in 0..self.nodes.len() {
-                            for gj in 0..2 {
-                                let col = 2 * nj + gj;
-                                let mut v = 0.;
-                                for (li, tli) in t.iter().enumerate() {
-                                    for (lj, tlj) in t.iter().enumerate() {
-                                        v += tli[gi]
-                                            * self.stiffness[(2 * ni + li, 2 * nj + lj)]
-                                            * tlj[gj];
-                                    }
-                                }
-                                for a in 0..p {
-                                    for b in 0..p {
-                                        let mut cg = 0.;
-                                        let mut sg = 0.;
-                                        for (li, tli) in t.iter().enumerate() {
-                                            cg += tli[gi] * cache.coupling[(2 * ni + li, a)];
-                                        }
-                                        for (lj, tlj) in t.iter().enumerate() {
-                                            sg += cache.strain_map[(b, 2 * nj + lj)] * tlj[gj];
-                                        }
-                                        v += cg * m[a * p + b] * sg;
-                                    }
-                                }
-                                kg[row * n + col] = v;
-                            }
-                        }
-                    }
-                }
-            }
-            let t = [[c, s], [-s, c]];
-            for ni in 0..self.nodes.len() {
-                r.push(t[0][0] * rl[2 * ni] + t[1][0] * rl[2 * ni + 1]);
-                r.push(t[0][1] * rl[2 * ni] + t[1][1] * rl[2 * ni + 1]);
-            }
-            sink.add_dyn(&self.exterior_dofs, &kg, &r);
-            return;
-        }
-        if let Some(prepared) = &self.prepared {
             for i in 0..n {
-                r.push((0..n).map(|j| prepared.stiffness[i * n + j] * ug[j]).sum());
-            }
-            sink.add_dyn(&self.exterior_dofs, &prepared.stiffness, &r);
-            return;
-        }
-        let mut kg = vec![0.; n * n];
-        let t = [[c, s], [-s, c]];
-        for ni in 0..self.nodes.len() {
-            for nj in 0..self.nodes.len() {
-                for gi in 0..2 {
-                    for gj in 0..2 {
-                        let mut v = 0.;
-                        for li in 0..2 {
-                            for lj in 0..2 {
-                                v += t[li][gi]
-                                    * self.stiffness[(2 * ni + li, 2 * nj + lj)]
-                                    * t[lj][gj];
-                            }
+                for j in 0..n {
+                    let mut v = prepared.stiffness[i * n + j];
+                    for a in 0..p {
+                        for b in 0..p {
+                            v += c.coupling[i * p + a] * m[a * p + b] * c.strain_map[b * n + j];
                         }
-                        kg[(2 * ni + gi) * n + 2 * nj + gj] = v;
                     }
+                    kg.push(v);
                 }
             }
+            sink.add_dyn(&self.exterior_dofs, &kg, &rg);
+        } else {
+            sink.add_dyn(&self.exterior_dofs, &prepared.stiffness, &rg);
         }
-        for i in 0..n {
-            r.push((0..n).map(|j| kg[i * n + j] * ug[j]).sum());
-        }
-        sink.add_dyn(&self.exterior_dofs, &kg, &r);
     }
-    pub fn assemble_load<S: VectorSink<NodeId>>(
+    pub fn assemble_load<const NDIM: usize, const NDOF: usize, S: VectorSink<K>>(
         &self,
-        nodes: &NodeView<'_, 2, 3, NodeId>,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
         load: Option<&ElementLoad>,
         sink: &mut S,
     ) {
         let Some(load) = load else { return };
-        let n = self.nodes.len() * 2;
-        if let Some(prepared) = &self.prepared {
-            let mut f = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
-            for _ in 0..n {
-                f.push(0.);
-            }
-            for k in 0..WALL_SLOTS {
-                for (i, value) in f.iter_mut().enumerate() {
-                    *value += load.wall[k] * prepared.loads[k][i];
-                }
-            }
-            sink.add_dyn(&self.exterior_dofs, &f);
-            return;
-        }
-        let (c, s) = self.frame(nodes);
-        let mut f = vec![0.; n];
+        let map = self.frame(nodes);
+        let owned = self.prepared.is_none().then(|| self.prepared_for(&map));
+        let prepared = self
+            .prepared
+            .as_ref()
+            .unwrap_or_else(|| &owned.as_ref().unwrap().0);
+        let mut f = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
+        f.extend((0..self.nodes.len() * map.slots.len()).map(|_| 0.));
         for k in 0..WALL_SLOTS {
-            for (i, value) in f.iter_mut().enumerate() {
-                *value += load.wall[k] * self.load_slots[k][i];
+            for (i, v) in f.iter_mut().enumerate() {
+                *v += load.wall[k] * prepared.loads[k][i];
             }
-        }
-        for i in 0..self.nodes.len() {
-            let x = f[2 * i];
-            let y = f[2 * i + 1];
-            f[2 * i] = c * x - s * y;
-            f[2 * i + 1] = s * x + c * y;
         }
         sink.add_dyn(&self.exterior_dofs, &f);
     }
-    pub fn prepare(&mut self, nodes: &NodeView<'_, 2, 3, NodeId>) {
-        let n = self.nodes.len() * 2;
-        let (c, s) = self.frame(nodes);
-        let t = [[c, s], [-s, c]];
-        let mut stiffness = vec![0.; n * n];
-        let mut loads = Vec::with_capacity(WALL_SLOTS);
-        for ni in 0..self.nodes.len() {
-            for nj in 0..self.nodes.len() {
-                for gi in 0..2 {
-                    for gj in 0..2 {
-                        let mut value = 0.;
-                        for li in 0..2 {
-                            for lj in 0..2 {
-                                value += t[li][gi]
-                                    * self.stiffness[(2 * ni + li, 2 * nj + lj)]
-                                    * t[lj][gj];
-                            }
-                        }
-                        stiffness[(2 * ni + gi) * n + 2 * nj + gj] = value;
-                    }
-                }
-            }
-        }
-        for local in &self.load_slots {
-            let mut global = vec![0.; n];
-            for i in 0..self.nodes.len() {
-                let x = local[2 * i];
-                let y = local[2 * i + 1];
-                global[2 * i] = c * x - s * y;
-                global[2 * i + 1] = s * x + c * y;
-            }
-            loads.push(global);
-        }
-        self.prepared_nonlinear = self.nonlinear.as_ref().map(|cache| {
-            let p = self.piers.len();
-            let mut coupling = vec![0.; n * p];
-            let mut strain_map = vec![0.; p * n];
-            for ni in 0..self.nodes.len() {
-                for gi in 0..2 {
-                    for a in 0..p {
-                        coupling[(2 * ni + gi) * p + a] = t[0][gi] * cache.coupling[(2 * ni, a)]
-                            + t[1][gi] * cache.coupling[(2 * ni + 1, a)];
-                    }
-                }
-            }
-            for a in 0..p {
-                for ni in 0..self.nodes.len() {
-                    for gj in 0..2 {
-                        strain_map[a * n + 2 * ni + gj] = cache.strain_map[(a, 2 * ni)] * t[0][gj]
-                            + cache.strain_map[(a, 2 * ni + 1)] * t[1][gj];
-                    }
-                }
-            }
-            PreparedNonlinear {
-                stiffness: stiffness.clone(),
-                coupling,
-                strain_map,
-            }
-        });
-        self.prepared = Some(PreparedAssembly { stiffness, loads });
+    pub fn prepare<const NDIM: usize, const NDOF: usize>(
+        &mut self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) {
+        let map = self.frame(nodes);
+        let (prepared, nonlinear) = self.prepared_for(&map);
+        self.prepared = Some(prepared);
+        self.prepared_nonlinear = nonlinear;
     }
-    pub fn commit(&mut self, nodes: &NodeView<'_, 2, 3, NodeId>, load: Option<&ElementLoad>) {
+    pub fn commit<const NDIM: usize, const NDOF: usize>(
+        &mut self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+        load: Option<&ElementLoad>,
+    ) {
         if self.nonlinear.is_none() {
             return;
         }
@@ -1049,7 +960,10 @@ impl StudWall {
     }
     /// Nonlinear wall resistance uses the pier flows cached by `commit`, matching the load state
     /// passed to that commit; `element_end_force` subtracts slot loads separately.
-    pub fn local_force(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> ElementForce {
+    pub fn local_force<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> ElementForce {
         let u = self.local_displacement(nodes);
         if self.nonlinear.is_some() {
             let mut r = &self.stiffness * &u;
@@ -1064,9 +978,9 @@ impl StudWall {
         }
         ElementForce::from_vec((&self.stiffness * u).as_slice().to_vec())
     }
-    pub fn local_load_force(
+    pub fn local_load_force<const NDIM: usize, const NDOF: usize>(
         &self,
-        _nodes: &NodeView<'_, 2, 3, NodeId>,
+        _nodes: &NodeView<'_, NDIM, NDOF, K>,
         load: Option<&ElementLoad>,
     ) -> ElementForce {
         let n = self.nodes.len() * 2;
@@ -1083,9 +997,9 @@ impl StudWall {
     /// Recovered internal response at the nodes' current state, with `load` the effective slot factors (use
     /// `Domain::element_stud_wall_response`, which supplies them). Nonlinear laws are evaluated from their
     /// committed state, so after a committed step this is the committed response.
-    pub fn response(
+    pub fn response<const NDIM: usize, const NDOF: usize>(
         &self,
-        nodes: &NodeView<'_, 2, 3, NodeId>,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
         load: Option<&ElementLoad>,
     ) -> StudWallResponse {
         let ue = self.local_displacement(nodes);
@@ -1343,21 +1257,44 @@ impl StudWall {
             .map(|(i, _)| q[i])
             .sum()
     }
-    fn frame(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> (f64, f64) {
+    fn frame<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> PlaneMap {
         let a = nodes.get(self.corners[0]).coords;
         let b = nodes.get(self.corners[1]).coords;
-        let l = (b[0] - a[0]).hypot(b[1] - a[1]);
-        ((b[0] - a[0]) / l, (b[1] - a[1]) / l)
+        self.plane.map(a, b)
     }
-    fn local_displacement(&self, nodes: &NodeView<'_, 2, 3, NodeId>) -> DVector<f64> {
-        let (c, s) = self.frame(nodes);
+    fn local_displacement<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> DVector<f64> {
+        let map = self.frame(nodes);
         DVector::from_iterator(
             self.nodes.len() * 2,
             self.nodes.iter().flat_map(|id| {
                 let d = nodes.get(*id).displacement;
-                [c * d[0] + s * d[1], -s * d[0] + c * d[1]]
+                map.local(&d)
             }),
         )
+    }
+
+    fn prepared_for(&self, map: &PlaneMap) -> (PreparedAssembly, Option<PreparedNonlinear>) {
+        let stiffness = map.to_global_matrix(&self.stiffness, self.nodes.len());
+        let loads = self
+            .load_slots
+            .iter()
+            .map(|f| map.to_global_vector(f.as_slice(), self.nodes.len()))
+            .collect();
+        let nonlinear = self.nonlinear.as_ref().map(|cache| {
+            let coupling = map.to_global_cols(&cache.coupling, self.nodes.len());
+            let strain_map = map.from_global_rows(&cache.strain_map, self.nodes.len());
+            PreparedNonlinear {
+                coupling,
+                strain_map,
+            }
+        });
+        (PreparedAssembly { stiffness, loads }, nonlinear)
     }
 
     fn nonlinear_trial(
@@ -1463,6 +1400,27 @@ impl StudWall {
             }
         }
         None
+    }
+}
+
+impl StudWall<Node3Id> {
+    /// Builds a 3D wall in a vertical plane with global Y up.
+    pub fn new3(
+        corners: [Node3Id; 4],
+        stations: Vec<WallStation<Node3Id>>,
+        layout: StudWallLayout,
+        loads: [Vec<WallLoad>; WALL_SLOTS],
+        plane: WallPlane,
+    ) -> Result<Self, StudWallError> {
+        let plane = match plane {
+            WallPlane::Planar => {
+                return Err(StudWallError(
+                    "3D stud wall requires a vertical wall plane".into(),
+                ))
+            }
+            WallPlane::Vertical { ex, ez } => WallPlane::vertical(ex, ez).map_err(StudWallError)?,
+        };
+        Self::build(corners, stations, layout, loads, plane)
     }
 }
 
@@ -1698,7 +1656,10 @@ fn dedup_x(xs: &mut Vec<f64>, l: f64) {
     xs.sort_by(f64::total_cmp);
     xs.dedup_by(|a, b| (*a - *b).abs() < 1e-12 * l.max(1.));
 }
-fn validate_layout(l: &StudWallLayout, stations: &[WallStation]) -> Result<(), StudWallError> {
+fn validate_layout<K: NodeKey>(
+    l: &StudWallLayout,
+    stations: &[WallStation<K>],
+) -> Result<(), StudWallError> {
     for (name, v) in [
         ("L", l.length),
         ("H", l.height),
@@ -1839,15 +1800,15 @@ fn validate_layout(l: &StudWallLayout, stations: &[WallStation]) -> Result<(), S
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
-fn make_chord_nodes(
+fn make_chord_nodes<K: NodeKey>(
     model: &mut FrameBuild,
     xs: &[f64],
     y: f64,
     chord: WallChord,
     nslot: usize,
-    corners: &[NodeId; 4],
-    stations: &[WallStation],
-    nodes: &[NodeId],
+    corners: &[K; 4],
+    stations: &[WallStation<K>],
+    nodes: &[K],
 ) -> Vec<(f64, [usize; 3])> {
     xs.iter()
         .map(|&x| {

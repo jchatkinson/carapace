@@ -1928,6 +1928,35 @@ impl Domain {
 /// coordinate/rotation set (`Axis3`, and a rotation-about-`normal` dof)
 /// that only the spatial profile's `Node3`/`SpatialDof` provide.
 impl Domain3 {
+    /// Recovered local response for a 3D stud wall, with wall-slot factors active at `pseudo_time`.
+    pub fn element_stud_wall_response(
+        &self,
+        id: crate::model::Element3Id,
+        pseudo_time: f64,
+    ) -> Option<StudWallResponse> {
+        let Element3::StudWall(wall) = self.elements.get(id)? else {
+            return None;
+        };
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        let load3 = effective_element_load(&active, id);
+        let load = load3.map(|l| crate::model::ElementLoad {
+            wall: l.wall,
+            ..Default::default()
+        });
+        Some(wall.response(&self.node_view(), load.as_ref()))
+    }
+
+    /// Recovered floor-band shear and rim forces at the current 3D state.
+    pub fn element_floor_band_response(
+        &self,
+        id: crate::model::Element3Id,
+    ) -> Option<FloorBandResponse> {
+        let Element3::FloorBand(band) = self.elements.get(id)? else {
+            return None;
+        };
+        Some(band.response(&self.node_view()))
+    }
+
     /// `rigid_diaphragm_about` with `normal = Axis3::Y` — the "up" axis in
     /// this crate's y-up global convention,
     /// so the diaphragm plane is the horizontal `x`-`z` plane: the common
