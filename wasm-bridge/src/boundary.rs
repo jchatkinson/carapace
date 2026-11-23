@@ -13,6 +13,7 @@
 use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
+use carapace_input::building::{self, BuildingSpec, ExpandOptions, Expansion, UpAxis};
 use carapace_input::input_v1::{self, CarapaceInputV1};
 use carapace_input::material_probe::{
     MaterialProbe, MaterialProbeConfig, MaterialProbeError, MaterialProbeResponse,
@@ -116,6 +117,34 @@ impl WasmSession {
     pub fn current_stage_id(&self) -> Option<String> {
         self.0.current_stage_id().map(str::to_owned)
     }
+}
+
+/// Expands a `BuildingSpec` into an ordinary `CarapaceInputV1` (without a sequence) and the index map of what was
+/// generated (`{ input, map }`, see `building::expand` and `docs/building.md`). `up` is `"y"` (plan x-z, the
+/// default convention) or `"z"` (plan x-y, elevations along +Z). Rejects with `{ kind: "invalidBuilding", reason }`.
+#[wasm_bindgen(js_name = expandBuilding)]
+pub fn expand_building(spec: Ts<BuildingSpec>, up: Ts<UpAxis>) -> Result<Ts<Expansion>, JsValue> {
+    let spec: BuildingSpec = spec
+        .to_rust()
+        .map_err(|error| JsValue::from_str(&format!("malformed BuildingSpec: {error}")))?;
+    let up: UpAxis = up.to_rust().map_err(|error| {
+        JsValue::from_str(&format!("malformed up axis (\"y\" or \"z\"): {error}"))
+    })?;
+    let expansion = building::expand(&spec, &ExpandOptions { up }).map_err(|error| {
+        #[derive(serde::Serialize)]
+        struct Detail<'a> {
+            kind: &'a str,
+            reason: String,
+        }
+        serde_wasm_bindgen::to_value(&Detail {
+            kind: "invalidBuilding",
+            reason: error.to_string(),
+        })
+        .unwrap_or_else(|_| JsValue::from_str(&error.to_string()))
+    })?;
+    expansion
+        .into_ts()
+        .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
 fn to_js_error(error: input_v1::DecodeError) -> JsValue {

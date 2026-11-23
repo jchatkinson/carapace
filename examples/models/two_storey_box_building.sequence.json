@@ -1,0 +1,17 @@
+{
+  "stages": [
+    {
+      "kind": "static",
+      "id": "lateral",
+      "steps": 1,
+      "integrator": { "kind": "loadControl", "increment": 1 },
+      "algorithm": { "kind": "linear" },
+      "convergence": { "kind": "normUnbalance", "tol": 1e-8, "maxIter": 10 },
+      "holdPatternsAfter": []
+    }
+  ],
+  "recorders": [
+    { "response": "studWallPier", "elementKind": "studWall", "elementIndex": 4, "pier": 0, "quantity": "q" },
+    { "response": "nodeDifference", "node": 53, "otherNode": 52, "dof": 4 }
+  ]
+}

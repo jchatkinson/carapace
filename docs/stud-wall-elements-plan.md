@@ -1,6 +1,6 @@
 # Plan: stud walls as ordinary elements (Carapace and PySees)
 
-Status: C1, C2 and C3 complete; C4 and P1–P5 proposed, 2026-11-23. Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
+Status: C1–C4 complete; P1–P5 proposed, 2026-11-23. Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
 approach.
 
 ## Why
@@ -90,7 +90,7 @@ groups each (pattern, wall) pair's `wallLoad` rows and floor reactions into one 
 pair, so it never produces `MIXED`. `FloorLoad::slot` stays a generic case index (`wall_loads` returns a map). The
 building builder keeps its wire format and makes one pattern per used slot.
 
-**C4. Building as an expansion.** `building::expand(&BuildingSpec) -> CarapaceInputV1` (explicit tables, walls on
+**C4. Building as an expansion (done).** `building::expand(&BuildingSpec) -> CarapaceInputV1` (explicit tables, walls on
 the storey grid with floor zones, anchorage zeroLengths, rigid diaphragm rows or flexible-diaphragm loads, one
 pattern per load case, plus an `up` axis option so PySees gets Z-up). Native API, `carapace expand` in the CLI, and
 `expandBuilding` in wasm. The decoder drops the `building` table, `buildingWithTables` and the building recorders

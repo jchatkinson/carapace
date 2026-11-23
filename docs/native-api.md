@@ -10,6 +10,7 @@ over `carapace-input`. Plan and rationale: [native-api-plan.md](native-api-plan.
 cargo run -p carapace-cli -- validate examples/models/portal_frame_2d.json
 cargo run -p carapace-cli -- run examples/models/portal_frame_2d.json [--out report.json] [--progress] [--pretty]
 cargo run -p carapace-cli -- schema > carapace-input.schema.json
+cargo run -p carapace-cli -- expand examples/models/two_storey_box_building.spec.json [--up y|z] [--sequence seq.json] [--model-only]
 ```
 
 - Input is a file or `-` for stdin. stdout is always one JSON document.
@@ -22,7 +23,17 @@ cargo run -p carapace-cli -- schema > carapace-input.schema.json
   `totalSteps`, `recorders` (per recorder and stage: `(pseudoTime, value)` samples), `bulk`, `limitHistory`,
   `stepDiagnostics`, `modal`. `--progress` writes one JSON line per slice to stderr.
 - `schema` prints the JSON Schema (draft 2020-12) generated from the Rust types (`schema` feature of
-  `carapace-input`).
+  `carapace-input`); `schema --building` prints the one of the building spec that `expand` reads.
+- `expand` reads a `BuildingSpec` and prints `{"input": CarapaceInputV1, "map": ExpansionMap}`: the explicit model the
+  building expands to (see [building.md](building.md)) and where its walls, links, master nodes and load patterns are.
+  `--up z` makes Z the vertical axis (default `y`). `--sequence seq.json` puts a `SequenceSpec` in `input.sequence`
+  (its recorders address the map's rows; without it the sequence is empty and the model needs a stage before it
+  decodes), and `--model-only` prints just `input`, which `carapace run` accepts. A spec the builder rejects reports
+  `{"valid": false, "errors": [{"stage": "expand", "detail": message}]}` and exits 1; a JSON mismatch is `stage: "parse"`
+  with the path. The committed `examples/models/two_storey_box_building.json` is generated with
+  `expand two_storey_box_building.spec.json --sequence two_storey_box_building.sequence.json --model-only --pretty -o ...`
+  (the `committed_example_model_is_the_expansion` test fails when it is stale). The `*.spec.json` and `*.sequence.json`
+  files are inputs of `expand`, not models.
 
 Examples live in `examples/models/` and are run by the `bundled_example_models_run` test, so they stay valid.
 

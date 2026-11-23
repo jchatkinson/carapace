@@ -480,8 +480,9 @@ Not modelled, or not yet available:
   (segmented design only).
 - Nonlinear or hysteretic framing members; staged sheathing installation.
 - Internal hold-downs, tension-only bearing and slip inside the element: use exterior `ZeroLength`s.
-- The automatic stacked building builder is available through the 3D `building` wire field and CLI; PySees does
-  not emit that field ([building.md](building.md)).
+- The automatic stacked building builder is an explicit expansion (`building::expand`, `carapace expand`,
+  `expandBuilding` in wasm) that returns an ordinary model; the wire format has no `building` table
+  ([building.md](building.md)).
 - Unilateral interior-stud bearing (uplift of interior studs).
 - Automatic station generation.
 - O86 gypsum `e_n`, unblocked `J_us` and the no-hold-down `d_a` equation (11.7.1.2); SDPWS's nail-slip form.

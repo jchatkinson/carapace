@@ -166,7 +166,7 @@ decisions, no longer maintained as living specs.
 
 ## Native use (CLI, Python, threads)
 
-The same engine also runs natively, without a browser: `carapace validate|run|batch|schema` takes the JSON
+The same engine also runs natively, without a browser: `carapace validate|run|batch|schema|expand` takes the JSON
 model and prints JSON; the Python package `carapace-fe` (`py/`) offers OpenSeesPy-style commands
 (`ops.node(...)`, `ops.element(...)`, `ops.analyze(n)`, `ops.nodeDisp(...)`) over the same engine, with
 numpy results and `run_many` for concurrent models. An optional `parallel` feature threads the element
@@ -181,7 +181,7 @@ carapace/
 │                    compiles and tests identically on native and wasm32 targets.
 ├── input/           # carapace-input: wire format, input decoding, session API, probes (native + wasm)
 ├── wasm-bridge/     # carapace-wasm: the wasm-bindgen glue over carapace-input
-├── cli/             # carapace-cli: the `carapace` binary (validate, run, batch, schema)
+├── cli/             # carapace-cli: the `carapace` binary (validate, run, batch, schema, expand)
 ├── py/              # carapace-fe: Python package (PyO3), OpenSeesPy-style commands (its own Cargo workspace)
 └── docs/
     ├── architecture.md             # domain model, element interface, how to extend

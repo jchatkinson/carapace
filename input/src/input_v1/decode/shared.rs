@@ -899,18 +899,6 @@ where
                 }
             };
             Ok(match recorder.clone() {
-                RecorderSpec::BuildingStoreyDrift { .. } => {
-                    return Err(DecodeError::RecorderNotApplicable {
-                        recorder: index as u32,
-                        reason: "buildingStoreyDrift needs a rigid building input",
-                    })
-                }
-                RecorderSpec::BuildingWallPier { .. } | RecorderSpec::BuildingWallBase { .. } => {
-                    return Err(DecodeError::RecorderNotApplicable {
-                        recorder: index as u32,
-                        reason: "buildingWallPier and buildingWallBase need a building input",
-                    });
-                }
                 RecorderSpec::StudWallBase {
                     element_kind,
                     element_index,

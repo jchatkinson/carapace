@@ -988,6 +988,25 @@ where
         }
     }
 
+    /// The decoded domain with every stage's loads registered (as they are once their stage has started), the
+    /// node handles in table order and the element handles by `(kind, row)`: for native callers that run their
+    /// own analysis on a decoded model (`building::build`).
+    pub(crate) fn into_loaded(mut self) -> LoadedModel<NDIM, NDOF, NId, E> {
+        let mut domain = self
+            .domain
+            .take()
+            .expect("domain held before the first stage");
+        for stage in &self.stages {
+            for &(pattern, node, dof, value) in &stage.pending_nodal_loads {
+                domain.add_nodal_load(pattern, node, dof, value);
+            }
+            for (pattern, element, load) in &stage.pending_element_loads {
+                domain.add_element_load(*pattern, *element, *load);
+            }
+        }
+        (domain, self.node_ids, self.locations)
+    }
+
     pub fn modal_results(&self) -> ModalResultsReport {
         ModalResultsReport {
             stages: self.modal_results.clone(),
@@ -1653,3 +1672,11 @@ where
         }
     }
 }
+
+/// A decoded domain with its loads registered, the node handles in table order and the element handles by
+/// `(kind, row)` (`ModelSession::into_loaded`).
+pub(crate) type LoadedModel<const NDIM: usize, const NDOF: usize, NId, E> = (
+    Domain<NDIM, NDOF, NId, E>,
+    Vec<NId>,
+    HashMap<<E as ElementOps<NDIM, NDOF, NId>>::Id, (ElementKind, u32)>,
+);

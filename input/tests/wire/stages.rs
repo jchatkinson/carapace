@@ -735,7 +735,8 @@ fn run_to_completion_matches_a_manual_advance_loop() {
     assert!(report.cancelled && !report.completed && report.total_steps == 0);
 }
 
-/// Every model under `examples/models` decodes and runs to completion.
+/// Every model under `examples/models` decodes and runs to completion (the `*.spec.json` building specs and
+/// `*.sequence.json` analysis sequences next to them are inputs of `carapace expand`, not models).
 #[test]
 fn bundled_example_models_run() {
     use carapace_input::input_v1::{CarapaceInputV1, RunOptions};
@@ -743,7 +744,11 @@ fn bundled_example_models_run() {
     let mut count = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "json") {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if !name.ends_with(".json")
+            || name.ends_with(".spec.json")
+            || name.ends_with(".sequence.json")
+        {
             continue;
         }
         let input: CarapaceInputV1 =

@@ -51,16 +51,6 @@ pub enum DecodeError {
         pier: u32,
         count: u32,
     },
-    /// A building wall name or storey does not exist.
-    UnknownBuildingWall {
-        recorder: u32,
-        storey: u32,
-        wall: String,
-    },
-    UnknownBuildingStorey {
-        recorder: u32,
-        storey: u32,
-    },
     /// A floor-band or diaphragm recorder's bay index is outside the element.
     InvalidRecorderBay {
         recorder: u32,
@@ -112,14 +102,6 @@ pub enum DecodeError {
     /// Floor gravity transfer rejected a floor row.
     InvalidFloorTransfer {
         row: u32,
-        reason: String,
-    },
-    /// A builder-generated building cannot be combined with explicit model tables.
-    BuildingWithTables {
-        table: &'static str,
-    },
-    /// The building specification failed native construction or combination validation.
-    InvalidBuilding {
         reason: String,
     },
     /// A shell section's constants are unusable.

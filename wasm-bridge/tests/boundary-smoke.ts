@@ -1,10 +1,10 @@
 // Run with Node 22.18+ after scripts/build-wasm.sh (tests the shipped build); also type-check against generated .d.ts.
 import { loadCarapace } from "../../comparison/load_wasm.mjs";
 import type {
-  AlgorithmSpec, BulkBatch, CarapaceInputV1, ContinuationDetail, DecodeError, IntegratorSpec, LimitSample, ModelOutput, SequenceSpec, StepOutcome,
+  AlgorithmSpec, BuildingSpec, BulkBatch, CarapaceInputV1, ContinuationDetail, DecodeError, Expansion, IntegratorSpec, LimitSample, ModelOutput, SequenceSpec, StepOutcome,
 } from "../../pkg/carapace_wasm.js";
 
-const { decodeInput } = await loadCarapace();
+const { decodeInput, expandBuilding } = await loadCarapace();
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -254,12 +254,12 @@ for (const ndm of [2, 3]) {
   session.free();
 }
 const badComponent = emptyInput(2);
-badComponent.sequence = { stages: [], recorders: [{ response: "elementLoad", elementKind: "truss", elementIndex: 0, component: 16 }] };
+badComponent.sequence = { stages: [], recorders: [{ response: "elementLoad", elementKind: "truss", elementIndex: 0, component: 18 }] };
 badComponent.nodes = { coords: [0, 0, 1, 0], fixed: [7, 6], massNodeIndex: [], mass: [] };
 badComponent.materials = [{ kind: "elastic", e: 1 }];
 badComponent.trusses = { nodeI: [0], nodeJ: [1], area: [1], material: [0], density: [0] };
 const componentError = expectThrow(() => decodeInput(badComponent)) as DecodeError;
-assert(componentError.kind === "invalidRecorderComponent" && componentError.width === 16, "recorder component bound");
+assert(componentError.kind === "invalidRecorderComponent" && componentError.width === 18, "recorder component bound");
 
 // Continuum elements: a two-quad patch under an edge traction, Gauss-point stress crossing the boundary.
 const continuum = emptyInput(2);
@@ -409,5 +409,45 @@ const badRebar = expectThrow(() => decodeInput({
 assert(badRebar.kind === "invalidMaterial" && badRebar.index === 0, "csfmRebar validation");
 const outsideBar = expectThrow(() => decodeInput({ ...csfm, embeddedBars: [{ polyline: [0, 500, 200, 500], area: 400, material: 0 }] })) as DecodeError;
 assert(outsideBar.kind === "invalidModel" && outsideBar.error.kind === "embeddedBarOutsideMesh", "bar outside the mesh");
+
+// expandBuilding: a one-storey box with a rigid diaphragm expands to an ordinary model plus a map, for either vertical
+// axis; the model decodes once a stage is appended, and the wall base shear is the applied 10 kN in both.
+{
+  const anchorage = { tension: 15000, slack: 0, bearing: { kind: "linear", k: 1e9 } } as const;
+  const wall = (name: string, start: [number, number], direction: [number, number]) => ({
+    name, start, direction, loads: [],
+    layout: {
+      length: 4000, height: 2440, studs: [{ x: 0, ea: 1e8 }, { x: 2000, ea: 1e8 }, { x: 4000, ea: 1e8 }],
+      topEa: 1e12, topEi: 1e12, topDistribution: "beam", bottomEa: 1e12, bottomEi: 1e12, openings: [],
+      sheathing: { law: { kind: "linear", ga: 1e7 } },
+    },
+  });
+  const spec: BuildingSpec = {
+    storeys: [{
+      wallHeight: 2440, floorDepth: 0, bandGa: 1e9, rimEa: 1e12, anchorage, bearing: 1e9,
+      walls: [wall("front", [0, 0], [1, 0]), wall("back", [0, 4000], [1, 0]), wall("left", [0, 0], [0, 1]), wall("right", [4000, 0], [0, 1])],
+      floors: [], lateral: [{ slot: 0, fx: 10000, fz: 0, at: [2000, 2000] }],
+    }],
+    foundationAnchorage: anchorage, diaphragm: "rigid",
+  } as BuildingSpec;
+  for (const up of ["y", "z"] as const) {
+    const { input, map }: Expansion = expandBuilding(spec, up);
+    assert(input.studWalls!.length === 4 && map.storeys[0].walls[0].name === "front" && map.storeys[0].master !== undefined, `expansion shape (${up})`);
+    assert(input.rigidDiaphragms!.normal![0] === (up === "y" ? "y" : "z"), "diaphragm normal follows the up axis");
+    const front = map.storeys[0].walls[0].element;
+    input.sequence = {
+      stages: [{ kind: "static", id: "lateral", steps: 1, integrator: { kind: "loadControl", increment: 1 }, algorithm: { kind: "linear" }, convergence: undefined, holdPatternsAfter: [] }],
+      recorders: [{ response: "studWallBase", elementKind: "studWall", elementIndex: front, component: "shear" }],
+    };
+    const session = decodeInput(input);
+    try {
+      const outcome: StepOutcome = session.advance(10);
+      assert(outcome.done && !outcome.error, "expanded building runs");
+      assert(Math.abs(Math.abs(outcome.recorderBatches[0].samples[0][1]) - 5000) < 1e-3, "each X wall takes half of the 10 kN");
+    } finally { session.free(); }
+  }
+  const bad = expectThrow(() => expandBuilding({ ...spec, storeys: [] }, "y")) as { kind: string; reason: string };
+  assert(bad.kind === "invalidBuilding" && bad.reason.includes("storey"), "expansion errors are structured");
+}
 
 console.log("Wasm boundary smoke passed: 2D and 3D, unified tables, continuum elements, shells, CSFM concrete/rebar/embedded bars, configurable static/transient solvers, arc length, defaults, errors.");

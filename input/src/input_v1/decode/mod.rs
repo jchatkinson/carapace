@@ -81,9 +81,6 @@ pub fn decode(input: CarapaceInputV1) -> Result<Session, DecodeError> {
             }
         }
     }
-    if input.header.ndm == 2 && input.building.is_some() {
-        return Err(DecodeError::TableNotInProfile { table: "building" });
-    }
     match input.header.ndm {
         2 => elements_2d::decode(input).map(Session::D2),
         3 => elements_3d::decode(input).map(Session::D3),

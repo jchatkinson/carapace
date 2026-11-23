@@ -2,432 +2,1240 @@
   "header": {
     "schemaVersion": 1,
     "ndm": 3,
-    "engineVersion": "0.1.0"
+    "engineVersion": "0.1.0",
+    "recordInitial": false
   },
-  "building": {
-    "storeys": [
-      {
-        "wallHeight": 2440,
-        "floorDepth": 254,
-        "bandGa": 1000000000.0,
-        "rimEa": 1000000000000.0,
-        "anchorage": {
-          "tension": 15000,
-          "slack": 0,
-          "bearing": {
-            "kind": "linear",
-            "k": 1000000000.0
-          }
-        },
-        "bearing": 1000000000.0,
-        "walls": [
-          {
-            "name": "front",
-            "start": [
-              0,
-              0
-            ],
-            "direction": [
-              1,
-              0
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          },
-          {
-            "name": "back",
-            "start": [
-              0,
-              4000
-            ],
-            "direction": [
-              1,
-              0
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          },
-          {
-            "name": "left",
-            "start": [
-              0,
-              0
-            ],
-            "direction": [
-              0,
-              1
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          },
-          {
-            "name": "right",
-            "start": [
-              4000,
-              0
-            ],
-            "direction": [
-              0,
-              1
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          }
-        ],
-        "floors": [],
-        "lateral": [
-          {
-            "slot": 0,
-            "fx": 10000,
-            "fz": 0,
-            "at": [
-              2000,
-              2000
-            ]
-          }
-        ]
-      },
-      {
-        "wallHeight": 2440,
-        "floorDepth": 0,
-        "bandGa": 1000000000.0,
-        "rimEa": 1000000000000.0,
-        "anchorage": {
-          "tension": 15000,
-          "slack": 0,
-          "bearing": {
-            "kind": "linear",
-            "k": 1000000000.0
-          }
-        },
-        "bearing": 1000000000.0,
-        "walls": [
-          {
-            "name": "front",
-            "start": [
-              0,
-              0
-            ],
-            "direction": [
-              1,
-              0
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          },
-          {
-            "name": "back",
-            "start": [
-              0,
-              4000
-            ],
-            "direction": [
-              1,
-              0
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          },
-          {
-            "name": "left",
-            "start": [
-              0,
-              0
-            ],
-            "direction": [
-              0,
-              1
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          },
-          {
-            "name": "right",
-            "start": [
-              4000,
-              0
-            ],
-            "direction": [
-              0,
-              1
-            ],
-            "layout": {
-              "length": 4000,
-              "height": 2440,
-              "studs": [
-                {
-                  "x": 0,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 2000,
-                  "ea": 100000000.0
-                },
-                {
-                  "x": 4000,
-                  "ea": 100000000.0
-                }
-              ],
-              "topEa": 1000000000000.0,
-              "topEi": 1000000000000.0,
-              "topDistribution": "beam",
-              "bottomEa": 1000000000000.0,
-              "bottomEi": 1000000000000.0,
-              "openings": [],
-              "sheathing": {
-                "law": {
-                  "kind": "linear",
-                  "ga": 10000000.0
-                }
-              },
-              "foundation": false
-            },
-            "loads": []
-          }
-        ],
-        "floors": [],
-        "lateral": [
-          {
-            "slot": 0,
-            "fx": 10000,
-            "fz": 0,
-            "at": [
-              2000,
-              2000
-            ]
-          }
-        ]
-      }
+  "nodes": {
+    "coords": [
+      0.0,
+      0.0,
+      0.0,
+      4000.0,
+      0.0,
+      0.0,
+      4000.0,
+      2694.0,
+      0.0,
+      0.0,
+      2694.0,
+      0.0,
+      2000.0,
+      2694.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4000.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4000.0,
+      4000.0,
+      0.0,
+      4000.0,
+      4000.0,
+      2694.0,
+      4000.0,
+      0.0,
+      2694.0,
+      4000.0,
+      2000.0,
+      2694.0,
+      4000.0,
+      0.0,
+      0.0,
+      4000.0,
+      4000.0,
+      0.0,
+      4000.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4000.0,
+      0.0,
+      2694.0,
+      4000.0,
+      0.0,
+      2694.0,
+      0.0,
+      0.0,
+      2694.0,
+      2000.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      4000.0,
+      4000.0,
+      0.0,
+      0.0,
+      4000.0,
+      0.0,
+      4000.0,
+      4000.0,
+      2694.0,
+      4000.0,
+      4000.0,
+      2694.0,
+      0.0,
+      4000.0,
+      2694.0,
+      2000.0,
+      4000.0,
+      0.0,
+      0.0,
+      4000.0,
+      0.0,
+      4000.0,
+      0.0,
+      2694.0,
+      0.0,
+      4000.0,
+      2694.0,
+      0.0,
+      4000.0,
+      5134.0,
+      0.0,
+      0.0,
+      5134.0,
+      0.0,
+      2000.0,
+      5134.0,
+      0.0,
+      2000.0,
+      2694.0,
+      0.0,
+      0.0,
+      2694.0,
+      4000.0,
+      4000.0,
+      2694.0,
+      4000.0,
+      4000.0,
+      5134.0,
+      4000.0,
+      0.0,
+      5134.0,
+      4000.0,
+      2000.0,
+      5134.0,
+      4000.0,
+      2000.0,
+      2694.0,
+      4000.0,
+      0.0,
+      2694.0,
+      0.0,
+      0.0,
+      2694.0,
+      4000.0,
+      0.0,
+      5134.0,
+      4000.0,
+      0.0,
+      5134.0,
+      0.0,
+      0.0,
+      5134.0,
+      2000.0,
+      0.0,
+      2694.0,
+      2000.0,
+      4000.0,
+      2694.0,
+      0.0,
+      4000.0,
+      2694.0,
+      4000.0,
+      4000.0,
+      5134.0,
+      4000.0,
+      4000.0,
+      5134.0,
+      0.0,
+      4000.0,
+      5134.0,
+      2000.0,
+      4000.0,
+      2694.0,
+      2000.0,
+      1999.9999999999998,
+      2694.0,
+      2000.0,
+      1999.9999999999998,
+      5134.0,
+      2000.0
     ],
-    "foundationAnchorage": {
-      "tension": 15000,
-      "slack": 0,
+    "fixed": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      7,
+      7,
+      0,
+      0,
+      0,
+      0,
+      0,
+      7,
+      7,
+      0,
+      0,
+      0,
+      0,
+      0,
+      7,
+      7,
+      0,
+      0,
+      0,
+      0,
+      0,
+      7,
+      7,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "massNodeIndex": [],
+    "mass": []
+  },
+  "materials": [
+    {
+      "kind": "elastic",
+      "e": 1000000000000.0
+    },
+    {
+      "kind": "anchorage",
+      "tension": 15000.0,
+      "slack": 0.0,
       "bearing": {
         "kind": "linear",
         "k": 1000000000.0
       }
     },
-    "diaphragm": "rigid",
-    "combination": [
+    {
+      "kind": "anchorage",
+      "tension": 0.0,
+      "slack": 0.0,
+      "bearing": {
+        "kind": "linear",
+        "k": 1000000000.0
+      }
+    }
+  ],
+  "fibers": {
+    "sectionOffsets": [],
+    "y": [],
+    "z": [],
+    "area": [],
+    "material": []
+  },
+  "trusses": {
+    "nodeI": [],
+    "nodeJ": [],
+    "area": [],
+    "material": [],
+    "density": []
+  },
+  "elasticBeamColumns2d": {
+    "nodeI": [],
+    "nodeJ": [],
+    "e": [],
+    "a": [],
+    "iz": [],
+    "transform": [],
+    "density": []
+  },
+  "elasticBeamColumns3d": {
+    "nodeI": [],
+    "nodeJ": [],
+    "e": [],
+    "g": [],
+    "a": [],
+    "j": [],
+    "iy": [],
+    "iz": [],
+    "transform": [],
+    "density": []
+  },
+  "dispBeamColumns2d": {
+    "nodeI": [],
+    "nodeJ": [],
+    "fiberSection": [],
+    "integration": [],
+    "corotational": [],
+    "density": []
+  },
+  "dispBeamColumns3d": {
+    "nodeI": [],
+    "nodeJ": [],
+    "g": [],
+    "j": [],
+    "vecXz": [],
+    "fiberSection": [],
+    "integration": [],
+    "density": []
+  },
+  "forceBeamColumns2d": {
+    "nodeI": [],
+    "nodeJ": [],
+    "fiberSection": [],
+    "integration": [],
+    "corotational": [],
+    "density": []
+  },
+  "forceBeamColumns3d": {
+    "nodeI": [],
+    "nodeJ": [],
+    "g": [],
+    "j": [],
+    "vecXz": [],
+    "fiberSection": [],
+    "integration": [],
+    "density": []
+  },
+  "zeroLengths": {
+    "nodeI": [
+      5,
+      6,
+      12,
+      13,
+      19,
+      20,
+      26,
+      27,
+      3,
+      4,
+      2,
+      10,
+      11,
+      9,
+      17,
+      18,
+      16,
+      24,
+      25,
+      23
+    ],
+    "nodeJ": [
+      0,
       1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1,
-      1
+      7,
+      8,
+      14,
+      15,
+      21,
+      22,
+      28,
+      33,
+      29,
+      34,
+      39,
+      35,
+      40,
+      45,
+      41,
+      46,
+      51,
+      47
+    ],
+    "materials": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        1
+      ],
+      [
+        0,
+        2,
+        0
+      ],
+      [
+        1,
+        0,
+        0
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        1,
+        2,
+        0
+      ],
+      [
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        1,
+        1
+      ],
+      [
+        2,
+        2,
+        0
+      ],
+      [
+        3,
+        0,
+        0
+      ],
+      [
+        3,
+        1,
+        1
+      ],
+      [
+        3,
+        2,
+        0
+      ],
+      [
+        4,
+        0,
+        0
+      ],
+      [
+        4,
+        1,
+        1
+      ],
+      [
+        4,
+        2,
+        0
+      ],
+      [
+        5,
+        0,
+        0
+      ],
+      [
+        5,
+        1,
+        1
+      ],
+      [
+        5,
+        2,
+        0
+      ],
+      [
+        6,
+        0,
+        0
+      ],
+      [
+        6,
+        1,
+        1
+      ],
+      [
+        6,
+        2,
+        0
+      ],
+      [
+        7,
+        0,
+        0
+      ],
+      [
+        7,
+        1,
+        1
+      ],
+      [
+        7,
+        2,
+        0
+      ],
+      [
+        8,
+        1,
+        1
+      ],
+      [
+        9,
+        1,
+        2
+      ],
+      [
+        10,
+        1,
+        1
+      ],
+      [
+        11,
+        1,
+        1
+      ],
+      [
+        12,
+        1,
+        2
+      ],
+      [
+        13,
+        1,
+        1
+      ],
+      [
+        14,
+        1,
+        1
+      ],
+      [
+        15,
+        1,
+        2
+      ],
+      [
+        16,
+        1,
+        1
+      ],
+      [
+        17,
+        1,
+        1
+      ],
+      [
+        18,
+        1,
+        2
+      ],
+      [
+        19,
+        1,
+        1
+      ]
+    ],
+    "friction": [],
+    "orient": []
+  },
+  "zeroLengthSections": {
+    "nodeI": [],
+    "nodeJ": [],
+    "fiberSection": [],
+    "materials": [],
+    "orient": []
+  },
+  "equalDofs": {
+    "retained": [
+      3,
+      4,
+      2,
+      10,
+      11,
+      9,
+      17,
+      18,
+      16,
+      24,
+      25,
+      23
+    ],
+    "constrained": [
+      28,
+      33,
+      29,
+      34,
+      39,
+      35,
+      40,
+      45,
+      41,
+      46,
+      51,
+      47
+    ],
+    "dofs": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        3,
+        0
+      ],
+      [
+        4,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        6,
+        2
+      ],
+      [
+        7,
+        2
+      ],
+      [
+        8,
+        2
+      ],
+      [
+        9,
+        2
+      ],
+      [
+        10,
+        2
+      ],
+      [
+        11,
+        2
+      ]
     ]
+  },
+  "planeMaterials": [],
+  "triangles": {
+    "nodeIds": [],
+    "thickness": [],
+    "material": [],
+    "density": []
+  },
+  "quads": {
+    "nodeIds": [],
+    "thickness": [],
+    "material": [],
+    "density": [],
+    "formulation": []
+  },
+  "embeddedBars": [],
+  "shellSections": [],
+  "shell3s": {
+    "nodeIds": [],
+    "section": []
+  },
+  "shell4s": {
+    "nodeIds": [],
+    "section": []
+  },
+  "studWalls": [
+    {
+      "corners": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 4
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": true,
+        "floor": {
+          "depth": 254.0,
+          "ga": 1000000000.0,
+          "rimEa": 1000000000000.0
+        }
+      }
+    },
+    {
+      "corners": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 11
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": true,
+        "floor": {
+          "depth": 254.0,
+          "ga": 1000000000.0,
+          "rimEa": 1000000000000.0
+        }
+      }
+    },
+    {
+      "corners": [
+        14,
+        15,
+        16,
+        17
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 18
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": true,
+        "floor": {
+          "depth": 254.0,
+          "ga": 1000000000.0,
+          "rimEa": 1000000000000.0
+        }
+      }
+    },
+    {
+      "corners": [
+        21,
+        22,
+        23,
+        24
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 25
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": true,
+        "floor": {
+          "depth": 254.0,
+          "ga": 1000000000.0,
+          "rimEa": 1000000000000.0
+        }
+      }
+    },
+    {
+      "corners": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 32
+        },
+        {
+          "chord": "bottom",
+          "x": 2000.0,
+          "node": 33
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": false
+      }
+    },
+    {
+      "corners": [
+        34,
+        35,
+        36,
+        37
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 38
+        },
+        {
+          "chord": "bottom",
+          "x": 2000.0,
+          "node": 39
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": false
+      }
+    },
+    {
+      "corners": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 44
+        },
+        {
+          "chord": "bottom",
+          "x": 2000.0,
+          "node": 45
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": false
+      }
+    },
+    {
+      "corners": [
+        46,
+        47,
+        48,
+        49
+      ],
+      "stations": [
+        {
+          "chord": "top",
+          "x": 2000.0,
+          "node": 50
+        },
+        {
+          "chord": "bottom",
+          "x": 2000.0,
+          "node": 51
+        }
+      ],
+      "layout": {
+        "length": 4000.0,
+        "height": 2440.0,
+        "studs": [
+          {
+            "x": 0.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 2000.0,
+            "ea": 100000000.0
+          },
+          {
+            "x": 4000.0,
+            "ea": 100000000.0
+          }
+        ],
+        "topEa": 1000000000000.0,
+        "topEi": 1000000000000.0,
+        "topDistribution": "beam",
+        "bottomEa": 1000000000000.0,
+        "bottomEi": 1000000000000.0,
+        "openings": [],
+        "sheathing": {
+          "law": {
+            "kind": "linear",
+            "ga": 10000000.0
+          }
+        },
+        "foundation": false
+      }
+    }
+  ],
+  "diaphragms": [],
+  "floorLoads": [],
+  "rigidDiaphragms": {
+    "retained": [
+      52,
+      53
+    ],
+    "normal": [
+      "y",
+      "y"
+    ],
+    "constrained": [
+      [
+        0,
+        2
+      ],
+      [
+        0,
+        3
+      ],
+      [
+        0,
+        4
+      ],
+      [
+        0,
+        9
+      ],
+      [
+        0,
+        10
+      ],
+      [
+        0,
+        11
+      ],
+      [
+        0,
+        16
+      ],
+      [
+        0,
+        17
+      ],
+      [
+        0,
+        18
+      ],
+      [
+        0,
+        23
+      ],
+      [
+        0,
+        24
+      ],
+      [
+        0,
+        25
+      ],
+      [
+        1,
+        30
+      ],
+      [
+        1,
+        31
+      ],
+      [
+        1,
+        32
+      ],
+      [
+        1,
+        36
+      ],
+      [
+        1,
+        37
+      ],
+      [
+        1,
+        38
+      ],
+      [
+        1,
+        42
+      ],
+      [
+        1,
+        43
+      ],
+      [
+        1,
+        44
+      ],
+      [
+        1,
+        48
+      ],
+      [
+        1,
+        49
+      ],
+      [
+        1,
+        50
+      ]
+    ]
+  },
+  "rigidLinks": {
+    "master": [],
+    "slave": []
+  },
+  "linearConstraints": {
+    "slaveNode": [],
+    "slaveDof": [],
+    "termOffsets": [],
+    "termNode": [],
+    "termDof": [],
+    "termCoeff": []
+  },
+  "loadPatterns": {
+    "series": [
+      {
+        "kind": "linear",
+        "slope": 1.0
+      }
+    ],
+    "scaleFactor": [
+      1.0
+    ]
+  },
+  "nodalLoads": {
+    "pattern": [
+      0,
+      0
+    ],
+    "node": [
+      52,
+      53
+    ],
+    "dof": [
+      0,
+      0
+    ],
+    "value": [
+      10000.0,
+      10000.0
+    ],
+    "stage": [
+      0,
+      0
+    ]
+  },
+  "elementLoads": {
+    "pattern": [],
+    "elementKind": [],
+    "elementIndex": [],
+    "load": [],
+    "stage": []
   },
   "sequence": {
     "stages": [
@@ -437,14 +1245,14 @@
         "steps": 1,
         "integrator": {
           "kind": "loadControl",
-          "increment": 1
+          "increment": 1.0
         },
         "algorithm": {
           "kind": "linear"
         },
         "convergence": {
           "kind": "normUnbalance",
-          "tol": 1e-08,
+          "tol": 1e-8,
           "maxIter": 10
         },
         "holdPatternsAfter": []
@@ -452,16 +1260,17 @@
     ],
     "recorders": [
       {
-        "response": "buildingWallPier",
-        "storey": 1,
-        "wall": "front",
+        "response": "studWallPier",
+        "elementKind": "studWall",
+        "elementIndex": 4,
         "pier": 0,
         "quantity": "q"
       },
       {
-        "response": "buildingStoreyDrift",
-        "storey": 1,
-        "component": "rotation"
+        "response": "nodeDifference",
+        "node": 53,
+        "otherNode": 52,
+        "dof": 4
       }
     ]
   }

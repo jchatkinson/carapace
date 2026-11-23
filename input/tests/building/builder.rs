@@ -7,7 +7,7 @@ use carapace_core::analysis::{
 };
 use carapace_input::building::*;
 
-fn layout(window: bool) -> WallLayoutSpec {
+pub fn layout(window: bool) -> WallLayoutSpec {
     WallLayoutSpec {
         length: 4000.,
         height: 2440.,
@@ -50,7 +50,7 @@ fn layout(window: bool) -> WallLayoutSpec {
         floor: None,
     }
 }
-fn wall(name: &str, start: [f64; 2], direction: [f64; 2], window: bool) -> WallSpec {
+pub fn wall(name: &str, start: [f64; 2], direction: [f64; 2], window: bool) -> WallSpec {
     WallSpec {
         name: name.into(),
         start,
@@ -59,7 +59,7 @@ fn wall(name: &str, start: [f64; 2], direction: [f64; 2], window: bool) -> WallS
         loads: vec![],
     }
 }
-fn box_walls(window: bool) -> Vec<WallSpec> {
+pub fn box_walls(window: bool) -> Vec<WallSpec> {
     vec![
         wall("front", [0., 0.], [1., 0.], window),
         wall("back", [0., 4000.], [1., 0.], false),
@@ -67,14 +67,14 @@ fn box_walls(window: bool) -> Vec<WallSpec> {
         wall("right", [4000., 0.], [0., 1.], false),
     ]
 }
-fn anchorage() -> AnchorageSpec {
+pub fn anchorage() -> AnchorageSpec {
     AnchorageSpec {
         tension: 15000.,
         slack: 0.,
         bearing: AnchorageBearingSpec::Linear { k: 1e9 },
     }
 }
-fn storey(walls: Vec<WallSpec>, depth: f64) -> StoreySpec {
+pub fn storey(walls: Vec<WallSpec>, depth: f64) -> StoreySpec {
     StoreySpec {
         wall_height: 2440.,
         floor_depth: depth,
@@ -87,7 +87,7 @@ fn storey(walls: Vec<WallSpec>, depth: f64) -> StoreySpec {
         lateral: vec![],
     }
 }
-fn spec(storeys: Vec<StoreySpec>, diaphragm: DiaphragmKind) -> BuildingSpec {
+pub fn spec(storeys: Vec<StoreySpec>, diaphragm: DiaphragmKind) -> BuildingSpec {
     BuildingSpec {
         storeys,
         foundation_anchorage: anchorage(),

@@ -1,6 +1,6 @@
-//! Wire tables for stud walls (with their floor zone), diaphragms, the anchorage material, floor loads and the building:
-//! each decoded model equals the same model built directly through `carapace-core` / `carapace_input::building`
-//! (window wall with floor loads, anchorage drift, building recorders: 1e-12 or 1e-10 as stated per test), specs
+//! Wire tables for stud walls (with their floor zone), diaphragms, the anchorage material and floor loads:
+//! each decoded model equals the same model built directly through `carapace-core`
+//! (window wall with floor loads, anchorage drift: 1e-12 or 1e-10 as stated per test), specs
 //! round-trip through serde, and every malformed row or misuse is a `DecodeError`.
 use crate::common::empty_input;
 use carapace_core::analysis::{
@@ -11,10 +11,7 @@ use carapace_core::model::{
     FloorContinuity, FloorLoad, FloorSupport, LoadSeries, Material, Node, StudWall, StudWallLayout,
     WallCaseLoad, WallLoad, WallShearLaw, WallSheathing, WallStud, ZeroLength,
 };
-use carapace_input::building::{
-    AnchorageBearingSpec, AnchorageSpec, BuildingSpec, DiaphragmKind, FloorContinuitySpec,
-    FloorLoadSpec, FloorSpec, LateralLoad, SpanAxis, StoreySpec, WallSpec,
-};
+use carapace_input::building::{AnchorageBearingSpec, BuildingSpec, FloorContinuitySpec};
 use carapace_input::building::{
     ChordDistributionSpec, FloorZoneSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec,
     WallSheathingSpec, WallStudSpec,
@@ -839,219 +836,6 @@ fn anchorage_wire_drift_matches_direct_core() {
     );
 }
 
-fn building_wall(name: &str, start: [f64; 2], direction: [f64; 2]) -> WallSpec {
-    WallSpec {
-        name: name.into(),
-        start,
-        direction,
-        layout: WallLayoutSpec {
-            length: 4000.,
-            height: 2440.,
-            studs: vec![
-                WallStudSpec { x: 0., ea: 1e8 },
-                WallStudSpec { x: 2000., ea: 1e8 },
-                WallStudSpec { x: 4000., ea: 1e8 },
-            ],
-            top_ea: 1e12,
-            top_ei: Some(1e12),
-            top_distribution: ChordDistributionSpec::Beam,
-            bottom_ea: 1e12,
-            bottom_ei: 1e12,
-            openings: vec![],
-            sheathing: Some(WallSheathingSpec {
-                law: WallShearLawSpec::Linear { ga: 1e7 },
-            }),
-            foundation: false,
-            floor: None,
-        },
-        loads: vec![],
-    }
-}
-
-fn box_storey(floor_depth: f64) -> StoreySpec {
-    StoreySpec {
-        wall_height: 2440.,
-        floor_depth,
-        band_ga: 1e9,
-        rim_ea: 1e12,
-        anchorage: AnchorageSpec {
-            tension: 15000.,
-            slack: 0.,
-            bearing: AnchorageBearingSpec::Linear { k: 1e9 },
-        },
-        bearing: 1e9,
-        walls: vec![
-            building_wall("front", [0., 0.], [1., 0.]),
-            building_wall("back", [0., 4000.], [1., 0.]),
-            building_wall("left", [0., 0.], [0., 1.]),
-            building_wall("right", [4000., 0.], [0., 1.]),
-        ],
-        floors: vec![],
-        lateral: vec![LateralLoad {
-            slot: 0,
-            fx: 10000.,
-            fz: 0.,
-            at: [2000., 2000.],
-        }],
-    }
-}
-
-/// Decodes a symmetric two-storey rigid-diaphragm box and records the lower front wall and first-storey drift.
-/// Reference: `building::build` + `apply_combination` and the builder's direct analysis; q, base moment, and drift
-/// agree with `wall_response` and the master-node displacement to 1e-12 relative.
-#[test]
-fn building_wire_recorders_match_direct_builder() {
-    let spec = BuildingSpec {
-        storeys: vec![box_storey(254.), box_storey(0.)],
-        foundation_anchorage: AnchorageSpec {
-            tension: 15000.,
-            slack: 0.,
-            bearing: AnchorageBearingSpec::Linear { k: 1e9 },
-        },
-        diaphragm: DiaphragmKind::Rigid,
-        combination: [1.; 8],
-    };
-    let mut input = empty_input(3);
-    input.building = Some(spec.clone());
-    input.sequence = SequenceSpec {
-        stages: vec![StageSpec::Static {
-            id: "building".into(),
-            steps: 1,
-            integrator: IntegratorSpec::LoadControl { increment: 1. },
-            algorithm: AlgorithmSpec::Linear,
-            convergence: Some(ConvergenceSpec::NormUnbalance {
-                tol: 1e-8,
-                max_iter: 8,
-            }),
-            hold_patterns_after: vec![],
-        }],
-        recorders: vec![
-            RecorderSpec::BuildingWallPier {
-                storey: 0,
-                wall: "front".into(),
-                pier: 0,
-                quantity: carapace_input::input_v1::sequence::StudWallQuantity::Q,
-            },
-            RecorderSpec::BuildingWallPier {
-                storey: 0,
-                wall: "front".into(),
-                pier: 0,
-                quantity: carapace_input::input_v1::sequence::StudWallQuantity::MomentBase,
-            },
-            RecorderSpec::BuildingStoreyDrift {
-                storey: 0,
-                component: carapace_input::input_v1::sequence::BuildingDriftComponent::X,
-            },
-            RecorderSpec::BuildingWallBase {
-                storey: 0,
-                wall: "front".into(),
-                component: carapace_input::input_v1::sequence::StudWallBaseComponent::Shear,
-            },
-            RecorderSpec::BuildingWallBase {
-                storey: 0,
-                wall: "front".into(),
-                component: carapace_input::input_v1::sequence::StudWallBaseComponent::Moment,
-            },
-        ],
-    };
-    let mut session = decode(input).unwrap();
-    let output = session.advance(10);
-    assert!(output.done && output.error.is_none(), "{output:?}");
-
-    let mut built = carapace_input::building::build(&spec).unwrap();
-    built.apply_combination(spec.combination).unwrap();
-    let master = built.levels[0].master.unwrap();
-    let mut analysis = AnalysisBuilder::new()
-        .constraint_handler(ConstraintHandler::Transformation)
-        .integrator(Integrator::LoadControl { increment: 1. })
-        .algorithm(Algorithm::Linear)
-        .test(ConvergenceTest::NormUnbalance {
-            tol: 1e-8,
-            max_iter: 8,
-        })
-        .build(built.domain.clone());
-    analysis.step().unwrap();
-    let response = built.wall_response(analysis.domain(), 0, "front").unwrap();
-    near_relative(
-        output.recorder_batches[0].samples[0].1,
-        response.piers[0].q,
-        1e-12,
-        "building pier q",
-    );
-    near_relative(
-        output.recorder_batches[1].samples[0].1,
-        response.piers[0].moment_base,
-        1e-12,
-        "building base moment",
-    );
-    near_relative(
-        output.recorder_batches[2].samples[0].1,
-        analysis.domain().node(master).displacement[0],
-        1e-12,
-        "first-storey drift",
-    );
-    for (i, k) in [(3, 0), (4, 2)] {
-        near_relative(
-            output.recorder_batches[i].samples[0].1,
-            response.base[k],
-            1e-12,
-            "building wall base",
-        );
-    }
-}
-
-/// `buildingWallBase` axial is the gravity takedown: a Z-span floor (2 kPa) on a 4 m × 4 m box puts
-/// `w L_x L_z / 2 = 16 kN` on each of the front and back walls (statics, 1e-9), and none on the side walls.
-#[test]
-fn building_wall_base_axial_is_the_takedown() {
-    let mut storey = box_storey(0.);
-    storey.lateral.clear();
-    storey.floors.push(FloorSpec {
-        bounds: [0., 4000., 0., 4000.],
-        supports: vec!["front".into(), "back".into()],
-        span_axis: SpanAxis::Z,
-        loads: vec![FloorLoadSpec::Area {
-            slot: 0,
-            w: 0.002,
-            region: None,
-        }],
-        continuity: FloorContinuitySpec::Simple,
-    });
-    let mut input = empty_input(3);
-    input.building = Some(BuildingSpec {
-        storeys: vec![storey],
-        foundation_anchorage: AnchorageSpec {
-            tension: 15000.,
-            slack: 0.,
-            bearing: AnchorageBearingSpec::Linear { k: 1e9 },
-        },
-        diaphragm: DiaphragmKind::Rigid,
-        combination: [1.; 8],
-    });
-    let base = |wall: &str| RecorderSpec::BuildingWallBase {
-        storey: 0,
-        wall: wall.into(),
-        component: carapace_input::input_v1::sequence::StudWallBaseComponent::Axial,
-    };
-    input.sequence = SequenceSpec {
-        stages: vec![StageSpec::Static {
-            id: "gravity".into(),
-            steps: 1,
-            integrator: IntegratorSpec::LoadControl { increment: 1. },
-            algorithm: AlgorithmSpec::Linear,
-            convergence: None,
-            hold_patterns_after: vec![],
-        }],
-        recorders: ["front", "back", "left"].map(base).to_vec(),
-    };
-    let output = decode(input).unwrap().advance(10);
-    assert!(output.done && output.error.is_none(), "{output:?}");
-    let v = |i: usize| output.recorder_batches[i].samples[0].1;
-    near_relative(v(0), 16_000., 1e-9, "front takedown");
-    near_relative(v(1), 16_000., 1e-9, "back takedown");
-    assert!(v(2).abs() < 1e-6, "side wall takedown {}", v(2));
-}
-
 #[test]
 fn shared_stud_wall_table_decodes_in_3d_and_rejects_nonorthogonal_geometry() {
     let mut i = empty_input(3);
@@ -1299,38 +1083,19 @@ fn diaphragm_table_decodes_and_roundtrips() {
     ));
 }
 
+/// The wire format has no `building` table any more: an input that carries one fails to parse (the top level denies
+/// unknown fields) instead of silently dropping it, and `combination` still defaults to ones in the spec.
 #[test]
-fn building_is_exclusive_with_explicit_tables_and_combination_defaults_to_one() {
+fn building_field_is_rejected_and_combination_defaults_to_one() {
     let value = serde_json::json!({"storeys":[],"foundationAnchorage":{"tension":1.0,"slack":0.0,"bearing":{"kind":"linear","k":1.0}},"diaphragm":"rigid"});
-    let spec: BuildingSpec = serde_json::from_value(value).unwrap();
+    let spec: BuildingSpec = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(spec.combination, [1.; 8]);
-    let mut input = empty_input(3);
-    input.building = Some(spec);
-    input.nodes = NodeTable {
-        coords: vec![0., 0., 0.],
-        fixed: vec![63],
-        mass_node_index: vec![],
-        mass: vec![],
-    };
-    assert!(matches!(
-        decode(input),
-        Err(carapace_input::input_v1::DecodeError::BuildingWithTables { table: "nodes" })
-    ));
-    let mut input = empty_input(2);
-    input.building = Some(BuildingSpec {
-        storeys: vec![],
-        foundation_anchorage: carapace_input::building::AnchorageSpec {
-            tension: 1.,
-            slack: 0.,
-            bearing: AnchorageBearingSpec::Linear { k: 1. },
-        },
-        diaphragm: DiaphragmKind::Rigid,
-        combination: [1.; 8],
-    });
-    assert!(matches!(
-        decode(input),
-        Err(carapace_input::input_v1::DecodeError::TableNotInProfile { table: "building" })
-    ));
+    let mut input = serde_json::to_value(empty_input(3)).unwrap();
+    input["building"] = value;
+    let error = serde_json::from_value::<carapace_input::input_v1::CarapaceInputV1>(input)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unknown field `building`"), "{error}");
 }
 
 fn wall_load_row(

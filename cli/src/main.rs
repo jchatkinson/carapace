@@ -10,6 +10,7 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 
 use carapace_core::analysis::{set_parallelism, Parallelism};
+use carapace_input::building::{expand, BuildingSpec, ExpandOptions, UpAxis};
 use carapace_input::input_v1::{decode, run_many, CarapaceInputV1, RunOptions, Session};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -63,8 +64,37 @@ enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Print the JSON Schema of the model format.
-    Schema,
+    /// Print the JSON Schema of the model format (`--building`: of the building spec `expand` reads).
+    Schema {
+        #[arg(long)]
+        building: bool,
+    },
+    /// Expand a stud-wall building spec into an ordinary model and an index map; print `{ "input", "map" }`.
+    Expand {
+        /// `BuildingSpec` file, or `-` for stdin.
+        spec: PathBuf,
+        /// Which model axis is vertical (plan x-z maps to model x-y for `z`).
+        #[arg(long, value_enum, default_value_t = Up::Y)]
+        up: Up,
+        /// An analysis sequence (`SequenceSpec` JSON) to put in the model. Its recorders address the map's rows.
+        #[arg(long)]
+        sequence: Option<PathBuf>,
+        /// Print only the model (`input`), ready for `carapace run`.
+        #[arg(long)]
+        model_only: bool,
+        /// Write the JSON here instead of stdout.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Pretty-print the JSON.
+        #[arg(long)]
+        pretty: bool,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Up {
+    Y,
+    Z,
 }
 
 /// A problem with the input, in the shape agents can act on: where it is and what it is.
@@ -110,6 +140,22 @@ fn load(path: &PathBuf) -> Result<Result<Session, Diagnostic>, std::io::Error> {
     }))
 }
 
+fn parse_json(text: &str) -> Result<serde_json::Value, Diagnostic> {
+    serde_json::from_str(text).map_err(|e| Diagnostic {
+        stage: "parse",
+        path: None,
+        detail: e.to_string().into(),
+    })
+}
+
+fn parse_diagnostic(e: &serde_path_to_error::Error<serde_json::Error>) -> Diagnostic {
+    Diagnostic {
+        stage: "parse",
+        path: Some(e.path().to_string()),
+        detail: e.inner().to_string().into(),
+    }
+}
+
 fn emit(value: &impl Serialize, pretty: bool, out: Option<&PathBuf>) -> std::io::Result<()> {
     let text = if pretty {
         serde_json::to_string_pretty(value)
@@ -125,9 +171,70 @@ fn emit(value: &impl Serialize, pretty: bool, out: Option<&PathBuf>) -> std::io:
 
 fn execute(cli: Cli) -> std::io::Result<bool> {
     match cli.command {
-        Command::Schema => {
-            let schema = schemars::schema_for!(CarapaceInputV1);
-            emit(&schema, true, None)?;
+        Command::Schema { building } => {
+            if building {
+                emit(&schemars::schema_for!(BuildingSpec), true, None)?;
+            } else {
+                emit(&schemars::schema_for!(CarapaceInputV1), true, None)?;
+            }
+            Ok(true)
+        }
+        Command::Expand {
+            spec,
+            up,
+            sequence,
+            model_only,
+            out,
+            pretty,
+        } => {
+            let fail = |diagnostic: Diagnostic| -> std::io::Result<bool> {
+                emit(
+                    &serde_json::json!({ "valid": false, "errors": [diagnostic] }),
+                    pretty,
+                    None,
+                )?;
+                Ok(false)
+            };
+            let parse = |path: &PathBuf| -> std::io::Result<Result<serde_json::Value, Diagnostic>> {
+                Ok(parse_json(&read_source(path)?))
+            };
+            let spec: BuildingSpec = match parse(&spec)? {
+                Ok(value) => match serde_path_to_error::deserialize(value) {
+                    Ok(spec) => spec,
+                    Err(e) => return fail(parse_diagnostic(&e)),
+                },
+                Err(diagnostic) => return fail(diagnostic),
+            };
+            let options = ExpandOptions {
+                up: match up {
+                    Up::Y => UpAxis::Y,
+                    Up::Z => UpAxis::Z,
+                },
+            };
+            let mut expansion = match expand(&spec, &options) {
+                Ok(expansion) => expansion,
+                Err(e) => {
+                    return fail(Diagnostic {
+                        stage: "expand",
+                        path: None,
+                        detail: e.to_string().into(),
+                    })
+                }
+            };
+            if let Some(path) = sequence {
+                match parse(&path)? {
+                    Ok(value) => match serde_path_to_error::deserialize(value) {
+                        Ok(sequence) => expansion.input.sequence = sequence,
+                        Err(e) => return fail(parse_diagnostic(&e)),
+                    },
+                    Err(diagnostic) => return fail(diagnostic),
+                }
+            }
+            if model_only {
+                emit(&expansion.input, pretty, out.as_ref())?;
+            } else {
+                emit(&expansion, pretty, out.as_ref())?;
+            }
             Ok(true)
         }
         Command::Validate { model } => match load(&model)? {

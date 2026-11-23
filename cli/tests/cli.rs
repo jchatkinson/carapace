@@ -15,6 +15,14 @@ const BUILDING: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../examples/models/two_storey_box_building.json"
 );
+const BUILDING_SPEC: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../examples/models/two_storey_box_building.spec.json"
+);
+const BUILDING_SEQUENCE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../examples/models/two_storey_box_building.sequence.json"
+);
 
 fn run(args: &[&str]) -> (Output, serde_json::Value) {
     let output = Command::new(BIN).args(args).output().unwrap();
@@ -92,12 +100,115 @@ fn io_errors_and_schema() {
     let (output, json) = run(&["schema"]);
     assert!(output.status.success());
     assert!(json["properties"]["header"].is_object());
-    for table in ["studWalls", "diaphragms", "floorLoads", "building"] {
+    for table in ["studWalls", "diaphragms", "floorLoads"] {
         assert!(
             json["properties"][table].is_object(),
             "schema missing {table}"
         );
     }
+    assert!(
+        json["properties"]["building"].is_null(),
+        "building is not a table"
+    );
+    let (output, json) = run(&["schema", "--building"]);
+    assert!(output.status.success());
+    assert!(json["properties"]["storeys"].is_object());
+}
+
+/// `expand` prints `{ input, map }` for a building spec: the model has the explicit tables, the map names every wall
+/// row, and `--up z` changes the diaphragm normal and the coordinates (plan x-z to model x-y).
+#[test]
+fn expand_prints_input_and_map() {
+    let (output, json) = run(&["expand", BUILDING_SPEC]);
+    assert!(output.status.success(), "{json}");
+    assert_eq!(json["input"]["header"]["ndm"], 3);
+    assert_eq!(json["input"]["studWalls"].as_array().unwrap().len(), 8);
+    assert_eq!(json["input"]["rigidDiaphragms"]["normal"][0], "y");
+    let walls = &json["map"]["storeys"][1]["walls"];
+    assert_eq!(walls[0]["name"], "front");
+    assert_eq!(walls[0]["element"], 4);
+    assert_eq!(json["map"]["slotPatterns"][0], 0);
+    let top = json["input"]["nodes"]["coords"].as_array().unwrap();
+    // Wall 0's top-end corner (map: corners[2]) is at elevation 2440 + 254 along y.
+    let corner = walls_corner(&json, 0, 2);
+    assert_eq!(top[3 * corner + 1], 2694.0);
+
+    let (output, z) = run(&["expand", BUILDING_SPEC, "--up", "z"]);
+    assert!(output.status.success(), "{z}");
+    assert_eq!(z["input"]["rigidDiaphragms"]["normal"][0], "z");
+    let top = z["input"]["nodes"]["coords"].as_array().unwrap();
+    assert_eq!(top[3 * corner + 2], 2694.0);
+    assert_eq!(z["map"], json["map"]);
+}
+
+fn walls_corner(json: &serde_json::Value, wall: usize, corner: usize) -> usize {
+    json["map"]["storeys"][0]["walls"][wall]["corners"][corner]
+        .as_u64()
+        .unwrap() as usize
+}
+
+/// The committed `two_storey_box_building.json` is what `expand` generates from the spec and the sequence file next
+/// to it (`expand ... --sequence ... --model-only`); regenerate it with that command when the spec or the generator
+/// changes.
+#[test]
+fn committed_example_model_is_the_expansion() {
+    let (output, generated) = run(&[
+        "expand",
+        BUILDING_SPEC,
+        "--sequence",
+        BUILDING_SEQUENCE,
+        "--model-only",
+    ]);
+    assert!(output.status.success(), "{generated}");
+    let committed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(BUILDING).unwrap()).unwrap();
+    assert_eq!(generated, committed);
+}
+
+/// A bad spec is reported like a bad model: a schema mismatch with the JSON path, a spec the builder rejects as an
+/// `expand` error, a missing file as an I/O error; all stdout JSON with exit 1 (2 for I/O).
+#[test]
+fn expand_reports_bad_specs() {
+    let dir = std::env::temp_dir().join("carapace_cli_test_expand");
+    std::fs::create_dir_all(&dir).unwrap();
+    let text = std::fs::read_to_string(BUILDING_SPEC).unwrap();
+    let write = |name: &str, text: String| {
+        let path = dir.join(name);
+        std::fs::write(&path, text).unwrap();
+        path.to_str().unwrap().to_string()
+    };
+    let wrong_type = write("type.json", text.replace("\"rigid\"", "\"stiff\""));
+    let (output, json) = run(&["expand", &wrong_type]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(json["valid"], false);
+    assert_eq!(json["errors"][0]["stage"], "parse");
+    assert_eq!(json["errors"][0]["path"], "diaphragm");
+
+    let misaligned = write(
+        "misaligned.json",
+        text.replacen(
+            "\"direction\": [\n            1,\n            0\n          ]",
+            "\"direction\": [\n            2,\n            0\n          ]",
+            1,
+        ),
+    );
+    let (output, json) = run(&["expand", &misaligned]);
+    assert_eq!(output.status.code(), Some(1), "{json}");
+    assert_eq!(json["errors"][0]["stage"], "expand");
+    assert!(json["errors"][0]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("direction"));
+
+    let not_json = write("not.json", "{".into());
+    let (output, json) = run(&["expand", &not_json]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(json["errors"][0]["stage"], "parse");
+
+    let (output, _) = run(&["expand", "/nonexistent/spec.json"]);
+    assert_eq!(output.status.code(), Some(2));
+    let (output, _) = run(&["run", BUILDING_SPEC]);
+    assert_eq!(output.status.code(), Some(1), "a spec is not a model");
 }
 
 /// `batch` returns one result per model in argument order, keeps going past an invalid model, and exits 1.

@@ -580,33 +580,16 @@ pub enum RecorderSpec {
         pier: u32,
         quantity: StudWallQuantity,
     },
-    /// A named pier in a builder-generated 3D building.
-    BuildingWallPier {
-        storey: u32,
-        wall: String,
-        pier: u32,
-        quantity: StudWallQuantity,
-    },
     /// A stud wall's total base reaction in wall-local axes (`StudWallResponse::base`).
     StudWallBase {
         element_kind: ElementKind,
         element_index: u32,
         component: StudWallBaseComponent,
     },
-    /// A named wall's total base reaction in a builder-generated 3D building.
-    BuildingWallBase {
-        storey: u32,
-        wall: String,
-        component: StudWallBaseComponent,
-    },
     DiaphragmBay {
         element_index: u32,
         bay: u32,
         quantity: WallBayQuantity,
-    },
-    BuildingStoreyDrift {
-        storey: u32,
-        component: BuildingDriftComponent,
     },
     NodeDifference {
         node: u32,
@@ -753,16 +736,6 @@ pub enum StudWallBaseComponent {
 pub enum WallBayQuantity {
     Q,
     Gamma,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub enum BuildingDriftComponent {
-    X,
-    Z,
-    Rotation,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

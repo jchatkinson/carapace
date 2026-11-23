@@ -78,7 +78,7 @@ pub struct Header {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CarapaceInputV1 {
     pub header: Header,
     #[serde(default)]
@@ -154,10 +154,6 @@ pub struct CarapaceInputV1 {
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub floor_loads: Vec<tables::FloorTransferSpec>,
-    /// Builder-generated 3D model; exclusive with explicit model tables.
-    #[serde(default)]
-    #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub building: Option<crate::building::BuildingSpec>,
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub rigid_diaphragms: RigidDiaphragmTable,

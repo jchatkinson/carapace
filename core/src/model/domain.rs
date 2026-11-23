@@ -585,6 +585,11 @@ where
             .insert(LoadPattern::new(series).with_scale_factor(scale_factor))
     }
 
+    /// Every load pattern in creation order, starting with `default_pattern()`.
+    pub fn load_pattern_ids(&self) -> Vec<LoadPatternId> {
+        self.load_patterns.keys().collect()
+    }
+
     /// Set a pattern's scale factor before analysis without changing its time series.
     pub fn set_load_pattern_scale_factor(&mut self, pattern: LoadPatternId, scale_factor: f64) {
         self.load_patterns[pattern].set_scale_factor(scale_factor);

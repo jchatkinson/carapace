@@ -19,7 +19,7 @@ Cargo workspace of four crates (plus `py/`):
 - `wasm-bridge/` (`carapace-wasm`): only the wasm-bindgen boundary (`boundary.rs`) over `carapace-input`, plus
   the TypeScript smoke tests in `wasm-bridge/tests/`. Plan for native frontends:
   `docs/native-api-plan.md`.
-- `cli/` (`carapace-cli`): the `carapace` binary (`validate`, `run`, `schema`; JSON in, JSON out). See
+- `cli/` (`carapace-cli`): the `carapace` binary (`validate`, `run`, `schema`, `expand`; JSON in, JSON out). See
   `docs/native-api.md`. Example models in `examples/models/`.
 - `py/` (`carapace-fe`): the Python package (PyO3 + maturin, its own Cargo workspace, excluded from `cargo test`). Its API follows OpenSeesPy; every deviation is listed in `docs/python-api.md` and must stay listed.
   Tests: `cd py && maturin develop && pytest tests`.
