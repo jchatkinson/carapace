@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -9,8 +10,16 @@ pub struct BuildingSpec {
     pub storeys: Vec<StoreySpec>,
     pub foundation_anchorage: AnchorageSpec,
     pub diaphragm: DiaphragmKind,
+    #[serde(default = "default_combination")]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub combination: [f64; 8],
 }
 
+fn default_combination() -> [f64; 8] {
+    [1.0; 8]
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +37,7 @@ pub struct StoreySpec {
     pub lateral: Vec<LateralLoad>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +47,7 @@ pub struct AnchorageSpec {
     pub bearing: AnchorageBearingSpec,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
@@ -45,6 +56,7 @@ pub enum AnchorageBearingSpec {
     O86Crush { qr: f64 },
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +65,16 @@ pub enum DiaphragmKind {
     Flexible,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WallChordSpec {
+    Top,
+    Bottom,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +87,7 @@ pub struct WallSpec {
     pub loads: Vec<SlotWallLoad>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +96,7 @@ pub struct SlotWallLoad {
     pub load: WallLoadSpec,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,8 +112,12 @@ pub struct WallLayoutSpec {
     #[serde(default)]
     pub openings: Vec<WallOpeningSpec>,
     pub sheathing: Option<WallSheathingSpec>,
+    #[serde(default)]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub foundation: bool,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +125,7 @@ pub struct WallStudSpec {
     pub x: f64,
     pub ea: f64,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +137,7 @@ pub struct WallOpeningSpec {
     pub jack_ea: f64,
     pub door: bool,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,12 +145,14 @@ pub enum ChordDistributionSpec {
     Beam,
     Direct,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WallSheathingSpec {
     pub law: WallShearLawSpec,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
@@ -135,6 +167,7 @@ pub enum WallShearLawSpec {
     },
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
@@ -154,6 +187,7 @@ pub enum WallLoadSpec {
     },
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +198,7 @@ pub struct FloorSpec {
     pub loads: Vec<FloorLoadSpec>,
     pub continuity: FloorContinuitySpec,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,6 +206,7 @@ pub enum SpanAxis {
     X,
     Z,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -178,6 +214,7 @@ pub enum FloorContinuitySpec {
     Simple,
     Continuous,
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
@@ -208,6 +245,7 @@ pub enum FloorLoadSpec {
         t: f64,
     },
 }
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

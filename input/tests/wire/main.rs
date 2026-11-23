@@ -7,6 +7,7 @@ mod csfm;
 mod cutbacks;
 mod element_loads;
 mod elements;
+mod macro_elements;
 mod material_probe;
 mod modal;
 mod profiles;

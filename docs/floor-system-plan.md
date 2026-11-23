@@ -1,7 +1,7 @@
 # Floors for stud-wall buildings: plan
 
-Status: Phases 1 (floor band), 2 (one-way gravity transfer), 3 (pier-end anchorage material), 4a (walls and
-bands in 3D), 4b (diaphragms) and 4c (native Rust building builder) are implemented. User guide: [floors.md](floors.md). Per-position bearing and
+Status: all phases are implemented: 1 (floor band), 2 (one-way gravity transfer), 3 (pier-end anchorage
+material), 4a (walls and bands in 3D), 4b (diaphragms), 4c (building builder) and the wire format (Section 7). User guide: [floors.md](floors.md). Per-position bearing and
 anchorage links of the band are
 external `ZeroLength` elements (the initial plan's internal vertical links are deliberately not part of the
 band). Companion to `stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
@@ -113,8 +113,8 @@ Each compares against a hand calculation, at 1e-9:
 
 The current core API supports rectangular floor bounds, area patches, cross-joist line loads, joist-aligned
 line loads and point loads, with eight wall load slots. Supports are clipped to the floor width. Reactions can
-be mapped to `WallLoad`s or returned as beam segments. The transfer is not on the wire format because the
-stud-wall builder and its identifiers are not on the wire format yet. Polygon outlines, automatic support
+be mapped to `WallLoad`s or returned as beam segments. `floorLoads` now exposes the transfer in `CarapaceInputV1`
+and resolves support indices against `studWalls2d`/`studWalls3d` rows. Polygon outlines and automatic support
 discovery remain future builder work. The end-to-end test maps D/L floor reactions to a windowed stud wall,
 applies a factored combination, and checks the header jack and base forces against the hand takedown. The API
 is usable before a builder can discover supports automatically.
@@ -186,10 +186,9 @@ foundation, a band, or the storey below. It replaces separate plain `ZeroLength`
 - **Shrinkage:** a constant slack, `0.002·ΔMC·L_shrink`, which closes before the hold-down engages. It is
   reported separately because it is not amplified by `RdRo/Ie` for seismic drift.
 
-The material is available for explicit `ZeroLength` links now. Automatic pier-end placement (`anchorage` on a
-wall layout generating stations and links at `pier_ends()`) moves to the Phase 4 builder. The material has no
-OpenSees counterpart and is not added to the Python API or `input_v1` wire format in this phase; wire exposure
-can be considered when the wall/builder input format is designed.
+The material is available for explicit `ZeroLength` links and the building builder's automatic pier-end links.
+Its `anchorage` material variant is also available in `input_v1`; PySees has no stud-wall compiler and does not
+emit it.
 
 Tests:
 
@@ -257,15 +256,21 @@ Tests:
 
 ## 7. Wire format and PySees
 
-Each wire-visible phase extends `input_v1` and must be mirrored in PySees (`carapaceInputV1.ts`, `compileInputV1.ts`),
-`docs/input-format.md`, the CLI schema and the wasm build:
+`input_v1` exposes 2D/3D stud walls, floor bands, 3D diaphragms, anchorage materials, one-way floor-load
+transfer and the builder-backed `building` payload. `ElementLoadSpec::WallSlots` scales the wall's eight load
+slots. Macro-element, named building wall-pier and rigid-level storey-drift recorders are available. Flexible
+building levels have no master node, so `buildingStoreyDrift` is rejected for them.
+
+Phase status:
 
 - Phase 1: the band;
 - Phase 2: `Floor`;
-- Phase 3: the anchorage law (core only; no OpenSees material-name or wire counterpart);
-- Phase 4: 3D walls, the diaphragm and the builder.
+- Phase 3: the anchorage law;
+- Phase 4: 3D walls and the diaphragm;
+- Phase 5: wire tables, building payload and response recorders (done).
 
-The stud wall itself is not on the wire yet, so that comes first, or together with Phase 1.
+PySees mirrors only the tables its compiler emits and leaves other wire tables out; it has no stud walls, so no
+PySees change is required for these tables.
 
 ## 8. Open decisions
 

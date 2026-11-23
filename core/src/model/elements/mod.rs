@@ -292,6 +292,27 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         Element::nodes(self)
     }
 
+    fn stud_wall_response(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        load: Option<&ElementLoad>,
+    ) -> Option<StudWallResponse> {
+        match self {
+            Element::StudWall(w) => Some(w.response(nodes, load)),
+            _ => None,
+        }
+    }
+
+    fn floor_band_response(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> Option<FloorBandResponse> {
+        match self {
+            Element::FloorBand(b) => Some(b.response(nodes)),
+            _ => None,
+        }
+    }
+
     fn dof_mask(&self) -> DofMask {
         match self {
             // A truss carries no moment: translations only.
@@ -780,6 +801,42 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
 
     fn nodes(&self) -> NodeList<'_, Node3Id> {
         Element3::nodes(self)
+    }
+
+    fn stud_wall_response(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+        load: Option<&ElementLoad3>,
+    ) -> Option<StudWallResponse> {
+        match self {
+            Element3::StudWall(w) => {
+                let planar = load.map(|l| ElementLoad {
+                    wall: l.wall,
+                    ..Default::default()
+                });
+                Some(w.response(nodes, planar.as_ref()))
+            }
+            _ => None,
+        }
+    }
+
+    fn floor_band_response(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> Option<FloorBandResponse> {
+        match self {
+            Element3::FloorBand(b) => Some(b.response(nodes)),
+            _ => None,
+        }
+    }
+    fn diaphragm_response(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> Option<DiaphragmResponse> {
+        match self {
+            Element3::Diaphragm(d) => Some(d.response(nodes)),
+            _ => None,
+        }
     }
 
     fn dof_mask(&self) -> DofMask {

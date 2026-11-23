@@ -2,19 +2,24 @@
 //! the `Domain3`/`Element3`/`Friction3`/`FiberSection3` constructors.
 
 use carapace_core::model::{
-    Axis3, DispBeamColumn3, Domain3, ElasticBeamColumn3, Element3, Element3Id, ElementLoad3,
-    Fiber3, FiberSection3, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3,
-    Shell4, ShellModifiers, ShellSection, Truss3, ZeroLength3, ZeroLengthSection3,
+    Axis3, ChordDistribution, Diaphragm, DiaphragmLayout, DispBeamColumn3, Domain3,
+    ElasticBeamColumn3, Element3, Element3Id, ElementLoad3, Fiber3, FiberSection3, FloorBand,
+    FloorBandLayout, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3, Shell4,
+    ShellModifiers, ShellSection, StudWall, StudWallLayout, Truss3, WallChord, WallLoad,
+    WallOpening, WallPlane, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3,
+    ZeroLengthSection3,
 };
 
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
-    build_fiber_section, check_fibers, finish, friction_by_row, integration_of, material_lookup,
-    materials_by_row, node_lookup, orientations_by_row, reject_tables, ElementIds,
+    build_fiber_section, check_fibers, finish, floor_wall_loads, friction_by_row, integration_of,
+    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables, ElementIds,
 };
+use crate::building::{ChordDistributionSpec, WallChordSpec, WallLoadSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::ModelOutput;
+use crate::input_v1::sequence::RecorderSpec;
 use crate::input_v1::session::Session3;
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, Shell3Table, Shell4Table, ShellSectionSpec,
@@ -24,8 +29,210 @@ use crate::input_v1::CarapaceInputV1;
 
 const NDM: u8 = 3;
 
-pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
+pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError> {
+    if let Some(spec) = input.building.clone() {
+        let has_tables = [
+            (
+                "nodes",
+                !input.nodes.coords.is_empty() || !input.nodes.fixed.is_empty(),
+            ),
+            ("materials", !input.materials.is_empty()),
+            ("fibers", !input.fibers.section_offsets.is_empty()),
+            ("trusses", !input.trusses.node_i.is_empty()),
+            (
+                "elasticBeamColumns2d",
+                !input.elastic_beam_columns_2d.node_i.is_empty(),
+            ),
+            (
+                "dispBeamColumns2d",
+                !input.disp_beam_columns_2d.node_i.is_empty(),
+            ),
+            (
+                "forceBeamColumns2d",
+                !input.force_beam_columns_2d.node_i.is_empty(),
+            ),
+            (
+                "elasticBeamColumns3d",
+                !input.elastic_beam_columns_3d.node_i.is_empty(),
+            ),
+            (
+                "dispBeamColumns3d",
+                !input.disp_beam_columns_3d.node_i.is_empty(),
+            ),
+            (
+                "forceBeamColumns3d",
+                !input.force_beam_columns_3d.node_i.is_empty(),
+            ),
+            ("zeroLengths", !input.zero_lengths.node_i.is_empty()),
+            (
+                "zeroLengthSections",
+                !input.zero_length_sections.node_i.is_empty(),
+            ),
+            ("planeMaterials", !input.plane_materials.is_empty()),
+            ("triangles", !input.triangles.node_ids.is_empty()),
+            ("quads", !input.quads.node_ids.is_empty()),
+            ("embeddedBars", !input.embedded_bars.is_empty()),
+            ("shellSections", !input.shell_sections.is_empty()),
+            ("shell3s", !input.shell3s.node_ids.is_empty()),
+            ("shell4s", !input.shell4s.node_ids.is_empty()),
+            ("studWalls3d", !input.stud_walls_3d.is_empty()),
+            ("floorBands3d", !input.floor_bands_3d.is_empty()),
+            ("diaphragms", !input.diaphragms.is_empty()),
+            ("equalDofs", !input.equal_dofs.retained.is_empty()),
+            (
+                "rigidDiaphragms",
+                !input.rigid_diaphragms.retained.is_empty(),
+            ),
+            ("rigidLinks", !input.rigid_links.master.is_empty()),
+            (
+                "linearConstraints",
+                !input.linear_constraints.slave_node.is_empty(),
+            ),
+            ("loadPatterns", !input.load_patterns.series.is_empty()),
+            ("nodalLoads", !input.nodal_loads.node.is_empty()),
+            ("elementLoads", !input.element_loads.pattern.is_empty()),
+            ("floorLoads", !input.floor_loads.is_empty()),
+        ];
+        if let Some((table, _)) = has_tables.iter().find(|(_, present)| *present) {
+            return Err(DecodeError::BuildingWithTables { table });
+        }
+        let mut building =
+            crate::building::build(&spec).map_err(|e| DecodeError::InvalidBuilding {
+                reason: e.to_string(),
+            })?;
+        building
+            .apply_combination(spec.combination)
+            .map_err(|e| DecodeError::InvalidBuilding {
+                reason: e.to_string(),
+            })?;
+        let mut building_nodes = Vec::new();
+        let level_master_indices: Vec<Option<u32>> = building
+            .levels
+            .iter()
+            .map(|level| {
+                level.master.map(|master| {
+                    let index = building_nodes.len() as u32;
+                    building_nodes.push(master);
+                    index
+                })
+            })
+            .collect();
+        for (ri, recorder) in input.sequence.recorders.iter_mut().enumerate() {
+            match recorder.clone() {
+                RecorderSpec::BuildingWallPier {
+                    storey,
+                    wall,
+                    pier,
+                    quantity,
+                } => {
+                    let level = building.walls.get(storey as usize).ok_or_else(|| {
+                        DecodeError::UnknownBuildingWall {
+                            recorder: ri as u32,
+                            storey,
+                            wall: wall.clone(),
+                        }
+                    })?;
+                    let local = level.keys().position(|name| name == &wall).ok_or_else(|| {
+                        DecodeError::UnknownBuildingWall {
+                            recorder: ri as u32,
+                            storey,
+                            wall: wall.clone(),
+                        }
+                    })?;
+                    let element_index = building
+                        .walls
+                        .iter()
+                        .take(storey as usize)
+                        .map(|x| x.len())
+                        .sum::<usize>()
+                        + local;
+                    *recorder = RecorderSpec::StudWallPier {
+                        element_kind: ElementKind::StudWall3d,
+                        element_index: element_index as u32,
+                        pier,
+                        quantity,
+                    };
+                }
+                RecorderSpec::BuildingStoreyDrift { storey, component } => {
+                    let current = level_master_indices
+                        .get(storey as usize)
+                        .copied()
+                        .ok_or(DecodeError::UnknownBuildingStorey {
+                            recorder: ri as u32,
+                            storey,
+                        })?
+                        .ok_or(DecodeError::RecorderNotApplicable {
+                            recorder: ri as u32,
+                            reason: "buildingStoreyDrift requires a rigid diaphragm level",
+                        })?;
+                    let below = if storey == 0 {
+                        None
+                    } else {
+                        Some(
+                            level_master_indices
+                                .get(storey as usize - 1)
+                                .copied()
+                                .flatten()
+                                .ok_or(DecodeError::RecorderNotApplicable {
+                                    recorder: ri as u32,
+                                    reason:
+                                        "buildingStoreyDrift requires rigid levels above the base",
+                                })?,
+                        )
+                    };
+                    let dof = match component {
+                        crate::input_v1::sequence::BuildingDriftComponent::X => 0,
+                        crate::input_v1::sequence::BuildingDriftComponent::Z => 2,
+                        crate::input_v1::sequence::BuildingDriftComponent::Rotation => 4,
+                    };
+                    *recorder = RecorderSpec::NodeDifference {
+                        node: current,
+                        other_node: below,
+                        dof,
+                    };
+                }
+                _ => {}
+            }
+        }
+        let mut elements = ElementIds::new();
+        elements.set(
+            ElementKind::StudWall3d,
+            building
+                .walls
+                .iter()
+                .flat_map(|level| level.values().map(|w| w.element))
+                .collect(),
+        );
+        elements.set(
+            ElementKind::FloorBand3d,
+            building.bands.iter().flatten().copied().collect(),
+        );
+        return finish(
+            building.domain,
+            &input,
+            building_nodes,
+            elements,
+            &ModelOutput::default(),
+            Vec::new(),
+            |spec| match *spec {
+                ElementLoadSpec::Uniform { wx, wy, wz } => {
+                    Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.)))
+                }
+                ElementLoadSpec::ShellPressure { pressure } => {
+                    Some(ElementLoad3::pressure(pressure))
+                }
+                ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
+                ElementLoadSpec::WallSlots { factors } => Some(ElementLoad3 {
+                    wall: factors,
+                    ..Default::default()
+                }),
+                _ => None,
+            },
+        );
+    }
     reject_tables(&[
+        ("stud_walls_2d", input.stud_walls_2d.is_empty()),
+        ("floor_bands_2d", input.floor_bands_2d.is_empty()),
         (
             "elastic_beam_columns_2d",
             input.elastic_beam_columns_2d.node_i.is_empty(),
@@ -179,6 +386,25 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
         add_shell4s(&mut domain, &input.shell4s, &node_at, &shell_sections)?,
     );
 
+    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls_3d.len())?;
+    elements.set(
+        ElementKind::StudWall3d,
+        decode_stud_walls3(
+            &mut domain,
+            &input.stud_walls_3d,
+            &node_at,
+            &floor_wall_loads,
+        )?,
+    );
+    elements.set(
+        ElementKind::FloorBand3d,
+        decode_floor_bands3(&mut domain, &input.floor_bands_3d, &node_at)?,
+    );
+    elements.set(
+        ElementKind::Diaphragm,
+        decode_diaphragms(&mut domain, &input.diaphragms, &node_at)?,
+    );
+
     drop(node_at); // the opaque closure type keeps `node_ids` borrowed until dropped
     finish(
         domain,
@@ -193,9 +419,248 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
             }
             ElementLoadSpec::ShellPressure { pressure } => Some(ElementLoad3::pressure(pressure)),
             ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
+            ElementLoadSpec::WallSlots { factors } => Some(ElementLoad3 {
+                wall: factors,
+                ..Default::default()
+            }),
             _ => None,
         },
     )
+}
+
+fn layout3(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
+    StudWallLayout {
+        length: l.length,
+        height: l.height,
+        studs: l
+            .studs
+            .iter()
+            .map(|s| WallStud { x: s.x, ea: s.ea })
+            .collect(),
+        top_ea: l.top_ea,
+        top_ei: l.top_ei,
+        top_distribution: match l.top_distribution {
+            ChordDistributionSpec::Beam => ChordDistribution::Beam,
+            ChordDistributionSpec::Direct => ChordDistribution::Direct,
+        },
+        bottom_ea: l.bottom_ea,
+        bottom_ei: l.bottom_ei,
+        openings: l
+            .openings
+            .iter()
+            .map(|o| WallOpening {
+                x0: o.x0,
+                x1: o.x1,
+                head_height: o.head_height,
+                header_ei: o.header_ei,
+                jack_ea: o.jack_ea,
+                door: o.door,
+            })
+            .collect(),
+        sheathing: l.sheathing.as_ref().map(|s| WallSheathing {
+            law: match s.law {
+                WallShearLawSpec::Linear { ga } => WallShearLaw::Linear { ga },
+                WallShearLawSpec::O86 {
+                    bv,
+                    nail_spacing,
+                    nail_diameter,
+                } => WallShearLaw::O86 {
+                    bv,
+                    nail_spacing,
+                    nail_diameter,
+                },
+            },
+        }),
+        foundation: l.foundation,
+    }
+}
+fn load3(l: WallLoadSpec) -> WallLoad {
+    match l {
+        WallLoadSpec::TopPoint { x, fx, fy } => WallLoad::TopPoint { x, fx, fy },
+        WallLoadSpec::TopLine {
+            x0,
+            x1,
+            wx0,
+            wx1,
+            wy0,
+            wy1,
+        } => WallLoad::TopLine {
+            x0,
+            x1,
+            wx0,
+            wx1,
+            wy0,
+            wy1,
+        },
+    }
+}
+fn plane3(p: [f64; 2], table: &'static str, row: usize) -> Result<WallPlane, DecodeError> {
+    WallPlane::vertical(p[0], p[1]).map_err(|e| DecodeError::InvalidMacroElement {
+        table,
+        row: row as u32,
+        reason: e,
+    })
+}
+fn decode_stud_walls3(
+    d: &mut Domain3,
+    t: &[crate::input_v1::tables::StudWallSpec],
+    node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
+    extra: &[[Vec<WallLoad>; 8]],
+) -> Result<Vec<Element3Id>, DecodeError> {
+    let mut out = Vec::with_capacity(t.len());
+    for (i, r) in t.iter().enumerate() {
+        let c = r
+            .corners
+            .map(|x| node(x, "stud_walls_3d"))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .unwrap();
+        let st = r
+            .stations
+            .iter()
+            .map(|s| {
+                Ok(WallStation {
+                    chord: match s.chord {
+                        WallChordSpec::Top => WallChord::Top,
+                        WallChordSpec::Bottom => WallChord::Bottom,
+                    },
+                    x: s.x,
+                    node: node(s.node, "stud_walls_3d")?,
+                })
+            })
+            .collect::<Result<Vec<_>, DecodeError>>()?;
+        let mut loads: [Vec<WallLoad>; 8] = std::array::from_fn(|_| Vec::new());
+        for x in &r.loads {
+            if x.slot >= 8 {
+                return Err(DecodeError::InvalidWallSlot {
+                    table: "stud_walls_3d",
+                    row: i as u32,
+                    slot: x.slot as u32,
+                });
+            }
+            loads[x.slot].push(load3(x.load));
+        }
+        for k in 0..8 {
+            loads[k].extend(extra[i][k].iter().copied());
+        }
+        let plane = r.plane.ok_or(DecodeError::InvalidRow {
+            table: "stud_walls_3d",
+            row: i as u32,
+            reason: "plane is required in a 3D model",
+        })?;
+        let w = StudWall::new3(
+            c,
+            st,
+            layout3(&r.layout),
+            loads,
+            plane3(plane, "stud_walls_3d", i)?,
+        )
+        .map_err(|e| DecodeError::InvalidMacroElement {
+            table: "stud_walls_3d",
+            row: i as u32,
+            reason: e.to_string(),
+        })?;
+        out.push(d.add_element(Element3::StudWall(w)));
+    }
+    Ok(out)
+}
+fn decode_floor_bands3(
+    d: &mut Domain3,
+    t: &[crate::input_v1::tables::FloorBandSpec],
+    node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
+) -> Result<Vec<Element3Id>, DecodeError> {
+    let mut out = Vec::with_capacity(t.len());
+    for (i, r) in t.iter().enumerate() {
+        let b = r
+            .bottom
+            .iter()
+            .map(|&x| node(x, "floor_bands_3d"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let top = r
+            .top
+            .iter()
+            .map(|&x| node(x, "floor_bands_3d"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let l = &r.layout;
+        let p = r.plane.ok_or(DecodeError::InvalidRow {
+            table: "floor_bands_3d",
+            row: i as u32,
+            reason: "plane is required in a 3D model",
+        })?;
+        let band = FloorBand::new3(
+            b,
+            top,
+            FloorBandLayout {
+                length: l.length,
+                depth: l.depth,
+                xs: l.xs.clone(),
+                bays: l.bays.clone(),
+                rim_ea: l.rim_ea,
+            },
+            plane3(p, "floor_bands_3d", i)?,
+        )
+        .map_err(|e| DecodeError::InvalidMacroElement {
+            table: "floor_bands_3d",
+            row: i as u32,
+            reason: e.to_string(),
+        })?;
+        out.push(d.add_element(Element3::FloorBand(band)));
+    }
+    Ok(out)
+}
+fn decode_diaphragms(
+    d: &mut Domain3,
+    t: &[crate::input_v1::tables::DiaphragmSpec],
+    node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
+) -> Result<Vec<Element3Id>, DecodeError> {
+    let mut out = Vec::with_capacity(t.len());
+    for (i, r) in t.iter().enumerate() {
+        let l = &r.layout;
+        let laws = l
+            .bays
+            .iter()
+            .map(|law| {
+                law.map(|x| match x {
+                    WallShearLawSpec::Linear { ga } => {
+                        carapace_core::model::WallShearLaw::Linear { ga }
+                    }
+                    WallShearLawSpec::O86 {
+                        bv,
+                        nail_spacing,
+                        nail_diameter,
+                    } => carapace_core::model::WallShearLaw::O86 {
+                        bv,
+                        nail_spacing,
+                        nail_diameter,
+                    },
+                })
+            })
+            .collect();
+        let nodes = r
+            .nodes
+            .iter()
+            .map(|&x| node(x, "diaphragms"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let e = Diaphragm::new(
+            nodes,
+            DiaphragmLayout {
+                xs: l.xs.clone(),
+                zs: l.zs.clone(),
+                y: l.y,
+                bays: laws,
+                ea_x: l.ea_x.clone(),
+                ea_z: l.ea_z.clone(),
+            },
+        )
+        .map_err(|reason| DecodeError::InvalidMacroElement {
+            table: "diaphragms",
+            row: i as u32,
+            reason,
+        })?;
+        out.push(d.add_element(Element3::Diaphragm(e)));
+    }
+    Ok(out)
 }
 
 fn resolve_shell_sections(specs: &[ShellSectionSpec]) -> Result<Vec<ShellSection>, DecodeError> {

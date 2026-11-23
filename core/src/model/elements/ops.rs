@@ -15,6 +15,8 @@ use arrayvec::ArrayVec;
 use nalgebra::{SMatrix, SVector};
 use slotmap::{Key, SlotMap};
 
+use crate::model::StudWallResponse;
+use crate::model::{DiaphragmResponse, FloorBandResponse};
 use crate::model::{LimitKind, LimitStateConfig, Node};
 
 /// Inline node-list capacity used by the existing fixed-connectivity catalog.
@@ -245,6 +247,29 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
 
     /// The nodes this element connects, in local order.
     fn nodes(&self) -> NodeList<'_, NId>;
+
+    /// Recovered local stud-wall pier response, when this catalog element is a wall.
+    fn stud_wall_response(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+        _load: Option<&Self::Load>,
+    ) -> Option<StudWallResponse> {
+        None
+    }
+
+    fn floor_band_response(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+    ) -> Option<FloorBandResponse> {
+        None
+    }
+
+    fn diaphragm_response(
+        &self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+    ) -> Option<DiaphragmResponse> {
+        None
+    }
 
     /// The node DOF slots this element stiffens (the same for each node).
     /// Must cover every slot on which `assemble_tangent` can produce a

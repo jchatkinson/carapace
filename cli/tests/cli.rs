@@ -7,6 +7,14 @@ const EXAMPLE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../examples/models/portal_frame_2d.json"
 );
+const STUD_WALL: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../examples/models/stud_wall_2d.json"
+);
+const BUILDING: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../examples/models/two_storey_box_building.json"
+);
 
 fn run(args: &[&str]) -> (Output, serde_json::Value) {
     let output = Command::new(BIN).args(args).output().unwrap();
@@ -28,6 +36,35 @@ fn runs_the_example_model() {
         .as_f64()
         .unwrap();
     assert!(drift > 0.0 && drift < 100.0, "{drift}");
+}
+
+/// The wire wall and two-storey builder examples solve through the CLI and match hand shear/displacement values.
+#[test]
+fn runs_macro_element_examples() {
+    for (path, expected, tol) in [
+        (STUD_WALL, 0.00028333333333333335, 1e-12),
+        (BUILDING, 1.25, 1e-8),
+    ] {
+        let (output, json) = run(&["run", path]);
+        assert!(output.status.success(), "{json}");
+        assert_eq!(json["report"]["completed"], true);
+        let value = json["report"]["recorders"][0]["samples"][0][1]
+            .as_f64()
+            .unwrap();
+        assert!(
+            (value - expected).abs() <= tol,
+            "{path}: {value} vs {expected}"
+        );
+        if path == BUILDING {
+            let rotation = json["report"]["recorders"][1]["samples"][0][1]
+                .as_f64()
+                .unwrap();
+            assert!(
+                rotation.abs() < 1e-12,
+                "symmetric rigid building rotation {rotation}"
+            );
+        }
+    }
 }
 
 /// A schema mismatch reports the JSON path of the bad value and exits 1.
@@ -55,6 +92,20 @@ fn io_errors_and_schema() {
     let (output, json) = run(&["schema"]);
     assert!(output.status.success());
     assert!(json["properties"]["header"].is_object());
+    for table in [
+        "studWalls2d",
+        "studWalls3d",
+        "floorBands2d",
+        "floorBands3d",
+        "diaphragms",
+        "floorLoads",
+        "building",
+    ] {
+        assert!(
+            json["properties"][table].is_object(),
+            "schema missing {table}"
+        );
+    }
 }
 
 /// `batch` returns one result per model in argument order, keeps going past an invalid model, and exits 1.

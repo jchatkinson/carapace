@@ -1,0 +1,468 @@
+{
+  "header": {
+    "schemaVersion": 1,
+    "ndm": 3,
+    "engineVersion": "0.1.0"
+  },
+  "building": {
+    "storeys": [
+      {
+        "wallHeight": 2440,
+        "floorDepth": 254,
+        "bandGa": 1000000000.0,
+        "rimEa": 1000000000000.0,
+        "anchorage": {
+          "tension": 15000,
+          "slack": 0,
+          "bearing": {
+            "kind": "linear",
+            "k": 1000000000.0
+          }
+        },
+        "bearing": 1000000000.0,
+        "walls": [
+          {
+            "name": "front",
+            "start": [
+              0,
+              0
+            ],
+            "direction": [
+              1,
+              0
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          },
+          {
+            "name": "back",
+            "start": [
+              0,
+              4000
+            ],
+            "direction": [
+              1,
+              0
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          },
+          {
+            "name": "left",
+            "start": [
+              0,
+              0
+            ],
+            "direction": [
+              0,
+              1
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          },
+          {
+            "name": "right",
+            "start": [
+              4000,
+              0
+            ],
+            "direction": [
+              0,
+              1
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          }
+        ],
+        "floors": [],
+        "lateral": [
+          {
+            "slot": 0,
+            "fx": 10000,
+            "fz": 0,
+            "at": [
+              2000,
+              2000
+            ]
+          }
+        ]
+      },
+      {
+        "wallHeight": 2440,
+        "floorDepth": 0,
+        "bandGa": 1000000000.0,
+        "rimEa": 1000000000000.0,
+        "anchorage": {
+          "tension": 15000,
+          "slack": 0,
+          "bearing": {
+            "kind": "linear",
+            "k": 1000000000.0
+          }
+        },
+        "bearing": 1000000000.0,
+        "walls": [
+          {
+            "name": "front",
+            "start": [
+              0,
+              0
+            ],
+            "direction": [
+              1,
+              0
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          },
+          {
+            "name": "back",
+            "start": [
+              0,
+              4000
+            ],
+            "direction": [
+              1,
+              0
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          },
+          {
+            "name": "left",
+            "start": [
+              0,
+              0
+            ],
+            "direction": [
+              0,
+              1
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          },
+          {
+            "name": "right",
+            "start": [
+              4000,
+              0
+            ],
+            "direction": [
+              0,
+              1
+            ],
+            "layout": {
+              "length": 4000,
+              "height": 2440,
+              "studs": [
+                {
+                  "x": 0,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 2000,
+                  "ea": 100000000.0
+                },
+                {
+                  "x": 4000,
+                  "ea": 100000000.0
+                }
+              ],
+              "topEa": 1000000000000.0,
+              "topEi": 1000000000000.0,
+              "topDistribution": "beam",
+              "bottomEa": 1000000000000.0,
+              "bottomEi": 1000000000000.0,
+              "openings": [],
+              "sheathing": {
+                "law": {
+                  "kind": "linear",
+                  "ga": 10000000.0
+                }
+              },
+              "foundation": false
+            },
+            "loads": []
+          }
+        ],
+        "floors": [],
+        "lateral": [
+          {
+            "slot": 0,
+            "fx": 10000,
+            "fz": 0,
+            "at": [
+              2000,
+              2000
+            ]
+          }
+        ]
+      }
+    ],
+    "foundationAnchorage": {
+      "tension": 15000,
+      "slack": 0,
+      "bearing": {
+        "kind": "linear",
+        "k": 1000000000.0
+      }
+    },
+    "diaphragm": "rigid",
+    "combination": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "sequence": {
+    "stages": [
+      {
+        "kind": "static",
+        "id": "lateral",
+        "steps": 1,
+        "integrator": {
+          "kind": "loadControl",
+          "increment": 1
+        },
+        "algorithm": {
+          "kind": "linear"
+        },
+        "convergence": {
+          "kind": "normUnbalance",
+          "tol": 1e-08,
+          "maxIter": 10
+        },
+        "holdPatternsAfter": []
+      }
+    ],
+    "recorders": [
+      {
+        "response": "buildingWallPier",
+        "storey": 1,
+        "wall": "front",
+        "pier": 0,
+        "quantity": "q"
+      },
+      {
+        "response": "buildingStoreyDrift",
+        "storey": 1,
+        "component": "rotation"
+      }
+    ]
+  }
+}

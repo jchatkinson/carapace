@@ -564,7 +564,7 @@ pub enum EmbeddedBarQuantity {
     Ruptured,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
@@ -573,6 +573,41 @@ pub enum EmbeddedBarQuantity {
     rename_all_fields = "camelCase"
 )]
 pub enum RecorderSpec {
+    /// One local result from a stud-wall pier (pier index is zero-based).
+    StudWallPier {
+        element_kind: ElementKind,
+        element_index: u32,
+        pier: u32,
+        quantity: StudWallQuantity,
+    },
+    /// A named pier in a builder-generated 3D building.
+    BuildingWallPier {
+        storey: u32,
+        wall: String,
+        pier: u32,
+        quantity: StudWallQuantity,
+    },
+    FloorBandBay {
+        element_index: u32,
+        bay: u32,
+        quantity: WallBayQuantity,
+    },
+    DiaphragmBay {
+        element_index: u32,
+        bay: u32,
+        quantity: WallBayQuantity,
+    },
+    BuildingStoreyDrift {
+        storey: u32,
+        component: BuildingDriftComponent,
+    },
+    NodeDifference {
+        node: u32,
+        #[serde(default)]
+        #[cfg_attr(feature = "tsify", tsify(optional))]
+        other_node: Option<u32>,
+        dof: u8,
+    },
     /// `node`/`dof` index into `NodeTable`.
     NodeDisp { node: u32, dof: u8 },
     /// Only meaningful during a `Transient` stage — `analysis.domain()`'s
@@ -677,6 +712,38 @@ pub enum RecorderSpec {
         table: BulkTable,
         quantity: BulkQuantity,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum StudWallQuantity {
+    Q,
+    Gamma,
+    MomentBase,
+    MomentTop,
+    ChordLeft,
+    ChordRight,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum WallBayQuantity {
+    Q,
+    Gamma,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum BuildingDriftComponent {
+    X,
+    Z,
+    Rotation,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

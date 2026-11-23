@@ -1,6 +1,6 @@
 # Floors
 
-Floor components for stud-wall models (core Rust API, 2D and vertical-plane `Domain3`). The plan and its rationale are in
+Floor components for stud-wall models (core Rust API and `CarapaceInputV1` tables, 2D and vertical-plane `Domain3`). The plan and its rationale are in
 [floor-system-plan.md](floor-system-plan.md); the walls themselves are in [stud-wall.md](stud-wall.md).
 For automatic stacked building generation, see [building.md](building.md).
 

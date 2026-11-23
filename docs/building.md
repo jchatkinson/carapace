@@ -1,8 +1,8 @@
 # Stacked stud-wall buildings
 
 `carapace-input::building` builds a 3D `Domain3` from a native Rust `BuildingSpec`. The spec uses global Y up,
-plan X-Z, and N/mm. Its serde representation is camelCase and has TypeScript derives behind the `tsify`
-feature; it is not yet part of `CarapaceInputV1`.
+plan X-Z, and N/mm. Its camelCase serde representation is also accepted as the optional `building` field in
+`CarapaceInputV1` for the 3D profile.
 
 ```rust,ignore
 let building = carapace_input::building::build(&spec)?;
@@ -61,5 +61,7 @@ combinations independently.
 | Floor D + L at 1.25D + 1.5L to a window wall: base 32e6 N, header 4.8e6 N per end from the cripple tributaries | hand takedown | 1e-9 |
 | Misaligned stacking, unknown/non-perpendicular supports, bad direction | named `BuildError` | exact |
 
-Not yet compared against a hand-built model of the same building (the generated model is checked by statics
-and the element tests behind it). The JSON wire format is the next phase.
+The wire decoder builds this same model, applies `combination`, and maps `buildingWallPier` and rigid-level
+`buildingStoreyDrift` recorders. `buildingStoreyDrift` is rejected for flexible levels because they have no master
+node. PySees mirrors only the tables its compiler emits; it has no stud-wall API and needs no change for these
+tables.

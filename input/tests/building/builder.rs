@@ -47,6 +47,7 @@ fn layout(window: bool) -> WallLayoutSpec {
         sheathing: Some(WallSheathingSpec {
             law: WallShearLawSpec::Linear { ga: 1e7 },
         }),
+        foundation: false,
     }
 }
 fn wall(name: &str, start: [f64; 2], direction: [f64; 2], window: bool) -> WallSpec {
@@ -91,6 +92,7 @@ fn spec(storeys: Vec<StoreySpec>, diaphragm: DiaphragmKind) -> BuildingSpec {
         storeys,
         foundation_anchorage: anchorage(),
         diaphragm,
+        combination: [1.; 8],
     }
 }
 fn build_error(s: &BuildingSpec) -> BuildError {

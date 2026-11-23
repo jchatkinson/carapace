@@ -293,6 +293,27 @@ where
         self.elements[id].local_force(&self.node_view())
     }
 
+    /// Recovered local response for a stud wall, with active wall-slot load factors.
+    pub fn element_stud_wall_response(
+        &self,
+        id: E::Id,
+        pseudo_time: f64,
+    ) -> Option<StudWallResponse> {
+        let element = self.elements.get(id)?;
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        let load = effective_element_load(&active, id);
+        element.stud_wall_response(&self.node_view(), load.as_ref())
+    }
+
+    pub fn element_floor_band_response(&self, id: E::Id) -> Option<FloorBandResponse> {
+        self.elements
+            .get(id)?
+            .floor_band_response(&self.node_view())
+    }
+    pub fn element_diaphragm_response(&self, id: E::Id) -> Option<DiaphragmResponse> {
+        self.elements.get(id)?.diaphragm_response(&self.node_view())
+    }
+
     /// Component `component` of the load `id` carries at `pseudo_time` — every
     /// pattern's load on it, scaled by that pattern's factor (frozen patterns
     /// at their frozen value), summed; `0.0` for an unloaded element. Local
@@ -1839,31 +1860,6 @@ impl<NId: NodeKey> VectorSink<NId> for PickDof<NId> {
 /// of refusing to compile — see `Domain3::rigid_diaphragm` for the real
 /// (affine, lever-arm-aware) spatial version below.
 impl Domain {
-    /// Recovered local response for a stud-wall element, with the wall-slot load factors active at `pseudo_time`.
-    pub fn element_stud_wall_response(
-        &self,
-        id: crate::model::ElementId,
-        pseudo_time: f64,
-    ) -> Option<StudWallResponse> {
-        let Element::StudWall(wall) = self.elements.get(id)? else {
-            return None;
-        };
-        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
-        let load = effective_element_load(&active, id);
-        Some(wall.response(&self.node_view(), load.as_ref()))
-    }
-
-    /// Recovered floor-band shear and rim forces at the current state.
-    pub fn element_floor_band_response(
-        &self,
-        id: crate::model::ElementId,
-    ) -> Option<FloorBandResponse> {
-        let Element::FloorBand(band) = self.elements.get(id)? else {
-            return None;
-        };
-        Some(band.response(&self.node_view()))
-    }
-
     pub fn rigid_diaphragm(&mut self, retained: NodeId, constrained: &[NodeId]) {
         for &c in constrained {
             self.equal_dof(retained, c, &[0]);
@@ -1938,46 +1934,7 @@ impl Domain {
 /// coordinate/rotation set (`Axis3`, and a rotation-about-`normal` dof)
 /// that only the spatial profile's `Node3`/`SpatialDof` provide.
 impl Domain3 {
-    /// Recovered local response for a 3D stud wall, with wall-slot factors active at `pseudo_time`.
-    pub fn element_stud_wall_response(
-        &self,
-        id: crate::model::Element3Id,
-        pseudo_time: f64,
-    ) -> Option<StudWallResponse> {
-        let Element3::StudWall(wall) = self.elements.get(id)? else {
-            return None;
-        };
-        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
-        let load3 = effective_element_load(&active, id);
-        let load = load3.map(|l| crate::model::ElementLoad {
-            wall: l.wall,
-            ..Default::default()
-        });
-        Some(wall.response(&self.node_view(), load.as_ref()))
-    }
-
     /// Recovered floor-band shear and rim forces at the current 3D state.
-    pub fn element_floor_band_response(
-        &self,
-        id: crate::model::Element3Id,
-    ) -> Option<FloorBandResponse> {
-        let Element3::FloorBand(band) = self.elements.get(id)? else {
-            return None;
-        };
-        Some(band.response(&self.node_view()))
-    }
-
-    /// Recovered bay shear and axial grid-member forces for a 3D diaphragm.
-    pub fn element_diaphragm_response(
-        &self,
-        id: crate::model::Element3Id,
-    ) -> Option<DiaphragmResponse> {
-        let Element3::Diaphragm(diaphragm) = self.elements.get(id)? else {
-            return None;
-        };
-        Some(diaphragm.response(&self.node_view()))
-    }
-
     /// `rigid_diaphragm_about` with `normal = Axis3::Y` — the "up" axis in
     /// this crate's y-up global convention,
     /// so the diaphragm plane is the horizontal `x`-`z` plane: the common

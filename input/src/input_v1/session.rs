@@ -57,6 +57,68 @@ where
     })
 }
 
+fn wall_pier_value<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    element: E::Id,
+    pier: u32,
+    quantity: super::sequence::StudWallQuantity,
+    progress: f64,
+) -> Option<f64>
+where
+    NId: NodeKey,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    let p = domain
+        .element_stud_wall_response(element, progress)?
+        .piers
+        .get(pier as usize)
+        .copied()?;
+    Some(match quantity {
+        super::sequence::StudWallQuantity::Q => p.q,
+        super::sequence::StudWallQuantity::Gamma => p.gamma,
+        super::sequence::StudWallQuantity::MomentBase => p.moment_base,
+        super::sequence::StudWallQuantity::MomentTop => p.moment_top,
+        super::sequence::StudWallQuantity::ChordLeft => p.chords[0],
+        super::sequence::StudWallQuantity::ChordRight => p.chords[1],
+    })
+}
+
+fn floor_band_bay_value<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    element: E::Id,
+    bay: u32,
+    quantity: super::sequence::WallBayQuantity,
+) -> Option<f64>
+where
+    NId: NodeKey,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    let response = domain.element_floor_band_response(element)?;
+    let b = response.bays.get(bay as usize)?;
+    Some(match quantity {
+        super::sequence::WallBayQuantity::Q => b.q,
+        super::sequence::WallBayQuantity::Gamma => b.gamma,
+    })
+}
+
+fn diaphragm_bay_value<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    element: E::Id,
+    bay: u32,
+    quantity: super::sequence::WallBayQuantity,
+) -> Option<f64>
+where
+    NId: NodeKey,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    let response = domain.element_diaphragm_response(element)?;
+    let b = response.bays.get(bay as usize)?;
+    Some(match quantity {
+        super::sequence::WallBayQuantity::Q => b.q,
+        super::sequence::WallBayQuantity::Gamma => b.gamma,
+    })
+}
+
 /// Principal values `(v1, v2, theta)` of a plane tensor `[x, y, xy]`, `v1 >= v2`, with `theta` the
 /// counter-clockwise angle from global x to the `v1` direction. `shear_is_engineering` is true for
 /// strain, whose `xy` is `gamma = 2 * eps_xy`.
@@ -419,6 +481,26 @@ impl From<AnalysisError> for AnalysisErrorDetail {
 /// (`Node3Id`/`Element3Id`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResolvedRecorder<NId, EId> {
+    StudWallPier {
+        element: EId,
+        pier: u32,
+        quantity: super::sequence::StudWallQuantity,
+    },
+    FloorBandBay {
+        element: EId,
+        bay: u32,
+        quantity: super::sequence::WallBayQuantity,
+    },
+    DiaphragmBay {
+        element: EId,
+        bay: u32,
+        quantity: super::sequence::WallBayQuantity,
+    },
+    NodeDifference {
+        node: NId,
+        other_node: Option<NId>,
+        dof: u8,
+    },
     NodeDisp {
         node: NId,
         dof: u8,
@@ -1394,9 +1476,34 @@ where
                 let progress = self.load_factor;
                 for (recorder, batch) in self.recorders.iter().zip(self.current_batch.iter_mut()) {
                     let value = match *recorder {
+                        ResolvedRecorder::StudWallPier {
+                            element,
+                            pier,
+                            quantity,
+                        } => wall_pier_value(analysis.domain(), element, pier, quantity, progress),
+                        ResolvedRecorder::FloorBandBay {
+                            element,
+                            bay,
+                            quantity,
+                        } => floor_band_bay_value(analysis.domain(), element, bay, quantity),
+                        ResolvedRecorder::DiaphragmBay {
+                            element,
+                            bay,
+                            quantity,
+                        } => diaphragm_bay_value(analysis.domain(), element, bay, quantity),
                         ResolvedRecorder::NodeDisp { node, dof } => {
                             Some(analysis.domain().node(node).displacement[dof as usize])
                         }
+                        ResolvedRecorder::NodeDifference {
+                            node,
+                            other_node,
+                            dof,
+                        } => Some(
+                            analysis.domain().node(node).displacement[dof as usize]
+                                - other_node.map_or(0., |n| {
+                                    analysis.domain().node(n).displacement[dof as usize]
+                                }),
+                        ),
                         ResolvedRecorder::ElementForce { element, component } => Some(
                             analysis.domain().element_end_force(element, progress)
                                 [component as usize],
@@ -1465,9 +1572,34 @@ where
                 let progress = self.load_factor; // == analysis.time(), set by step_once
                 for (recorder, batch) in self.recorders.iter().zip(self.current_batch.iter_mut()) {
                     let value = match *recorder {
+                        ResolvedRecorder::StudWallPier {
+                            element,
+                            pier,
+                            quantity,
+                        } => wall_pier_value(analysis.domain(), element, pier, quantity, progress),
+                        ResolvedRecorder::FloorBandBay {
+                            element,
+                            bay,
+                            quantity,
+                        } => floor_band_bay_value(analysis.domain(), element, bay, quantity),
+                        ResolvedRecorder::DiaphragmBay {
+                            element,
+                            bay,
+                            quantity,
+                        } => diaphragm_bay_value(analysis.domain(), element, bay, quantity),
                         ResolvedRecorder::NodeDisp { node, dof } => {
                             Some(analysis.domain().node(node).displacement[dof as usize])
                         }
+                        ResolvedRecorder::NodeDifference {
+                            node,
+                            other_node,
+                            dof,
+                        } => Some(
+                            analysis.domain().node(node).displacement[dof as usize]
+                                - other_node.map_or(0., |n| {
+                                    analysis.domain().node(n).displacement[dof as usize]
+                                }),
+                        ),
                         ResolvedRecorder::NodeVel { node, dof } => {
                             Some(analysis.domain().node(node).velocity[dof as usize])
                         }

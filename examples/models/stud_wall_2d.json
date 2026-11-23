@@ -1,0 +1,33 @@
+{
+  "header": {"schemaVersion": 1, "ndm": 2, "engineVersion": "0.1.0"},
+  "nodes": {
+    "coords": [0, 0, 1000, 0, 1000, 1000, 0, 1000],
+    "fixed": [7, 7, 2, 2],
+    "massNodeIndex": [],
+    "mass": []
+  },
+  "studWalls2d": [{
+    "corners": [0, 1, 2, 3],
+    "stations": [],
+    "layout": {
+      "length": 1000,
+      "height": 1000,
+      "studs": [{"x": 0, "ea": 100000000}, {"x": 1000, "ea": 100000000}],
+      "topEa": 1000000000,
+      "topEi": 1000000000,
+      "topDistribution": "beam",
+      "bottomEa": 1000000000,
+      "bottomEi": 1000000000,
+      "openings": [],
+      "sheathing": {"law": {"kind": "linear", "ga": 1000000}},
+      "foundation": false
+    },
+    "loads": [{"slot": 0, "load": {"kind": "topPoint", "x": 500, "fx": 100, "fy": 0}}]
+  }],
+  "loadPatterns": {"series": [{"kind": "linear", "slope": 1}], "scaleFactor": [1]},
+  "elementLoads": {"pattern": [0], "elementKind": ["studWall2d"], "elementIndex": [0], "load": [{"kind": "wallSlots", "factors": [1, 0, 0, 0, 0, 0, 0, 0]}], "stage": [0]},
+  "sequence": {
+    "stages": [{"kind": "static", "id": "lateral", "steps": 1, "integrator": {"kind": "loadControl", "increment": 1}, "algorithm": {"kind": "linear"}, "convergence": {"kind": "normUnbalance", "tol": 1e-10, "maxIter": 10}, "holdPatternsAfter": []}],
+    "recorders": [{"response": "nodeDisp", "node": 3, "dof": 0}]
+  }
+}

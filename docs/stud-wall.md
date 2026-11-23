@@ -13,8 +13,9 @@ It is built for design:
   11.7.1.2 deflection terms for one storey, and the O86 Annex A.11.7.1 multi-storey method for stacked walls;
 - **design forces** per pier: shear flow `q` and the M/jd chord (hold-down) force.
 
-Status: core Rust API only (`carapace-core`, 2D `Domain` and vertical-plane `Domain3`). `FloorBand` supports stacking storeys with floor depth.
-Neither element is yet in the JSON wire format, the CLI, the Python package or PySees. Implementation details
+Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls2d`/`studWalls3d`, `floorBands2d`/`floorBands3d`,
+`diaphragms`, wall slot factors and `floorLoads`). The CLI consumes the same format. PySees does not compile these
+tables and has no stud-wall model API. Implementation details
 are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
 design and its rationale in [`stud-wall-panel.md`](stud-wall-panel.md).
 
@@ -415,15 +416,15 @@ reports its M/jd chord forces for its two hold-downs.
 ## 10. Limitations
 
 Not modelled, or not yet available:
-- JSON wire format, CLI, Python and PySees (core Rust API only).
+- Python and PySees authoring APIs (the engine wire format is available, but PySees has no stud walls).
 - Out-of-plane loading and per-stud out-of-plane output (a 3D wall has only its in-plane translations).
 - Mass and self-weight (no dynamics; add wall weight as a load).
 - Sills and cripples below windows; force transfer around openings and the perforated shear-wall method
   (segmented design only).
 - Nonlinear or hysteretic framing members; staged sheathing installation.
 - Internal hold-downs, tension-only bearing and slip inside the element: use exterior `ZeroLength`s.
-- The automatic stacked building builder is native Rust only; it does not yet have a wire format or PySees surface
-  ([building.md](building.md)).
+- The automatic stacked building builder is available through the 3D `building` wire field and CLI; PySees does
+  not emit that field ([building.md](building.md)).
 - Unilateral interior-stud bearing (uplift of interior studs).
 - Automatic station generation.
 - O86 gypsum `e_n`, unblocked `J_us` and the no-hold-down `d_a` equation (11.7.1.2); SDPWS's nail-slip form.

@@ -6,17 +6,20 @@
 
 use carapace_core::model::continuum::{bond_polyline, embed_polyline_in, BondSpec, EndSpring};
 use carapace_core::model::{
-    CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain, ElasticBeamColumn, Element,
-    ElementId, ElementLoad, EmbeddedBar, EmbeddedBarHost, Fiber, FiberSection, ForceBeamColumn,
-    Friction, GeomTransf, Material, NodeId, PlaneMaterial, Quad4, Quad4Formulation, Tri3, Truss,
+    ChordDistribution, CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain,
+    ElasticBeamColumn, Element, ElementId, ElementLoad, EmbeddedBar, EmbeddedBarHost, Fiber,
+    FiberSection, FloorBand, FloorBandLayout, ForceBeamColumn, Friction, GeomTransf, Material,
+    NodeId, PlaneMaterial, Quad4, Quad4Formulation, StudWall, StudWallLayout, Tri3, Truss,
+    WallChord, WallLoad, WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud,
     ZeroLength, ZeroLengthSection,
 };
 
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
-    build_fiber_section, check_fibers, finish, friction_by_row, integration_of, material_lookup,
-    materials_by_row, node_lookup, orientations_by_row, reject_tables, ElementIds,
+    build_fiber_section, check_fibers, finish, floor_wall_loads, friction_by_row, integration_of,
+    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables, ElementIds,
 };
+use crate::building::{ChordDistributionSpec, WallChordSpec, WallLoadSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::{
@@ -34,6 +37,9 @@ const NDM: u8 = 2;
 
 pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
     reject_tables(&[
+        ("stud_walls_3d", input.stud_walls_3d.is_empty()),
+        ("floor_bands_3d", input.floor_bands_3d.is_empty()),
+        ("diaphragms", input.diaphragms.is_empty()),
         (
             "elastic_beam_columns_3d",
             input.elastic_beam_columns_3d.node_i.is_empty(),
@@ -171,6 +177,30 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         add_quads(&mut domain, &input.quads, &node_at, &plane_materials)?,
     );
 
+    if input.stud_walls_2d.iter().any(|w| w.plane.is_some())
+        || input.floor_bands_2d.iter().any(|b| b.plane.is_some())
+    {
+        return Err(DecodeError::InvalidRow {
+            table: "stud_walls_2d",
+            row: 0,
+            reason: "plane is only valid in a 3D model",
+        });
+    }
+    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls_2d.len())?;
+    elements.set(
+        ElementKind::StudWall2d,
+        decode_stud_walls(
+            &mut domain,
+            &input.stud_walls_2d,
+            &node_at,
+            &floor_wall_loads,
+        )?,
+    );
+    elements.set(
+        ElementKind::FloorBand2d,
+        decode_floor_bands(&mut domain, &input.floor_bands_2d, &node_at)?,
+    );
+
     let mut bar_end_loads = Vec::new();
     let model_output = add_embedded_bars(
         &mut domain,
@@ -208,11 +238,174 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
                 ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
                     return None
                 }
+                ElementLoadSpec::WallSlots { factors } => ElementLoad {
+                    wall: factors,
+                    ..Default::default()
+                },
             })
         },
     )?;
     session.set_model_output(model_output);
     Ok(session)
+}
+
+fn decode_layout(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
+    StudWallLayout {
+        length: l.length,
+        height: l.height,
+        studs: l
+            .studs
+            .iter()
+            .map(|s| WallStud { x: s.x, ea: s.ea })
+            .collect(),
+        top_ea: l.top_ea,
+        top_ei: l.top_ei,
+        top_distribution: match l.top_distribution {
+            ChordDistributionSpec::Beam => ChordDistribution::Beam,
+            ChordDistributionSpec::Direct => ChordDistribution::Direct,
+        },
+        bottom_ea: l.bottom_ea,
+        bottom_ei: l.bottom_ei,
+        openings: l
+            .openings
+            .iter()
+            .map(|o| WallOpening {
+                x0: o.x0,
+                x1: o.x1,
+                head_height: o.head_height,
+                header_ei: o.header_ei,
+                jack_ea: o.jack_ea,
+                door: o.door,
+            })
+            .collect(),
+        sheathing: l.sheathing.as_ref().map(|s| WallSheathing {
+            law: match s.law {
+                WallShearLawSpec::Linear { ga } => WallShearLaw::Linear { ga },
+                WallShearLawSpec::O86 {
+                    bv,
+                    nail_spacing,
+                    nail_diameter,
+                } => WallShearLaw::O86 {
+                    bv,
+                    nail_spacing,
+                    nail_diameter,
+                },
+            },
+        }),
+        foundation: l.foundation,
+    }
+}
+fn decode_wall_load(l: WallLoadSpec) -> WallLoad {
+    match l {
+        WallLoadSpec::TopPoint { x, fx, fy } => WallLoad::TopPoint { x, fx, fy },
+        WallLoadSpec::TopLine {
+            x0,
+            x1,
+            wx0,
+            wx1,
+            wy0,
+            wy1,
+        } => WallLoad::TopLine {
+            x0,
+            x1,
+            wx0,
+            wx1,
+            wy0,
+            wy1,
+        },
+    }
+}
+fn decode_stud_walls(
+    domain: &mut Domain,
+    t: &[crate::input_v1::tables::StudWallSpec],
+    node: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+    extra: &[[Vec<WallLoad>; 8]],
+) -> Result<Vec<ElementId>, DecodeError> {
+    let mut out = Vec::with_capacity(t.len());
+    for (i, r) in t.iter().enumerate() {
+        let c = r
+            .corners
+            .map(|x| node(x, "stud_walls_2d"))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .unwrap();
+        let st = r
+            .stations
+            .iter()
+            .map(|s| {
+                Ok(WallStation {
+                    chord: match s.chord {
+                        WallChordSpec::Top => WallChord::Top,
+                        WallChordSpec::Bottom => WallChord::Bottom,
+                    },
+                    x: s.x,
+                    node: node(s.node, "stud_walls_2d")?,
+                })
+            })
+            .collect::<Result<Vec<_>, DecodeError>>()?;
+        let mut loads: [Vec<WallLoad>; 8] = std::array::from_fn(|_| Vec::new());
+        for x in &r.loads {
+            if x.slot >= 8 {
+                return Err(DecodeError::InvalidWallSlot {
+                    table: "stud_walls_2d",
+                    row: i as u32,
+                    slot: x.slot as u32,
+                });
+            }
+            loads[x.slot].push(decode_wall_load(x.load));
+        }
+        for k in 0..8 {
+            loads[k].extend(extra[i][k].iter().copied());
+        }
+        let wall = StudWall::new(c, st, decode_layout(&r.layout), loads).map_err(|e| {
+            DecodeError::InvalidMacroElement {
+                table: "stud_walls_2d",
+                row: i as u32,
+                reason: e.to_string(),
+            }
+        })?;
+        out.push(domain.add_element(Element::StudWall(wall)));
+    }
+    Ok(out)
+}
+fn decode_floor_bands(
+    domain: &mut Domain,
+    t: &[crate::input_v1::tables::FloorBandSpec],
+    node: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
+) -> Result<Vec<ElementId>, DecodeError> {
+    let mut out = Vec::with_capacity(t.len());
+    for (i, r) in t.iter().enumerate() {
+        let b = r
+            .bottom
+            .iter()
+            .map(|&x| node(x, "floor_bands_2d"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let top = r
+            .top
+            .iter()
+            .map(|&x| node(x, "floor_bands_2d"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let l = &r.layout;
+        let band = FloorBand::new(
+            b,
+            top,
+            FloorBandLayout {
+                length: l.length,
+                depth: l.depth,
+                xs: l.xs.clone(),
+                bays: l.bays.clone(),
+                rim_ea: l.rim_ea,
+            },
+        )
+        .map_err(|e| DecodeError::InvalidMacroElement {
+            table: "floor_bands_2d",
+            row: i as u32,
+            reason: e.to_string(),
+        })?;
+        out.push(domain.add_element(Element::FloorBand(band)));
+    }
+    Ok(out)
 }
 
 /// Discretizes each `embeddedBars` row through `embed_polyline_in` and registers its segments

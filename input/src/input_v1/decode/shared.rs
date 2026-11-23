@@ -8,8 +8,8 @@ use carapace_core::model::NodeKey;
 use std::collections::HashMap;
 
 use carapace_core::model::{
-    BeamIntegration, Domain, ElementLoadComponents, ElementOps, LoadPatternId, Material, Node,
-    Orientation,
+    transfer_floor, BeamIntegration, Domain, ElementLoadComponents, ElementOps, FloorBounds,
+    FloorContinuity, FloorLoad, FloorSupport, LoadPatternId, Material, Node, Orientation, WallLoad,
 };
 
 use super::stages::{compile_stages, load_series_of};
@@ -76,6 +76,75 @@ pub(super) fn reject_tables(tables: &[(&'static str, bool)]) -> Result<(), Decod
         }
     }
     Ok(())
+}
+
+pub(super) fn floor_wall_loads(
+    floors: &[crate::input_v1::tables::FloorTransferSpec],
+    wall_count: usize,
+) -> Result<Vec<[Vec<WallLoad>; 8]>, DecodeError> {
+    use crate::building::{FloorContinuitySpec, FloorLoadSpec};
+    use crate::input_v1::tables::WallTargetSpec;
+    let mut out = (0..wall_count)
+        .map(|_| std::array::from_fn(|_| Vec::new()))
+        .collect::<Vec<_>>();
+    for (fi, floor) in floors.iter().enumerate() {
+        let bounds = FloorBounds {
+            s0: floor.bounds[0],
+            s1: floor.bounds[1],
+            t0: floor.bounds[2],
+            t1: floor.bounds[3],
+        };
+        let supports = floor
+            .supports
+            .iter()
+            .map(|s| FloorSupport {
+                s: s.s,
+                t0: s.t0,
+                t1: s.t1,
+            })
+            .collect::<Vec<_>>();
+        let loads = floor
+            .loads
+            .iter()
+            .map(|l| match *l {
+                FloorLoadSpec::Area { slot, w, region } => FloorLoad::Area { slot, w, region },
+                FloorLoadSpec::Line { slot, w, s, t0, t1 } => {
+                    FloorLoad::Line { slot, w, s, t0, t1 }
+                }
+                FloorLoadSpec::LineAlong { slot, w, t, s0, s1 } => {
+                    FloorLoad::LineAlong { slot, w, t, s0, s1 }
+                }
+                FloorLoadSpec::Point { slot, p, s, t } => FloorLoad::Point { slot, p, s, t },
+            })
+            .collect::<Vec<_>>();
+        let continuity = match floor.continuity {
+            FloorContinuitySpec::Simple => FloorContinuity::Simple,
+            FloorContinuitySpec::Continuous => FloorContinuity::Continuous,
+        };
+        let reactions = transfer_floor(bounds, &supports, &loads, continuity).map_err(|e| {
+            DecodeError::InvalidFloorTransfer {
+                row: fi as u32,
+                reason: e.to_string(),
+            }
+        })?;
+        for (si, support) in floor.supports.iter().enumerate() {
+            let index = match support.wall {
+                WallTargetSpec::StudWall { index } => index as usize,
+            };
+            let target = out.get_mut(index).ok_or(DecodeError::UnknownElementIndex {
+                table: "stud_walls",
+                row: index as u32,
+            })?;
+            for (slot, loads) in reactions.per_support[si]
+                .wall_loads(support.x_at_t0, support.reversed)
+                .into_iter()
+                .enumerate()
+            {
+                target[slot].extend(loads);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// `fibers.z`: empty in 2D, parallel to `y` in 3D.
@@ -600,6 +669,9 @@ where
             ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
                 kind.is_shell()
             }
+            ElementLoadSpec::WallSlots { .. } => {
+                matches!(kind, ElementKind::StudWall2d | ElementKind::StudWall3d)
+            }
         };
         if !carried {
             return Err(DecodeError::UnsupportedElementLoad {
@@ -671,11 +743,116 @@ where
                     })
                 }
             };
-            Ok(match *recorder {
+            Ok(match recorder.clone() {
+                RecorderSpec::BuildingStoreyDrift { .. } => {
+                    return Err(DecodeError::RecorderNotApplicable {
+                        recorder: index as u32,
+                        reason: "buildingStoreyDrift needs a rigid building input",
+                    })
+                }
+                RecorderSpec::BuildingWallPier { .. } => {
+                    return Err(DecodeError::RecorderNotApplicable {
+                        recorder: index as u32,
+                        reason: "buildingWallPier needs a building input",
+                    });
+                }
+                RecorderSpec::FloorBandBay {
+                    element_index,
+                    bay,
+                    quantity,
+                } => {
+                    let kind = if ndm == 2 {
+                        ElementKind::FloorBand2d
+                    } else {
+                        ElementKind::FloorBand3d
+                    };
+                    let element = elements.get(kind, element_index, ndm)?;
+                    let count = domain
+                        .element_floor_band_response(element)
+                        .map_or(0, |r| r.bays.len());
+                    if bay as usize >= count {
+                        return Err(DecodeError::InvalidRecorderBay {
+                            recorder: index as u32,
+                            bay,
+                            count: count as u32,
+                        });
+                    }
+                    ResolvedRecorder::FloorBandBay {
+                        element,
+                        bay,
+                        quantity,
+                    }
+                }
+                RecorderSpec::DiaphragmBay {
+                    element_index,
+                    bay,
+                    quantity,
+                } => {
+                    let element = elements.get(ElementKind::Diaphragm, element_index, ndm)?;
+                    let count = domain
+                        .element_diaphragm_response(element)
+                        .map_or(0, |r| r.bays.len());
+                    if bay as usize >= count {
+                        return Err(DecodeError::InvalidRecorderBay {
+                            recorder: index as u32,
+                            bay,
+                            count: count as u32,
+                        });
+                    }
+                    ResolvedRecorder::DiaphragmBay {
+                        element,
+                        bay,
+                        quantity,
+                    }
+                }
+                RecorderSpec::StudWallPier {
+                    element_kind,
+                    element_index,
+                    pier,
+                    quantity,
+                } => {
+                    if !matches!(
+                        element_kind,
+                        ElementKind::StudWall2d | ElementKind::StudWall3d
+                    ) {
+                        return Err(DecodeError::RecorderNotApplicable {
+                            recorder: index as u32,
+                            reason: "studWallPier needs a stud-wall element",
+                        });
+                    }
+                    let element = elements.get(element_kind, element_index, ndm)?;
+                    let count = domain
+                        .element_stud_wall_response(element, 0.0)
+                        .map_or(0, |r| r.piers.len());
+                    if pier as usize >= count {
+                        return Err(DecodeError::InvalidRecorderPier {
+                            recorder: index as u32,
+                            pier,
+                            count: count as u32,
+                        });
+                    }
+                    ResolvedRecorder::StudWallPier {
+                        element,
+                        pier,
+                        quantity,
+                    }
+                }
                 RecorderSpec::NodeDisp { node, dof } => {
                     recorder_dof(dof)?;
                     ResolvedRecorder::NodeDisp {
                         node: node_at(node, "recorders")?,
+                        dof,
+                    }
+                }
+                RecorderSpec::NodeDifference {
+                    node,
+                    other_node,
+                    dof,
+                } => {
+                    recorder_dof(dof)?;
+                    ResolvedRecorder::NodeDifference {
+                        node: node_at(node, "recorders")?,
+                        other_node: other_node.map(|n| node_at(n, "recorders")).transpose()?,
                         dof,
                     }
                 }

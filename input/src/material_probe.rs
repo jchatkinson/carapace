@@ -73,6 +73,7 @@ pub struct MaterialProbe {
 fn kind_name(spec: &MaterialSpec) -> Option<&'static str> {
     match spec {
         MaterialSpec::Gap { .. } => Some("gap"),
+        MaterialSpec::Anchorage { .. } => Some("anchorage"),
         _ => None,
     }
 }

@@ -24,6 +24,7 @@
 //! `#[serde(rename_all = "camelCase")]` throughout so the JS/TS shape
 //! matches the PySees naming (`nodeI`, not `node_i`).
 
+use crate::building::{SlotWallLoad, WallChordSpec, WallLayoutSpec, WallShearLawSpec};
 use serde::{Deserialize, Serialize};
 
 /// Node table: `coords` stride `ndm` (x, y[, z]); `fixed` one bitmask byte per
@@ -639,6 +640,112 @@ pub struct Shell4Table {
     pub section: Vec<u32>,
 }
 
+/// One macro wall row. `corners` and stations index `nodes`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct StudWallSpec {
+    pub corners: [u32; 4],
+    pub stations: Vec<WallStationSpec>,
+    pub layout: WallLayoutSpec,
+    #[serde(default)]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub loads: Vec<SlotWallLoad>,
+    #[serde(default)]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub plane: Option<[f64; 2]>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct WallStationSpec {
+    pub chord: WallChordSpec,
+    pub x: f64,
+    pub node: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FloorBandSpec {
+    pub bottom: Vec<u32>,
+    pub top: Vec<u32>,
+    pub layout: FloorBandLayoutSpec,
+    #[serde(default)]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub plane: Option<[f64; 2]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FloorBandLayoutSpec {
+    pub length: f64,
+    pub depth: f64,
+    pub xs: Vec<f64>,
+    pub bays: Vec<Option<f64>>,
+    pub rim_ea: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DiaphragmSpec {
+    pub nodes: Vec<u32>,
+    pub layout: DiaphragmLayoutSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DiaphragmLayoutSpec {
+    pub xs: Vec<f64>,
+    pub zs: Vec<f64>,
+    pub y: f64,
+    pub bays: Vec<Option<WallShearLawSpec>>,
+    pub ea_x: Vec<f64>,
+    pub ea_z: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FloorTransferSpec {
+    pub bounds: [f64; 4],
+    pub continuity: crate::building::FloorContinuitySpec,
+    pub supports: Vec<FloorTransferSupportSpec>,
+    pub loads: Vec<crate::building::FloorLoadSpec>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FloorTransferSupportSpec {
+    pub s: f64,
+    pub t0: f64,
+    pub t1: f64,
+    pub wall: WallTargetSpec,
+    pub x_at_t0: f64,
+    pub reversed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum WallTargetSpec {
+    StudWall { index: u32 },
+}
+
 /// Every element formulation, 2D and 3D. A kind that does not belong to the
 /// model's `ndm` is `DecodeError::ElementKindNotInProfile`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -660,10 +767,15 @@ pub enum ElementKind {
     Shell3,
     Shell4,
     EmbeddedBar,
+    StudWall2d,
+    StudWall3d,
+    FloorBand2d,
+    FloorBand3d,
+    Diaphragm,
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 14] = [
+    pub const ALL: [ElementKind; 19] = [
         ElementKind::Truss,
         ElementKind::ElasticBeamColumn2d,
         ElementKind::ElasticBeamColumn3d,
@@ -678,6 +790,11 @@ impl ElementKind {
         ElementKind::Shell3,
         ElementKind::Shell4,
         ElementKind::EmbeddedBar,
+        ElementKind::StudWall2d,
+        ElementKind::StudWall3d,
+        ElementKind::FloorBand2d,
+        ElementKind::FloorBand3d,
+        ElementKind::Diaphragm,
     ];
 
     /// The kind's table name as `DecodeError`s report it (snake_case).
@@ -697,6 +814,11 @@ impl ElementKind {
             ElementKind::Shell3 => "shell3s",
             ElementKind::Shell4 => "shell4s",
             ElementKind::EmbeddedBar => "embedded_bars",
+            ElementKind::StudWall2d => "stud_walls_2d",
+            ElementKind::StudWall3d => "stud_walls_3d",
+            ElementKind::FloorBand2d => "floor_bands_2d",
+            ElementKind::FloorBand3d => "floor_bands_3d",
+            ElementKind::Diaphragm => "diaphragms",
         }
     }
 
@@ -716,6 +838,8 @@ impl ElementKind {
             | ElementKind::ForceBeamColumn3d
             | ElementKind::Shell3
             | ElementKind::Shell4 => Some(3),
+            ElementKind::StudWall2d | ElementKind::FloorBand2d => Some(2),
+            ElementKind::StudWall3d | ElementKind::FloorBand3d | ElementKind::Diaphragm => Some(3),
         }
     }
 
@@ -810,6 +934,8 @@ pub enum ElementLoadSpec {
     /// Body acceleration on a shell in global axes (a gravity vector `g` points down); the force
     /// per unit area is `rho h b`. Note OpenSees' `ShellMITC4` `-selfWeight` has the opposite sign.
     ShellBody { bx: f64, by: f64, bz: f64 },
+    /// Eight slot multipliers for a stud-wall macro element.
+    WallSlots { factors: [f64; 8] },
 }
 
 /// Identity multi-point constraints (`core::Domain::equal_dof`'s doc
