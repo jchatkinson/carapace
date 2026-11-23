@@ -4,7 +4,9 @@
 
 use nalgebra::{DMatrix, DVector};
 
-use super::{WallLoad, WALL_SLOTS};
+use std::collections::BTreeMap;
+
+use super::WallLoad;
 
 /// Floor transfer input error, with the invalid item named.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +37,8 @@ pub struct FloorSupport {
     pub t1: f64,
 }
 
-/// Floor load in the floor's span-aligned coordinates; positive values act down.
+/// Floor load in the floor's span-aligned coordinates; positive values act down. `slot` is a generic load-case
+/// index: the transfer keeps each case's reactions apart (`SupportReaction::wall_loads`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FloorLoad {
     /// Pressure over the whole floor or a rectangular patch.
@@ -111,12 +114,14 @@ impl SupportReaction {
     /// Map floor reactions to the supporting wall's local coordinates. `x_at_t0` is the wall coordinate at
     /// the support's floor `t0`; `reversed` maps increasing `t` toward decreasing wall `x`. Floor reactions
     /// are positive down, while wall local `y` is up, so emitted `TopLine` and `TopPoint` forces are negative.
-    pub fn wall_loads(&self, x_at_t0: f64, reversed: bool) -> [Vec<WallLoad>; WALL_SLOTS] {
+    ///
+    /// The result maps each load case (the loads' `slot`) that has a reaction to its wall loads.
+    pub fn wall_loads(&self, x_at_t0: f64, reversed: bool) -> BTreeMap<usize, Vec<WallLoad>> {
         let x = |t: f64| x_at_t0 + (if reversed { -1.0 } else { 1.0 }) * (t - self.support_t0);
-        let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
+        let mut loads: BTreeMap<usize, Vec<WallLoad>> = BTreeMap::new();
         for r in &self.lines {
             let (x0, x1) = (x(r.t0), x(r.t1));
-            loads[r.slot].push(WallLoad::TopLine {
+            loads.entry(r.slot).or_default().push(WallLoad::TopLine {
                 x0: x0.min(x1),
                 x1: x0.max(x1),
                 wx0: 0.0,
@@ -126,7 +131,7 @@ impl SupportReaction {
             });
         }
         for r in &self.points {
-            loads[r.slot].push(WallLoad::TopPoint {
+            loads.entry(r.slot).or_default().push(WallLoad::TopPoint {
                 x: x(r.t),
                 fx: 0.0,
                 fy: -r.p,
@@ -587,8 +592,8 @@ fn validate_bounds(b: FloorBounds) -> Result<(), FloorError> {
     Ok(())
 }
 fn validate_load(b: FloorBounds, l: FloorLoad, i: usize) -> Result<(), FloorError> {
-    let (slot, vals) = match l {
-        FloorLoad::Area { slot, w, region } => {
+    let vals = match l {
+        FloorLoad::Area { w, region, .. } => {
             let r = region.unwrap_or([b.s0, b.s1, b.t0, b.t1]);
             if r[0] < b.s0
                 || r[1] > b.s1
@@ -601,30 +606,27 @@ fn validate_load(b: FloorBounds, l: FloorLoad, i: usize) -> Result<(), FloorErro
                     "area load {i} is outside the floor or has non-positive extent"
                 )));
             }
-            (slot, vec![w, r[0], r[1], r[2], r[3]])
+            vec![w, r[0], r[1], r[2], r[3]]
         }
-        FloorLoad::Line { slot, w, s, t0, t1 } => {
+        FloorLoad::Line { w, s, t0, t1, .. } => {
             if s < b.s0 || s > b.s1 || t0 < b.t0 || t1 > b.t1 || t0 >= t1 {
                 return Err(err(format!("line load {i} is outside the floor")));
             }
-            (slot, vec![w, s, t0, t1])
+            vec![w, s, t0, t1]
         }
-        FloorLoad::LineAlong { slot, w, t, s0, s1 } => {
+        FloorLoad::LineAlong { w, t, s0, s1, .. } => {
             if t < b.t0 || t > b.t1 || s0 < b.s0 || s1 > b.s1 || s0 >= s1 {
                 return Err(err(format!("line-along load {i} is outside the floor")));
             }
-            (slot, vec![w, t, s0, s1])
+            vec![w, t, s0, s1]
         }
-        FloorLoad::Point { slot, p, s, t } => {
+        FloorLoad::Point { p, s, t, .. } => {
             if s < b.s0 || s > b.s1 || t < b.t0 || t > b.t1 {
                 return Err(err(format!("point load {i} is outside the floor")));
             }
-            (slot, vec![p, s, t])
+            vec![p, s, t]
         }
     };
-    if slot >= WALL_SLOTS {
-        return Err(err(format!("load {i} slot {slot} is out of range")));
-    }
     finite(&vals, &format!("load {i}"))
 }
 fn finite(v: &[f64], name: &str) -> Result<(), FloorError> {

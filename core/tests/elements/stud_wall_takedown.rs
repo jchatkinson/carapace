@@ -5,7 +5,8 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     ChordDistribution, ElasticBeamColumn, Element, ElementLoad, GeomTransf, LoadSeries, Node,
-    StudWall, StudWallLayout, WallChord, WallLoad, WallOpening, WallStation, WallStud, WALL_SLOTS,
+    StudWall, StudWallLayout, WallCaseLoad, WallChord, WallLoad, WallOpening, WallStation,
+    WallStud,
 };
 use carapace_core::model::{Domain, ElementId, NodeId};
 
@@ -44,7 +45,7 @@ fn add_wall(
     d: &mut D2,
     corners: [NodeId; 4],
     mut l: StudWallLayout,
-    loads: [Vec<WallLoad>; WALL_SLOTS],
+    loads: Vec<Vec<WallLoad>>,
     bottom: Vec<(f64, NodeId)>,
     top: Vec<(f64, NodeId)>,
 ) -> BuiltWall {
@@ -71,7 +72,7 @@ fn supported_wall(
     distribution: ChordDistribution,
     top_ei: Option<f64>,
     openings: Vec<WallOpening>,
-    loads: [Vec<WallLoad>; WALL_SLOTS],
+    loads: Vec<Vec<WallLoad>>,
 ) -> (D2, BuiltWall) {
     supported_wall_mode(length, studs, distribution, top_ei, openings, loads, false)
 }
@@ -82,7 +83,7 @@ fn supported_wall_mode(
     distribution: ChordDistribution,
     top_ei: Option<f64>,
     openings: Vec<WallOpening>,
-    loads: [Vec<WallLoad>; WALL_SLOTS],
+    loads: Vec<Vec<WallLoad>>,
     foundation: bool,
 ) -> (D2, BuiltWall) {
     let mut d = D2::new();
@@ -117,8 +118,8 @@ fn supported_wall_mode(
     (d, wall)
 }
 
-fn empty_loads() -> [Vec<WallLoad>; WALL_SLOTS] {
-    std::array::from_fn(|_| Vec::new())
+fn empty_loads() -> Vec<Vec<WallLoad>> {
+    vec![Vec::new(); 8]
 }
 
 fn add_wall_selector(
@@ -127,13 +128,14 @@ fn add_wall_selector(
     slot: usize,
     pattern: carapace_core::model::LoadPatternId,
 ) {
-    let mut wall = [0.; WALL_SLOTS];
-    wall[slot] = 1.;
     d.add_element_load(
         pattern,
         id,
         ElementLoad {
-            wall,
+            wall: Some(WallCaseLoad {
+                case: slot as u32,
+                factor: 1.,
+            }),
             ..Default::default()
         },
     );

@@ -7,8 +7,8 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     ChordDistribution, Domain, Element, ElementLoad, LoadSeries, Material, Node, NodeId, StudWall,
-    StudWallLayout, WallChord, WallLoad, WallOpening, WallShearLaw, WallSheathing, WallStation,
-    WallStud, ZeroLength, WALL_SLOTS,
+    StudWallLayout, WallCaseLoad, WallChord, WallLoad, WallOpening, WallShearLaw, WallSheathing,
+    WallStation, WallStud, ZeroLength,
 };
 
 /// Guide example: 3.6 m wall on a foundation, window, O86 sheathing law, hold-downs at every pier end,
@@ -82,7 +82,7 @@ fn guide_example_runs() {
     let c3 = d.add_node(Node::new([0.0, h]));
 
     // Slot 0: roof dead load. Slot 1: wind shear along the top plate.
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[0].push(WallLoad::TopLine {
         x0: 0.0,
         x1: l,
@@ -104,13 +104,14 @@ fn guide_example_runs() {
 
     for (slot, factor) in [(0, 1.0), (1, 1.0)] {
         let pattern = d.add_load_pattern_scaled(LoadSeries::Linear { slope: 1.0 }, factor);
-        let mut wall = [0.0; WALL_SLOTS];
-        wall[slot] = 1.0;
         d.add_element_load(
             pattern,
             id,
             ElementLoad {
-                wall,
+                wall: Some(WallCaseLoad {
+                    case: slot as u32,
+                    factor: 1.0,
+                }),
                 ..Default::default()
             },
         );

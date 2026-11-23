@@ -3,7 +3,7 @@ use slotmap::new_key_type;
 
 use super::{
     ElementLoad, ElementLoad3, LimitKind, LimitStateConfig, Node, Node3, Node3Id, NodeId,
-    ELEMENT_DOF, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
+    WallCaseLoad, ELEMENT_DOF, NDF, PLANAR_NDIM, SPATIAL_ELEMENT_DOF, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 mod ops;
@@ -285,10 +285,10 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
     fn stud_wall_response(
         &self,
         nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
-        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
     ) -> Option<StudWallResponse> {
         match self {
-            Element::StudWall(w) => Some(w.response(nodes, load)),
+            Element::StudWall(w) => Some(w.response(nodes, cases)),
             _ => None,
         }
     }
@@ -425,7 +425,9 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Tri3(t) => return t.assemble_tangent(nodes, sink),
             Element::Quad4(q) => return q.assemble_tangent(nodes, sink),
             Element::EmbeddedBar(bar) => return bar.assemble_tangent(nodes, sink),
-            Element::StudWall(wall) => return wall.assemble_tangent(nodes, load, sink),
+            Element::StudWall(wall) => {
+                return wall.assemble_tangent(nodes, load.map_or(&[], |l| l.wall.as_slice()), sink)
+            }
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -447,7 +449,9 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
                 return load.map_or((), |load| q.assemble_load(nodes, load, sink))
             }
             (Element::EmbeddedBar(_), _) => return,
-            (Element::StudWall(wall), load) => return wall.assemble_load(nodes, load, sink),
+            (Element::StudWall(wall), load) => {
+                return wall.assemble_load(nodes, load.map_or(&[], |l| l.wall.as_slice()), sink)
+            }
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -481,11 +485,38 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Tri3(t) => return t.commit(nodes),
             Element::Quad4(q) => return q.commit(nodes),
             Element::EmbeddedBar(bar) => return bar.commit(nodes),
-            Element::StudWall(wall) => return wall.commit(nodes, load),
+            Element::StudWall(wall) => {
+                return wall.commit(nodes, load.map_or(&[], |l| l.wall.as_slice()))
+            }
             _ => {}
         }
         let [i, j] = Element::pair(self);
         Element::commit(self, nodes.get(i), nodes.get(j), load)
+    }
+
+    fn assemble_tangent_cases<S: TangentSink<NodeId>>(
+        &self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
+        sink: &mut S,
+    ) {
+        match self {
+            Element::StudWall(wall) => wall.assemble_tangent(nodes, cases, sink),
+            _ => ElementOps::assemble_tangent(self, nodes, load, sink),
+        }
+    }
+
+    fn commit_cases(
+        &mut self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
+    ) {
+        match self {
+            Element::StudWall(wall) => wall.commit(nodes, cases),
+            _ => ElementOps::commit(self, nodes, load),
+        }
     }
 
     fn local_force_width(&self) -> usize {
@@ -532,7 +563,9 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
                     _ => SVector::<f64, 8>::zeros().into(),
                 }
             }
-            Element::StudWall(wall) => return wall.local_load_force(nodes, load),
+            Element::StudWall(wall) => {
+                return wall.local_load_force(nodes, load.map_or(&[], |l| l.wall.as_slice()))
+            }
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -766,16 +799,10 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
     fn stud_wall_response(
         &self,
         nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
-        load: Option<&ElementLoad3>,
+        cases: &[WallCaseLoad],
     ) -> Option<StudWallResponse> {
         match self {
-            Element3::StudWall(w) => {
-                let planar = load.map(|l| ElementLoad {
-                    wall: l.wall,
-                    ..Default::default()
-                });
-                Some(w.response(nodes, planar.as_ref()))
-            }
+            Element3::StudWall(w) => Some(w.response(nodes, cases)),
             _ => None,
         }
     }
@@ -821,8 +848,11 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
     fn accepts_load(&self, load: &ElementLoad3) -> bool {
         match self {
             Element3::Shell3(_) | Element3::Shell4(_) => !load.has_uniform() && !load.has_wall(),
-            Element3::StudWall(_) => {
-                !load.has_uniform() && !load.has_body() && !load.has_pressure()
+            Element3::StudWall(w) => {
+                !load.has_uniform()
+                    && !load.has_body()
+                    && !load.has_pressure()
+                    && w.has_case(load.wall)
             }
             Element3::Diaphragm(_) => {
                 !load.has_uniform() && !load.has_body() && !load.has_pressure() && !load.has_wall()
@@ -876,11 +906,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell3(s) => return s.assemble_tangent(nodes, sink),
             Element3::Shell4(s) => return s.assemble_tangent(nodes, sink),
             Element3::StudWall(w) => {
-                let l = load.map(|l| ElementLoad {
-                    wall: l.wall,
-                    ..ElementLoad::default()
-                });
-                return w.assemble_tangent(nodes, l.as_ref(), sink);
+                return w.assemble_tangent(nodes, load.map_or(&[], |l| l.wall.as_slice()), sink)
             }
             Element3::Diaphragm(d) => return d.assemble_tangent(nodes, sink),
             _ => {}
@@ -908,11 +934,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
                 return load.map_or((), |load| s.assemble_load(nodes, load, sink))
             }
             Element3::StudWall(w) => {
-                let l = load.map(|l| ElementLoad {
-                    wall: l.wall,
-                    ..ElementLoad::default()
-                });
-                return w.assemble_load(nodes, l.as_ref(), sink);
+                return w.assemble_load(nodes, load.map_or(&[], |l| l.wall.as_slice()), sink)
             }
             Element3::Diaphragm(d) => return d.assemble_load(nodes, load, sink),
             _ => {}
@@ -953,17 +975,38 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell3(s) => return s.commit(nodes),
             Element3::Shell4(s) => return s.commit(nodes),
             Element3::StudWall(w) => {
-                let l = load.map(|l| ElementLoad {
-                    wall: l.wall,
-                    ..ElementLoad::default()
-                });
-                return w.commit(nodes, l.as_ref());
+                return w.commit(nodes, load.map_or(&[], |l| l.wall.as_slice()))
             }
             Element3::Diaphragm(d) => return d.commit(nodes, load),
             _ => {}
         }
         let [i, j] = Element3::pair(self);
         Element3::commit(self, nodes.get(i), nodes.get(j), load)
+    }
+
+    fn assemble_tangent_cases<S: TangentSink<Node3Id>>(
+        &self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+        load: Option<&ElementLoad3>,
+        cases: &[WallCaseLoad],
+        sink: &mut S,
+    ) {
+        match self {
+            Element3::StudWall(w) => w.assemble_tangent(nodes, cases, sink),
+            _ => ElementOps::assemble_tangent(self, nodes, load, sink),
+        }
+    }
+
+    fn commit_cases(
+        &mut self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+        load: Option<&ElementLoad3>,
+        cases: &[WallCaseLoad],
+    ) {
+        match self {
+            Element3::StudWall(w) => w.commit(nodes, cases),
+            _ => ElementOps::commit(self, nodes, load),
+        }
     }
 
     fn local_force_width(&self) -> usize {
@@ -1008,11 +1051,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
                     .into()
             }
             Element3::StudWall(w) => {
-                let l = load.map(|l| ElementLoad {
-                    wall: l.wall,
-                    ..ElementLoad::default()
-                });
-                return w.local_load_force(nodes, l.as_ref());
+                return w.local_load_force(nodes, load.map_or(&[], |l| l.wall.as_slice()))
             }
             Element3::Diaphragm(d) => return d.local_load_force(nodes, load),
             _ => {}

@@ -11,11 +11,11 @@ use carapace_core::model::{
 
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
-    build_fiber_section, check_fibers, finish, floor_wall_loads, friction_by_row, integration_of,
-    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables,
-    validate_stud_wall_geometry, ElementIds,
+    build_fiber_section, check_fibers, finish, friction_by_row, integration_of, material_lookup,
+    materials_by_row, node_lookup, orientations_by_row, reject_tables, validate_stud_wall_geometry,
+    wall_load_plan, ElementIds,
 };
-use crate::building::{ChordDistributionSpec, WallChordSpec, WallLoadSpec, WallShearLawSpec};
+use crate::building::{ChordDistributionSpec, WallChordSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::ModelOutput;
@@ -216,6 +216,7 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
             elements,
             &ModelOutput::default(),
             Vec::new(),
+            &[],
             |spec| match *spec {
                 ElementLoadSpec::Uniform { wx, wy, wz } => {
                     Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.)))
@@ -224,11 +225,11 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
                     Some(ElementLoad3::pressure(pressure))
                 }
                 ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
-                ElementLoadSpec::WallSlots { factors } => Some(ElementLoad3 {
-                    wall: factors,
-                    ..Default::default()
-                }),
                 _ => None,
+            },
+            |case| ElementLoad3 {
+                wall: Some(case),
+                ..Default::default()
             },
         );
     }
@@ -386,7 +387,7 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
         add_shell4s(&mut domain, &input.shell4s, &node_at, &shell_sections)?,
     );
 
-    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls.len())?;
+    let wall_plan = wall_load_plan(&input, input.stud_walls.len())?;
     elements.set(
         ElementKind::StudWall,
         decode_stud_walls3(
@@ -394,7 +395,7 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
             &input.stud_walls,
             &input.nodes,
             &node_at,
-            &floor_wall_loads,
+            &wall_plan.cases,
         )?,
     );
     elements.set(
@@ -410,17 +411,18 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
         elements,
         &ModelOutput::default(),
         Vec::new(),
+        &wall_plan.pairs,
         |spec| match *spec {
             ElementLoadSpec::Uniform { wx, wy, wz } => {
                 Some(ElementLoad3::uniform(wx, wy, wz.unwrap_or(0.0)))
             }
             ElementLoadSpec::ShellPressure { pressure } => Some(ElementLoad3::pressure(pressure)),
             ElementLoadSpec::ShellBody { bx, by, bz } => Some(ElementLoad3::body(bx, by, bz)),
-            ElementLoadSpec::WallSlots { factors } => Some(ElementLoad3 {
-                wall: factors,
-                ..Default::default()
-            }),
             _ => None,
+        },
+        |case| ElementLoad3 {
+            wall: Some(case),
+            ..Default::default()
         },
     )
 }
@@ -476,32 +478,12 @@ fn layout3(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
         }),
     }
 }
-fn load3(l: WallLoadSpec) -> WallLoad {
-    match l {
-        WallLoadSpec::TopPoint { x, fx, fy } => WallLoad::TopPoint { x, fx, fy },
-        WallLoadSpec::TopLine {
-            x0,
-            x1,
-            wx0,
-            wx1,
-            wy0,
-            wy1,
-        } => WallLoad::TopLine {
-            x0,
-            x1,
-            wx0,
-            wx1,
-            wy0,
-            wy1,
-        },
-    }
-}
 fn decode_stud_walls3(
     d: &mut Domain3,
     t: &[crate::input_v1::tables::StudWallSpec],
     node_table: &crate::input_v1::tables::NodeTable,
     node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
-    extra: &[[Vec<WallLoad>; 8]],
+    cases: &[Vec<Vec<WallLoad>>],
 ) -> Result<Vec<Element3Id>, DecodeError> {
     let mut out = Vec::with_capacity(t.len());
     for (i, r) in t.iter().enumerate() {
@@ -533,21 +515,7 @@ fn decode_stud_walls3(
                 reason: reason.into(),
             }
         })?;
-        let mut loads: [Vec<WallLoad>; 8] = std::array::from_fn(|_| Vec::new());
-        for x in &r.loads {
-            if x.slot >= 8 {
-                return Err(DecodeError::InvalidWallSlot {
-                    table: "stud_walls",
-                    row: i as u32,
-                    slot: x.slot as u32,
-                });
-            }
-            loads[x.slot].push(load3(x.load));
-        }
-        for k in 0..8 {
-            loads[k].extend(extra[i][k].iter().copied());
-        }
-        let w = StudWall::new3(c, st, layout3(&r.layout), loads).map_err(|e| {
+        let w = StudWall::new3(c, st, layout3(&r.layout), cases[i].clone()).map_err(|e| {
             DecodeError::InvalidMacroElement {
                 table: "stud_walls",
                 row: i as u32,

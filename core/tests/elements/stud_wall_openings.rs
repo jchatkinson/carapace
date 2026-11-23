@@ -13,7 +13,7 @@ use carapace_core::analysis::{
 use carapace_core::model::{
     AnchorageBearing, ChordDistribution, Domain, Element, ElementId, LoadSeries, Material, Node,
     NodeId, StudWall, StudWallLayout, Truss, WallChord, WallLoad, WallOpening, WallShearLaw,
-    WallSheathing, WallStation, WallStud, ZeroLength, WALL_SLOTS,
+    WallSheathing, WallStation, WallStud, ZeroLength,
 };
 
 type D2 = Domain<2, 3, NodeId, Element>;
@@ -148,7 +148,7 @@ fn one_wall(top: ChordDistribution, anchorage: &Material) -> Out {
             node,
         })
         .to_vec();
-    let empty: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
+    let empty: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     let wall = StudWall::new([c0, c1, c2, c3], stations, l, empty).unwrap();
     let id = d.add_element(Element::StudWall(wall));
     solve(d, &[id], c3, &[c0, s0, s1, c1], nonlinear(anchorage))
@@ -173,7 +173,7 @@ fn separate_walls(top: ChordDistribution, anchorage: &Material) -> Out {
         // End posts keep their 2-ply EA in the shifted frame.
         l.studs.first_mut().unwrap().ea = 2. * PLY;
         l.studs.last_mut().unwrap().ea = 2. * PLY;
-        let empty: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
+        let empty: Vec<Vec<WallLoad>> = vec![vec![]; 8];
         let wall = StudWall::new([c0, c1, c2, c3], vec![], l, empty).unwrap();
         ids.push(d.add_element(Element::StudWall(wall)));
         tops.push((c3, c2));

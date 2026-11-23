@@ -109,12 +109,6 @@ pub enum DecodeError {
         row: u32,
         reason: String,
     },
-    /// A wall load references one of its eight slots out of range.
-    InvalidWallSlot {
-        table: &'static str,
-        row: u32,
-        slot: u32,
-    },
     /// Floor gravity transfer rejected a floor row.
     InvalidFloorTransfer {
         row: u32,

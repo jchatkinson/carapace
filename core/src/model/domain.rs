@@ -9,7 +9,8 @@ use slotmap::SlotMap;
 use super::constraint::{self, LinearConstraint, ResolveError};
 use super::dof_table::{DofEntry, DofTable};
 use super::load_pattern::{
-    active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
+    active_element_patterns, effective_element_load, effective_load, ElementLoadComponents,
+    LoadPattern,
 };
 use super::{
     Axis3, DiaphragmResponse, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse,
@@ -293,7 +294,7 @@ where
         self.elements[id].local_force(&self.node_view())
     }
 
-    /// Recovered local response for a stud wall, with active wall-slot load factors.
+    /// Recovered local response for a stud wall, with the load cases the active patterns select.
     pub fn element_stud_wall_response(
         &self,
         id: E::Id,
@@ -301,8 +302,8 @@ where
     ) -> Option<StudWallResponse> {
         let element = self.elements.get(id)?;
         let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
-        let load = effective_element_load(&active, id);
-        element.stud_wall_response(&self.node_view(), load.as_ref())
+        let (_, cases) = effective_load(&active, id);
+        element.stud_wall_response(&self.node_view(), &cases)
     }
 
     pub fn element_diaphragm_response(&self, id: E::Id) -> Option<DiaphragmResponse> {
@@ -441,8 +442,8 @@ where
             if !touches(element) {
                 continue;
             }
-            let load = effective_element_load(&active, element_id);
-            element.assemble_tangent(&view, load.as_ref(), &mut resistance);
+            let (load, cases) = effective_load(&active, element_id);
+            element.assemble_tangent_cases(&view, load.as_ref(), &cases, &mut resistance);
         }
 
         let mut applied = 0.0;
@@ -486,8 +487,8 @@ where
             sign: 1.0,
         };
         for (element_id, element) in self.elements.iter() {
-            let load = effective_element_load(&active, element_id);
-            element.assemble_tangent(&view, load.as_ref(), &mut resistance);
+            let (load, cases) = effective_load(&active, element_id);
+            element.assemble_tangent_cases(&view, load.as_ref(), &cases, &mut resistance);
         }
 
         for (_, pattern) in self.load_patterns.iter() {
@@ -1140,8 +1141,8 @@ where
             resistance: DVector::<f64>::zeros(n),
         };
         for (element_id, element) in self.elements.iter() {
-            let load = effective_element_load(&active, element_id);
-            element.assemble_tangent(&view, load.as_ref(), &mut sink);
+            let (load, cases) = effective_load(&active, element_id);
+            element.assemble_tangent_cases(&view, load.as_ref(), &cases, &mut sink);
         }
         (sink.triplets, sink.resistance)
     }
@@ -1195,8 +1196,8 @@ where
         let threaded = false;
         if !threaded {
             for (element_id, element) in self.elements.iter() {
-                let load = effective_element_load(&active, element_id);
-                element.assemble_tangent(&view, load.as_ref(), &mut sink);
+                let (load, cases) = effective_load(&active, element_id);
+                element.assemble_tangent_cases(&view, load.as_ref(), &cases, &mut sink);
             }
         }
         if !sink.complete {
@@ -1364,8 +1365,8 @@ where
         // `elements` is iterated mutably.
         let view = NodeView::new(&self.nodes);
         for (element_id, element) in self.elements.iter_mut() {
-            let load = effective_element_load(&active, element_id);
-            element.commit(&view, load.as_ref());
+            let (load, cases) = effective_load(&active, element_id);
+            element.commit_cases(&view, load.as_ref(), &cases);
         }
     }
 

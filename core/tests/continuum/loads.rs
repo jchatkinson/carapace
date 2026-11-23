@@ -8,7 +8,7 @@ use carapace_core::analysis::{
 use carapace_core::model::{
     Domain, ElasticBeamColumn, Element, ElementId, ElementLoad, ElementLoadComponents, GeomTransf,
     LoadSeries, Material, ModelError, Node, NodeId, PlaneMaterial, Quad4, Quad4Formulation, Tri3,
-    Truss,
+    Truss, WallCaseLoad,
 };
 
 fn analysis(domain: Domain) -> Analysis {
@@ -44,19 +44,30 @@ fn loads_accumulate_field_by_field_and_expose_a_fixed_component_layout() {
     assert_eq!((scaled.beam_uniform, scaled.body), ([2.0, 4.0], [6.0, 8.0]));
 
     // [wx, wy, bx, by, t0x, t0y, p0, t1x, t1y, p1, ...]
-    assert_eq!(ElementLoad::COUNT, 26);
+    assert_eq!(ElementLoad::COUNT, 18);
     let load = both + summed;
     let expect = [1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 5.0, 6.0, 8.0];
     for (i, e) in expect.into_iter().enumerate() {
         assert_eq!(load.component(i), e, "component {i}");
     }
     assert_eq!(load.component(16), 0.0);
-    let wall = ElementLoad {
-        wall: [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+    // Stud-wall loads select a case: the same case adds factors, different cases are `MIXED` (rejected by
+    // `Domain::validate`), and the pattern factor scales.
+    let wall = |case, factor| ElementLoad {
+        wall: Some(WallCaseLoad { case, factor }),
         ..Default::default()
     };
-    assert_eq!(wall.component(18), 0.0);
-    assert_eq!(wall.component(25), 7.0);
+    assert_eq!((wall(2, 1.5) + wall(2, 0.5)).wall, wall(2, 2.0).wall);
+    assert_eq!(
+        (wall(2, 1.5) + wall(3, 0.5)).wall,
+        Some(WallCaseLoad::MIXED)
+    );
+    assert_eq!((wall(2, 1.5) * 2.0).wall, wall(2, 3.0).wall);
+    assert_eq!(
+        (wall(2, 1.5) + ElementLoad::default()).wall,
+        wall(2, 1.5).wall
+    );
+    assert!(wall(0, 0.0).has_wall() && !ElementLoad::default().has_wall());
 
     // The beam taper is the change in intensity from node i to node j and occupies the last two slots.
     let trapezoid = ElementLoad::trapezoid(1.0, 2.0, 4.0, -2.0);

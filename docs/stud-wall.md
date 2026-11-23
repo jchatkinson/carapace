@@ -14,7 +14,7 @@ It is built for design:
 - **design forces** per pier: shear flow `q` and the M/jd chord (hold-down) force.
 
 Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls`,
-`diaphragms`, wall slot factors and `floorLoads`). The CLI consumes the same format. PySees does not compile these
+`diaphragms`, the `wallLoad` element load and `floorLoads`). The CLI consumes the same format. PySees does not compile these
 tables and has no stud-wall model API. Implementation details
 are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
 design and its rationale in [`stud-wall-panel.md`](stud-wall-panel.md).
@@ -51,7 +51,7 @@ The wall stiffens exactly the global translation slots with a component larger t
 axis. A wall in the global X-Z plane stiffens `ux` and `uz`; one in the X-Y plane stiffens `ux` and `uy`; a skew
 wall may stiffen all three translations. It never stiffens rotations or the translation normal to its plane.
 Provide that support with a crossing wall, diaphragm constraint, or fixity. Wall responses and `local_force`
-remain in wall-local axes. `ElementLoad3::wall` carries the same eight top-plate slot factors as
+remain in wall-local axes. `ElementLoad3::wall` selects a load case in the same way as
 `ElementLoad::wall`.
 
 ## 2. Layout
@@ -109,7 +109,7 @@ condensed with the other internals (the nonlinear `O86` and `Material` laws keep
   grid, so the zone itself has no vertical flexibility.
 
 Every top station must coincide with a stud, jack or cripple position (an error otherwise), since a post stands
-there. Place stations at every stud where the wall above bears. Top slot loads act on the exterior row (see
+there. Place stations at every stud where the wall above bears. Top loads act on the exterior row (see
 [Section 5](#5-loads)). `moment_top` is at the framing top; `moment_base` uses the true lever.
 
 **Stacking.** The wall above starts on new nodes coincident with the exterior top nodes of the wall below.
@@ -216,19 +216,27 @@ uplift when the wall node is first; add separate compression bearing. That legac
 
 ## 5. Loads
 
-Wall loads are defined once, at construction, in up to `WALL_SLOTS = 8` slots. A load pattern switches a slot
-on with a scale factor.
+A wall owns a list of **load cases**, given at construction (`StudWall::new(corners, stations, layout, cases)` with
+`cases: Vec<Vec<WallLoad>>`). Each case is prepared into its own load vector. A load pattern selects a case through
+the element load `ElementLoad { wall: Some(WallCaseLoad { case, factor }), .. }` (the pattern's series and scale
+factor multiply `factor`). There is no cap on cases or on patterns that load a wall: many patterns may load one
+wall, each with its own series and scale factor, and several patterns may select the same case (their factors
+add). A wall's response and nonlinear state depend on the sum over every active pattern's case, so the domain
+passes the wall that list (`Domain::element_stud_wall_response` and the assembly do this).
 
 - `WallLoad::TopPoint { x, fx, fy }`: point load on the top plate at `x`.
 - `WallLoad::TopLine { x0, x1, wx0, wx1, wy0, wy1 }`: line load on the top plate from `x0` to `x1`, linear
   from `(wx0, wy0)` to `(wx1, wy1)` per unit length.
 - All loads are in the wall's local axes: `fx`/`wx` along the wall (shear), `fy`/`wy` along the studs
   (negative is down).
-- Put each load case in its own slot (dead, live, wind ...). In a pattern, add an
-  `ElementLoad { wall: e_slot, ..Default::default() }` for the wall (`wall[slot] = 1.0`); the pattern's series
-  and factor then scale that slot. Several patterns can scale the same slot.
+- Give each load source its own case and pattern (dead, live, wind ...), and set the combination factors as the
+  patterns' scale factors (for example dead x 1.25 and live x 1.5 as two patterns is the same as one pattern
+  carrying the combined factored loads, to rounding). A pattern carries at most one case per wall: adding loads
+  of two different cases to one wall in one pattern is rejected by `Domain::validate`, as is a case index the
+  wall does not have (`ModelError::IncompatibleElementLoad`). On the wire the decoder groups each (pattern, wall)
+  pair's `wallLoad` rows into one case, so this never arises there.
 - Loads at exterior nodes (corners and stations) can also be ordinary nodal loads.
-- With a [floor zone](#2a-floor-zone), top slot loads act on the exterior top row (`y = H + depth`): the
+- With a [floor zone](#2a-floor-zone), top loads act on the exterior top row (`y = H + depth`): the
   horizontal part is split between the neighbouring top positions by the lever rule and goes through the zone, so
   the base moment is `V (H + d)`; the vertical part is distributed on the top plate as before.
 - The wall rejects other element-load kinds (beam, body, edge), and other elements reject a nonzero `wall`.
@@ -257,7 +265,7 @@ Floor gravity loads reach a wall as top-plate loads computed by the one-way floo
 ## 7. Results
 
 `domain.element_stud_wall_response(id, pseudo_time) -> Option<StudWallResponse>` recovers the internal
-response at the current state. Its argument is the pseudo-time at which slot factors are evaluated (use the
+response at the current state. Its argument is the pseudo-time at which the pattern factors are evaluated (use the
 analysis time). All quantities are in local axes, with **axial tension positive**.
 
 | Field | Contents |
@@ -359,8 +367,8 @@ let stations: Vec<WallStation> = layout
 let c2 = d.add_node(Node::new([l, h]));
 let c3 = d.add_node(Node::new([0.0, h]));
 
-// Slot 0: roof dead load. Slot 1: wind shear along the top plate.
-let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
+// Case 0: roof dead load. Case 1: wind shear along the top plate.
+let mut loads: Vec<Vec<WallLoad>> = vec![Vec::new(); 2];
 loads[0].push(WallLoad::TopLine {
     x0: 0.0,
     x1: l,
@@ -380,15 +388,14 @@ loads[1].push(WallLoad::TopLine {
 let wall = StudWall::new([c0, c1, c2, c3], stations, layout, loads).expect("valid layout");
 let id = d.add_element(Element::StudWall(wall));
 
-for (slot, factor) in [(0, 1.0), (1, 1.0)] {
+// One pattern per case, each with its own combination factor.
+for (case, factor) in [(0, 1.0), (1, 1.0)] {
     let pattern = d.add_load_pattern_scaled(LoadSeries::Linear { slope: 1.0 }, factor);
-    let mut wall = [0.0; WALL_SLOTS];
-    wall[slot] = 1.0;
     d.add_element_load(
         pattern,
         id,
         ElementLoad {
-            wall,
+            wall: Some(WallCaseLoad { case, factor: 1.0 }),
             ..Default::default()
         },
     );

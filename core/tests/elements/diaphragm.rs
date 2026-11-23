@@ -257,13 +257,7 @@ fn flexible_three_line_tributary_reactions_and_lumping() {
             floor: None,
         };
         let id = d.add_element(Element3::StudWall(
-            StudWall::new3(
-                [c0, c1, c2, c3],
-                vec![],
-                layout,
-                std::array::from_fn(|_| vec![]),
-            )
-            .unwrap(),
+            StudWall::new3([c0, c1, c2, c3], vec![], layout, vec![]).unwrap(),
         ));
         d.add_nodal_load(d.default_pattern(), c2, 0, force * 0.5);
         d.add_nodal_load(d.default_pattern(), c3, 0, force * 0.5);
@@ -502,7 +496,7 @@ fn rigid_diaphragm_matches_stiffness_and_torsion_split() {
             floor: None,
         };
         let id = d.add_element(Element3::StudWall(
-            StudWall::new3(c, vec![], layout, std::array::from_fn(|_| vec![])).unwrap(),
+            StudWall::new3(c, vec![], layout, vec![]).unwrap(),
         ));
         (id, [c[2], c[3]])
     };

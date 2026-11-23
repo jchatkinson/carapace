@@ -23,8 +23,8 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     ChordDistribution, Domain, Element, FloorZone, LoadSeries, Material, Node, NodeId, StudWall,
-    StudWallLayout, WallChord, WallLoad, WallOpening, WallShearLaw, WallSheathing, WallStation,
-    WallStud, ZeroLength, WALL_SLOTS,
+    StudWallLayout, WallCaseLoad, WallChord, WallLoad, WallOpening, WallShearLaw, WallSheathing,
+    WallStation, WallStud, ZeroLength,
 };
 
 type D2 = Domain<2, 3, NodeId, Element>;
@@ -199,8 +199,8 @@ fn solve(d: D2, tol: f64) -> carapace_core::analysis::Analysis {
     a.step().expect("linear floor-zone solve");
     a
 }
-fn empty_loads() -> [Vec<WallLoad>; WALL_SLOTS] {
-    std::array::from_fn(|_| Vec::new())
+fn empty_loads() -> Vec<Vec<WallLoad>> {
+    vec![Vec::new(); 8]
 }
 
 // --- One storey on a zone -------------------------------------------------------------------------------
@@ -419,13 +419,14 @@ fn top_slot_loads_act_on_the_exterior_row() {
         ));
         let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
         if slot {
-            let mut sel = [0.; WALL_SLOTS];
-            sel[0] = 1.;
             d.add_element_load(
                 p,
                 wall,
                 carapace_core::model::ElementLoad {
-                    wall: sel,
+                    wall: Some(WallCaseLoad {
+                        case: 0,
+                        factor: 1.,
+                    }),
                     ..Default::default()
                 },
             );
@@ -853,13 +854,14 @@ fn zone_stack(c: &StackCase) -> StackResult {
         .unwrap();
         let wall_id = d.add_element(Element::StudWall(wall));
         if last {
-            let mut wall_load = [0.; WALL_SLOTS];
-            wall_load[0] = 1.;
             d.add_element_load(
                 pattern,
                 wall_id,
                 carapace_core::model::ElementLoad {
-                    wall: wall_load,
+                    wall: Some(WallCaseLoad {
+                        case: 0,
+                        factor: 1.,
+                    }),
                     ..Default::default()
                 },
             );

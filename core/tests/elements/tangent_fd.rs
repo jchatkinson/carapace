@@ -10,7 +10,7 @@
 
 use carapace_core::model::{
     ChordDistribution, Element, Material, Node, PlaneMaterial, Quad4, StudWall, StudWallLayout,
-    WallChord, WallShearLaw, WallSheathing, WallStud,
+    WallCaseLoad, WallChord, WallShearLaw, WallSheathing, WallStud,
 };
 use carapace_core::testkit::{assert_element_tangent_matches_fd, FdConfig};
 use slotmap::SlotMap;
@@ -124,7 +124,7 @@ fn o86_stud_wall_matches_central_difference() {
         foundation: false,
         floor: None,
     };
-    let wall = StudWall::new(ids, vec![], layout, std::array::from_fn(|_| vec![])).unwrap();
+    let wall = StudWall::new(ids, vec![], layout, vec![]).unwrap();
     let mut element = Element::StudWall(wall);
     assert_element_tangent_matches_fd(
         &mut element,
@@ -193,24 +193,21 @@ fn nonlinear_door_wall_with_slot_load_matches_central_difference() {
             foundation: false,
             floor: None,
         };
-        let loads = std::array::from_fn(|slot| {
-            if slot == 0 {
-                vec![carapace_core::model::WallLoad::TopLine {
-                    x0: 0.,
-                    x1: 12.,
-                    wx0: 1.,
-                    wx1: 1.,
-                    wy0: 0.,
-                    wy1: 0.,
-                }]
-            } else {
-                vec![]
-            }
-        });
+        let loads = vec![vec![carapace_core::model::WallLoad::TopLine {
+            x0: 0.,
+            x1: 12.,
+            wx0: 1.,
+            wx1: 1.,
+            wy0: 0.,
+            wy1: 0.,
+        }]];
         let wall = StudWall::new(ids, stations.to_vec(), layout, loads).unwrap();
         let mut element = Element::StudWall(wall);
         let load = carapace_core::model::ElementLoad {
-            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.0,
+            }),
             ..Default::default()
         };
         assert_element_tangent_matches_fd(

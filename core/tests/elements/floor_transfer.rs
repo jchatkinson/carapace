@@ -5,8 +5,8 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     transfer_floor, ChordDistribution, Domain, Element, ElementLoad, FloorBounds, FloorContinuity,
-    FloorLoad, FloorSupport, Node, NodeId, StudWall, StudWallLayout, WallLoad, WallOpening,
-    WallStud, WALL_SLOTS,
+    FloorLoad, FloorSupport, LoadSeries, Node, NodeId, StudWall, StudWallLayout, WallCaseLoad,
+    WallLoad, WallOpening, WallStud,
 };
 
 fn bounds() -> FloorBounds {
@@ -450,12 +450,12 @@ fn partial_support_and_wall_mapping() {
     );
     assert!((sum(&r, 0) - 40.).abs() < 1e-12);
     let loads = r.per_support[0].wall_loads(100., true);
-    assert!(loads[0]
+    assert!(loads[&0]
         .iter()
         .any(|l| matches!(l,WallLoad::TopLine{wy0,..} if *wy0<0.)));
 }
 
-/// Unsupported loaded strips, a single support, out-of-floor loads, and invalid slots are errors.
+/// Unsupported loaded strips, a single support, and out-of-floor loads are errors; any slot is a valid case index.
 #[test]
 fn invalid_floor_inputs_error() {
     let unsupported = [FloorSupport {
@@ -498,18 +498,27 @@ fn invalid_floor_inputs_error() {
         FloorContinuity::Simple
     )
     .is_err());
-    assert!(transfer_floor(
+    // The slot is a generic load-case index with no upper bound: slot 8 keeps its own case.
+    let high = transfer_floor(
         bounds(),
         &supports(),
         &[FloorLoad::Point {
             slot: 8,
             p: 1.,
             s: 1.,
-            t: 1.
+            t: 1.,
         }],
-        FloorContinuity::Simple
+        FloorContinuity::Simple,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(
+        high.per_support[0]
+            .wall_loads(0., false)
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![8]
+    );
 }
 
 /// Floor slot reactions mapped to a window wall give the hand header takedown, including a factored D/L combination (1e-9).
@@ -573,7 +582,10 @@ fn floor_to_window_wall_factored_takedown() {
         ],
         &reactions,
     );
-    let mut wall_loads = reactions.per_support[0].wall_loads(0., false);
+    let mut wall_loads = vec![vec![]; 2];
+    for (slot, loads) in reactions.per_support[0].wall_loads(0., false) {
+        wall_loads[slot].extend(loads);
+    }
     let studs = [
         0., 400., 800., 1100., 1200., 1600., 2000., 2400., 2500., 2800., 3200., 3600.,
     ]
@@ -611,18 +623,18 @@ fn floor_to_window_wall_factored_takedown() {
     let wall = d.add_element(Element::StudWall(
         StudWall::new(corners, vec![], layout, std::mem::take(&mut wall_loads)).unwrap(),
     ));
-    let pattern = d.default_pattern();
-    let mut factors = [0.; WALL_SLOTS];
-    factors[0] = 1.2;
-    factors[1] = 1.6;
-    d.add_element_load(
-        pattern,
-        wall,
-        ElementLoad {
-            wall: factors,
-            ..Default::default()
-        },
-    );
+    // Dead and live load are two patterns, factored 1.2 and 1.6.
+    for (case, factor) in [(0, 1.2), (1, 1.6)] {
+        let pattern = d.add_load_pattern_scaled(LoadSeries::Linear { slope: 1. }, factor);
+        d.add_element_load(
+            pattern,
+            wall,
+            ElementLoad {
+                wall: Some(WallCaseLoad { case, factor: 1. }),
+                ..Default::default()
+            },
+        );
+    }
     let mut a = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Transformation)
         .integrator(Integrator::LoadControl { increment: 1. })

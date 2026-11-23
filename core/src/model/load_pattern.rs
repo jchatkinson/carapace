@@ -138,9 +138,8 @@ fn path_slope(times: &[f64], factors: &[f64], pseudo_time: f64) -> f64 {
 /// axes (pressure along the inward normal).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ElementLoad {
-    /// Stud-wall pattern slot selectors. Each nonzero entry selects one of
-    /// the wall element's pre-discretized load slots.
-    pub wall: [f64; WALL_SLOTS],
+    /// Stud wall: scales one of the wall's pre-discretized load cases.
+    pub wall: Option<WallCaseLoad>,
     /// Beam-columns: uniform load (force/length) `[wx, wy]`, `wx` along the
     /// member axis and `wy` transverse in local +y.
     pub beam_uniform: [f64; 2],
@@ -159,8 +158,35 @@ pub struct ElementLoad {
     pub edge_pressure: [f64; 4],
 }
 
-/// Number of independently scaled load slots on a stud-wall element.
-pub const WALL_SLOTS: usize = 8;
+/// A stud wall's load case `case` (an index into the wall's own list of cases) scaled by `factor`. A pattern
+/// carries at most one per wall, since `ElementLoad` is `Copy`; adding two loads of different cases on one wall in
+/// one pattern gives [`WallCaseLoad::MIXED`], which `Domain::validate` rejects. Several patterns may load a wall,
+/// each with its own case: the domain keeps their factors as a list (`effective_load`), so there is no cap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WallCaseLoad {
+    pub case: u32,
+    pub factor: f64,
+}
+
+impl WallCaseLoad {
+    /// What adding two wall loads of different cases gives; never a valid case.
+    pub const MIXED: WallCaseLoad = WallCaseLoad {
+        case: u32::MAX,
+        factor: 0.0,
+    };
+
+    /// Sum of two optional wall loads (same case adds factors; different cases are `MIXED`).
+    fn add(a: Option<Self>, b: Option<Self>) -> Option<Self> {
+        match (a, b) {
+            (Some(x), Some(y)) if x.case == y.case => Some(WallCaseLoad {
+                case: x.case,
+                factor: x.factor + y.factor,
+            }),
+            (Some(_), Some(_)) => Some(Self::MIXED),
+            (x, None) | (None, x) => x,
+        }
+    }
+}
 
 impl ElementLoad {
     /// A uniform beam load (the former `ElementLoad::Uniform { wx, wy }`).
@@ -227,9 +253,9 @@ impl ElementLoad {
         self.has_edge_from(0)
     }
 
-    /// Whether any stud-wall load slot is selected.
+    /// Whether a stud-wall load case is selected.
     pub fn has_wall(&self) -> bool {
-        self.wall != [0.0; WALL_SLOTS]
+        self.wall.is_some()
     }
 }
 
@@ -246,7 +272,7 @@ impl std::ops::Add for ElementLoad {
                 std::array::from_fn(|i| self.edge_traction[k][i] + other.edge_traction[k][i])
             }),
             edge_pressure: std::array::from_fn(|k| self.edge_pressure[k] + other.edge_pressure[k]),
-            wall: std::array::from_fn(|k| self.wall[k] + other.wall[k]),
+            wall: WallCaseLoad::add(self.wall, other.wall),
         }
     }
 }
@@ -261,12 +287,17 @@ pub trait ElementLoadComponents {
     /// Component `index` (`ElementLoad`: `0` = `wx`, `1` = `wy`;
     /// `ElementLoad3`: `0..3` = `wx`, `wy`, `wz`); `0.0` past the last.
     fn component(&self, index: usize) -> f64;
+
+    /// The stud-wall case this load selects (empty for kinds without one).
+    fn wall_cases(&self) -> &[WallCaseLoad] {
+        &[]
+    }
 }
 
 /// Component layout: `[wx, wy, bx, by, t0x, t0y, p0, t1x, t1y, p1, t2x, t2y, p2, t3x, t3y, p3]`
 /// (beam uniform, body force, then traction and pressure per edge), then `[dwx, dwy]` (the beam taper).
 impl ElementLoadComponents for ElementLoad {
-    const COUNT: usize = 26;
+    const COUNT: usize = 18;
 
     fn component(&self, index: usize) -> f64 {
         match index {
@@ -280,25 +311,30 @@ impl ElementLoadComponents for ElementLoad {
                 }
             }
             16 | 17 => self.beam_taper[index - 16],
-            18..=25 => self.wall[index - 18],
             _ => 0.0,
         }
     }
+
+    fn wall_cases(&self) -> &[WallCaseLoad] {
+        self.wall.as_slice()
+    }
 }
 
-/// Component layout: `[wx, wy, wz, bx, by, bz, pressure, wall0..wall7]` (beam uniform, shell body,
-/// shell pressure, then stud-wall slot factors).
+/// Component layout: `[wx, wy, wz, bx, by, bz, pressure]` (beam uniform, shell body, shell pressure).
 impl ElementLoadComponents for ElementLoad3 {
-    const COUNT: usize = 7 + WALL_SLOTS;
+    const COUNT: usize = 7;
 
     fn component(&self, index: usize) -> f64 {
         match index {
             0..=2 => self.uniform[index],
             3..=5 => self.body[index - 3],
             6 => self.pressure,
-            7..=14 => self.wall[index - 7],
             _ => 0.0,
         }
+    }
+
+    fn wall_cases(&self) -> &[WallCaseLoad] {
+        self.wall.as_slice()
     }
 }
 
@@ -312,7 +348,10 @@ impl std::ops::Mul<f64> for ElementLoad {
             body: self.body.map(|v| v * factor),
             edge_traction: self.edge_traction.map(|t| t.map(|v| v * factor)),
             edge_pressure: self.edge_pressure.map(|v| v * factor),
-            wall: self.wall.map(|v| v * factor),
+            wall: self.wall.map(|w| WallCaseLoad {
+                factor: w.factor * factor,
+                ..w
+            }),
         }
     }
 }
@@ -332,8 +371,8 @@ pub struct ElementLoad3 {
     /// Shells: pressure per unit area, positive along the local normal `e3` (right-hand rule
     /// from the node order).
     pub pressure: f64,
-    /// Stud-wall top-plate load-slot factors. The wall element interprets these as local-axis load scales.
-    pub wall: [f64; WALL_SLOTS],
+    /// Stud wall: scales one of the wall's load cases (see [`ElementLoad::wall`]).
+    pub wall: Option<WallCaseLoad>,
 }
 
 impl ElementLoad3 {
@@ -343,7 +382,7 @@ impl ElementLoad3 {
             uniform: [wx, wy, wz],
             body: [0.0; 3],
             pressure: 0.0,
-            wall: [0.0; WALL_SLOTS],
+            wall: None,
         }
     }
 
@@ -376,7 +415,7 @@ impl ElementLoad3 {
     }
 
     pub fn has_wall(&self) -> bool {
-        self.wall != [0.0; WALL_SLOTS]
+        self.wall.is_some()
     }
 }
 
@@ -389,7 +428,7 @@ impl std::ops::Add for ElementLoad3 {
             uniform: std::array::from_fn(|i| self.uniform[i] + other.uniform[i]),
             body: std::array::from_fn(|i| self.body[i] + other.body[i]),
             pressure: self.pressure + other.pressure,
-            wall: std::array::from_fn(|i| self.wall[i] + other.wall[i]),
+            wall: WallCaseLoad::add(self.wall, other.wall),
         }
     }
 }
@@ -402,7 +441,10 @@ impl std::ops::Mul<f64> for ElementLoad3 {
             uniform: self.uniform.map(|v| v * factor),
             body: self.body.map(|v| v * factor),
             pressure: self.pressure * factor,
-            wall: self.wall.map(|v| v * factor),
+            wall: self.wall.map(|w| WallCaseLoad {
+                factor: w.factor * factor,
+                ..w
+            }),
         }
     }
 }
@@ -548,7 +590,7 @@ where
 /// An element's *effective* load: every active pattern's load on it, each
 /// scaled by that pattern's factor, summed — `None` if no active pattern
 /// loads it. What state-dependent elements (`ForceBeamColumn`) need inside
-/// their own state determination.
+/// their own state determination. Its `wall` field is meaningless (see `effective_load`).
 pub(crate) fn effective_element_load<const NDOF: usize, NId, EId, EL>(
     active: &[(f64, &LoadPattern<NDOF, NId, EId, EL>)],
     element: EId,
@@ -556,19 +598,41 @@ pub(crate) fn effective_element_load<const NDOF: usize, NId, EId, EL>(
 where
     NId: Eq + Hash + Copy,
     EId: Eq + Hash + Copy,
-    EL: Copy + std::ops::Add<Output = EL> + std::ops::Mul<f64, Output = EL>,
+    EL: Copy + std::ops::Add<Output = EL> + std::ops::Mul<f64, Output = EL> + ElementLoadComponents,
+{
+    effective_load(active, element).0
+}
+
+/// `effective_element_load` plus the list of stud-wall cases the active patterns select on `element`, each
+/// factor already scaled by its pattern's factor. A wall's state depends on the sum over these (patterns select
+/// different cases, which a single `ElementLoad::wall` cannot add), so the walls take the list; the list is
+/// empty for every other element.
+/// The wall cases active on one element: inline (no allocation) up to 8 loaded patterns, which keeps the
+/// assembly loop allocation-free in practice without capping how many patterns may load a wall.
+pub(crate) type WallCases = smallvec::SmallVec<[WallCaseLoad; 8]>;
+
+pub(crate) fn effective_load<const NDOF: usize, NId, EId, EL>(
+    active: &[(f64, &LoadPattern<NDOF, NId, EId, EL>)],
+    element: EId,
+) -> (Option<EL>, WallCases)
+where
+    NId: Eq + Hash + Copy,
+    EId: Eq + Hash + Copy,
+    EL: Copy + std::ops::Add<Output = EL> + std::ops::Mul<f64, Output = EL> + ElementLoadComponents,
 {
     let mut total: Option<EL> = None;
+    let mut cases = WallCases::new();
     for (factor, pattern) in active {
         if let Some(load) = pattern.element_load(element) {
             let scaled = *load * *factor;
+            cases.extend_from_slice(scaled.wall_cases());
             total = Some(match total {
                 Some(sum) => sum + scaled,
                 None => scaled,
             });
         }
     }
-    total
+    (total, cases)
 }
 
 #[cfg(test)]

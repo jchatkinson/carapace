@@ -17,6 +17,7 @@ use slotmap::{Key, SlotMap};
 
 use crate::model::DiaphragmResponse;
 use crate::model::StudWallResponse;
+use crate::model::WallCaseLoad;
 use crate::model::{LimitKind, LimitStateConfig, Node};
 
 /// Inline node-list capacity used by the existing fixed-connectivity catalog.
@@ -252,7 +253,7 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
     fn stud_wall_response(
         &self,
         _nodes: &NodeView<'_, NDIM, NDOF, NId>,
-        _load: Option<&Self::Load>,
+        _cases: &[WallCaseLoad],
     ) -> Option<StudWallResponse> {
         None
     }
@@ -305,6 +306,18 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
         sink: &mut S,
     );
 
+    /// `assemble_tangent` with the stud-wall cases the active patterns select (`effective_load`); only a stud wall
+    /// reads `cases`, since a single `Load` cannot add loads of different cases.
+    fn assemble_tangent_cases<S: TangentSink<NId>>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, NId>,
+        load: Option<&Self::Load>,
+        _cases: &[WallCaseLoad],
+        sink: &mut S,
+    ) {
+        self.assemble_tangent(nodes, load, sink)
+    }
+
     /// The equivalent nodal load vector of `load` (zero if `load` is
     /// `None` or of a kind this element does not carry).
     fn assemble_load<S: VectorSink<NId>>(
@@ -324,6 +337,16 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
     /// Commit this element's state at the converged nodal state. `load` is
     /// the effective element load at the committed pseudo-time.
     fn commit(&mut self, nodes: &NodeView<'_, NDIM, NDOF, NId>, load: Option<&Self::Load>);
+
+    /// `commit` with the stud-wall cases the active patterns select (see `assemble_tangent_cases`).
+    fn commit_cases(
+        &mut self,
+        nodes: &NodeView<'_, NDIM, NDOF, NId>,
+        load: Option<&Self::Load>,
+        _cases: &[WallCaseLoad],
+    ) {
+        self.commit(nodes, load)
+    }
 
     /// Length of `local_force`/`local_load_force`; the bound a recorder's
     /// `component` index is checked against.

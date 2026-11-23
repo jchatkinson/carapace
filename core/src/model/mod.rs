@@ -35,7 +35,7 @@ pub use floor::{
 };
 pub use integration::BeamIntegration;
 pub use load_pattern::{
-    ElementLoad, ElementLoad3, ElementLoadComponents, LoadPatternId, LoadSeries, WALL_SLOTS,
+    ElementLoad, ElementLoad3, ElementLoadComponents, LoadPatternId, LoadSeries, WallCaseLoad,
 };
 pub use materials::{
     AnchorageBearing, CsfmConcreteFields, CsfmConcreteLaw, CsfmRebarFields, CsfmRebarRouting,

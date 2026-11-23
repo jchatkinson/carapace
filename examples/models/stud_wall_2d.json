@@ -21,11 +21,10 @@
       "openings": [],
       "sheathing": {"law": {"kind": "linear", "ga": 1000000}},
       "foundation": false
-    },
-    "loads": [{"slot": 0, "load": {"kind": "topPoint", "x": 500, "fx": 100, "fy": 0}}]
+    }
   }],
   "loadPatterns": {"series": [{"kind": "linear", "slope": 1}], "scaleFactor": [1]},
-  "elementLoads": {"pattern": [0], "elementKind": ["studWall"], "elementIndex": [0], "load": [{"kind": "wallSlots", "factors": [1, 0, 0, 0, 0, 0, 0, 0]}], "stage": [0]},
+  "elementLoads": {"pattern": [0], "elementKind": ["studWall"], "elementIndex": [0], "load": [{"kind": "wallLoad", "load": {"kind": "topPoint", "x": 500, "fx": 100, "fy": 0}}], "stage": [0]},
   "sequence": {
     "stages": [{"kind": "static", "id": "lateral", "steps": 1, "integrator": {"kind": "loadControl", "increment": 1}, "algorithm": {"kind": "linear"}, "convergence": {"kind": "normUnbalance", "tol": 1e-10, "maxIter": 10}, "holdPatternsAfter": []}],
     "recorders": [{"response": "nodeDisp", "node": 3, "dof": 0}]

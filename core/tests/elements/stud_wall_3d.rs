@@ -6,8 +6,8 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     ChordDistribution, Domain, Domain3, Element, Element3, ElementLoad, ElementLoad3, FloorZone,
-    Node, Node3, StudWall, StudWallLayout, WallLoad, WallShearLaw, WallSheathing, WallStud,
-    WALL_SLOTS,
+    Node, Node3, StudWall, StudWallLayout, WallCaseLoad, WallLoad, WallShearLaw, WallSheathing,
+    WallStud,
 };
 
 /// Geometry-derived masks in a Z-up model activate exactly the translations in the wall plane.
@@ -19,7 +19,7 @@ fn z_up_wall_masks_follow_geometry() {
         let mut d = Domain3::new();
         let ids: [Node3Id; 4] = corners.map(|p| d.add_node(Node3::new(p)));
         d.add_element(Element3::StudWall(
-            StudWall::new3(ids, vec![], layout(), std::array::from_fn(|_| vec![])).unwrap(),
+            StudWall::new3(ids, vec![], layout(), vec![]).unwrap(),
         ));
         d.validate().unwrap();
         std::array::from_fn(|slot| d.is_active(ids[0], slot))
@@ -50,7 +50,7 @@ fn nonorthogonal_wall_corners_are_rejected() {
         d.add_node(Node3::new([0., 0.1, 3.])),
     ];
     d.add_element(Element3::StudWall(
-        StudWall::new3(ids, vec![], layout(), std::array::from_fn(|_| vec![])).unwrap(),
+        StudWall::new3(ids, vec![], layout(), vec![]).unwrap(),
     ));
     let error = d.validate().unwrap_err();
     assert!(format!("{error:?}").contains("wall axes are not orthogonal"));
@@ -87,7 +87,7 @@ fn solve_2d() -> (f64, f64) {
         d.add_node(Node::new([4., 3.])),
         d.add_node(Node::new([0., 3.])),
     ];
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[0].push(WallLoad::TopPoint {
         x: 4.,
         fx: 100.,
@@ -100,7 +100,10 @@ fn solve_2d() -> (f64, f64) {
         d.default_pattern(),
         id,
         ElementLoad {
-            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.0,
+            }),
             ..Default::default()
         },
     );
@@ -144,7 +147,7 @@ fn solve_3d(ex: f64, ez: f64) -> (f64, f64) {
             d.add_constraint((id, 2), &[(id, 0, ez / ex)]);
         }
     }
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[0].push(WallLoad::TopPoint {
         x: 4.,
         fx: 100.,
@@ -156,7 +159,10 @@ fn solve_3d(ex: f64, ez: f64) -> (f64, f64) {
         d.default_pattern(),
         id,
         ElementLoad3 {
-            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.0,
+            }),
             ..Default::default()
         },
     );
@@ -211,7 +217,7 @@ fn x_wall_domain_numbering_excludes_global_uz() {
         d.add_node(Node3::new([4., 3., 0.])),
         d.add_node(Node3::new([0., 3., 0.])),
     ];
-    let wall = StudWall::new3(c, vec![], layout(), std::array::from_fn(|_| vec![])).unwrap();
+    let wall = StudWall::new3(c, vec![], layout(), vec![]).unwrap();
     let wall_id = d.add_element(Element3::StudWall(wall));
     let a = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
@@ -321,13 +327,7 @@ fn solve_window_2d(o86: bool) -> WindowResult {
         });
     }
     let wall = d.add_element(Element::StudWall(
-        StudWall::new(
-            [c0, c1, c2, c3],
-            stations,
-            wall_layout,
-            std::array::from_fn(|_| vec![]),
-        )
-        .unwrap(),
+        StudWall::new([c0, c1, c2, c3], stations, wall_layout, vec![]).unwrap(),
     ));
     let pattern = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
     d.add_nodal_load(pattern, c3, 0, OPEN_V);
@@ -416,13 +416,7 @@ fn solve_window_3d_axes(ex: f64, ez: f64, z_up: bool, o86: bool) -> WindowResult
         });
     }
     let wall = d.add_element(Element3::StudWall(
-        StudWall::new3(
-            [c0, c1, c2, c3],
-            stations,
-            wall_layout,
-            std::array::from_fn(|_| vec![]),
-        )
-        .unwrap(),
+        StudWall::new3([c0, c1, c2, c3], stations, wall_layout, vec![]).unwrap(),
     ));
     let pattern = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
     d.add_nodal_load(pattern, c3, 0, OPEN_V * ex);
@@ -542,7 +536,7 @@ fn gravity_window_2d() -> GravityResult {
     let mut l = window_layout();
     l.top_ei = Some(1.2e10);
     l.foundation = false;
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[0].push(WallLoad::TopLine {
         x0: 0.,
         x1: 3600.,
@@ -580,13 +574,14 @@ fn gravity_window_2d() -> GravityResult {
         .unwrap(),
     ));
     let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
-    let mut selector = [0.; WALL_SLOTS];
-    selector[0] = 1.;
     d.add_element_load(
         p,
         id,
         ElementLoad {
-            wall: selector,
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.,
+            }),
             ..Default::default()
         },
     );
@@ -613,7 +608,7 @@ fn gravity_window_3d(z_up: bool) -> GravityResult {
     let mut l = window_layout();
     l.top_ei = Some(1.2e10);
     l.foundation = false;
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[0].push(WallLoad::TopLine {
         x0: 0.,
         x1: 3600.,
@@ -652,13 +647,14 @@ fn gravity_window_3d(z_up: bool) -> GravityResult {
         .unwrap(),
     ));
     let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
-    let mut selector = [0.; WALL_SLOTS];
-    selector[0] = 1.;
     d.add_element_load(
         p,
         id,
         ElementLoad3 {
-            wall: selector,
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.,
+            }),
             ..Default::default()
         },
     );
@@ -761,7 +757,7 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
                 rim_ea: R,
             }),
         };
-        let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+        let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
         if i == 1 {
             let w = 8000. / L;
             loads[0].push(WallLoad::TopLine {
@@ -778,13 +774,14 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
         ));
         walls.push(wall);
         if i == 1 {
-            let mut selector = [0.; WALL_SLOTS];
-            selector[0] = 1.;
             d.add_element_load(
                 pattern,
                 wall,
                 ElementLoad {
-                    wall: selector,
+                    wall: Some(WallCaseLoad {
+                        case: 0,
+                        factor: 1.,
+                    }),
                     ..Default::default()
                 },
             );
@@ -876,7 +873,7 @@ fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
                 rim_ea: R,
             }),
         };
-        let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+        let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
         if i == 1 {
             let w = 8000. / L;
             loads[0].push(WallLoad::TopLine {
@@ -893,13 +890,14 @@ fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
         ));
         walls.push(wall);
         if i == 1 {
-            let mut selector = [0.; WALL_SLOTS];
-            selector[0] = 1.;
             d.add_element_load(
                 pattern,
                 wall,
                 ElementLoad3 {
-                    wall: selector,
+                    wall: Some(WallCaseLoad {
+                        case: 0,
+                        factor: 1.,
+                    }),
                     ..Default::default()
                 },
             );
@@ -1175,7 +1173,7 @@ fn l_corner_shares_post_between_planes() {
             (b0, b3)
         };
         let wall = |d: &mut Domain3, c: [Node3Id; 4], w: f64| {
-            let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+            let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
             loads[0].push(WallLoad::TopLine {
                 x0: 0.,
                 x1: 4.,
@@ -1193,7 +1191,10 @@ fn l_corner_shares_post_between_planes() {
                 d.default_pattern(),
                 id,
                 ElementLoad3 {
-                    wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+                    wall: Some(WallCaseLoad {
+                        case: 0,
+                        factor: 1.0,
+                    }),
                     ..Default::default()
                 },
             );

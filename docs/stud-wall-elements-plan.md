@@ -1,6 +1,6 @@
 # Plan: stud walls as ordinary elements (Carapace and PySees)
 
-Status: C1 and C2 complete; C3–C4 and P1–P5 proposed, 2026-11-23. Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
+Status: C1, C2 and C3 complete; C4 and P1–P5 proposed, 2026-11-23. Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
 approach.
 
 ## Why
@@ -74,12 +74,21 @@ stays on the top plate (a vertical force has the same line of action either way,
 unchanged). The equivalence to the old band model holds to 1e-8 (stacks 1e-6): the recorded references carry
 that model's own conditioning noise (its statics residual is 3e-8).
 
-**C3. Pattern-owned wall loads.** The wall keeps an internal list of load cases (each a prepared load vector);
+**C3. Pattern-owned wall loads (done).** The wall keeps an internal list of load cases (each a prepared load vector);
 `ElementLoad` carries `wall: Option<(case, factor)>` (Copy, no cap) instead of `[f64; 8]`. Wire: an element load
 `{ kind: "wallLoad", load: WallLoadSpec }` in any pattern; the decoder gives each pattern's loads on a wall their
 own case. Floor loads: `floorLoads` rows gain `pattern` and their reactions become that pattern's wall cases.
 `WALL_SLOTS`, `wallSlots` and slot fields go. Verification: the takedown and window-header tests in pattern form,
 two patterns with different scale factors equal one pattern with combined loads (1e-12).
+
+As built: `StudWall::new(.., cases: Vec<Vec<WallLoad>>)` (no `add_load_case`: the decoder gathers a wall's cases before
+building it); `ElementLoad.wall: Option<WallCaseLoad { case, factor }>`. A single `ElementLoad` cannot add two
+patterns' different cases, so the effective load of a wall is a list (`effective_load` in `load_pattern.rs`) that
+`ElementOps::assemble_tangent_cases`, `commit_cases` and `stud_wall_response` take; `Add` of two different cases on
+one element in one pattern gives `WallCaseLoad::MIXED`, which `Domain::validate` rejects. The decoder (`wall_load_plan`)
+groups each (pattern, wall) pair's `wallLoad` rows and floor reactions into one case and emits one `ElementLoad` per
+pair, so it never produces `MIXED`. `FloorLoad::slot` stays a generic case index (`wall_loads` returns a map). The
+building builder keeps its wire format and makes one pattern per used slot.
 
 **C4. Building as an expansion.** `building::expand(&BuildingSpec) -> CarapaceInputV1` (explicit tables, walls on
 the storey grid with floor zones, anchorage zeroLengths, rigid diaphragm rows or flexible-diaphragm loads, one

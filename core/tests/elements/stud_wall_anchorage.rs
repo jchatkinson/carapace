@@ -10,8 +10,8 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     AnchorageBearing, ChordDistribution, Domain, Element, ElementLoad, LoadSeries, Material, Node,
-    NodeId, StudWall, StudWallLayout, WallLoad, WallShearLaw, WallSheathing, WallStud, ZeroLength,
-    WALL_SLOTS,
+    NodeId, StudWall, StudWallLayout, WallCaseLoad, WallLoad, WallShearLaw, WallSheathing,
+    WallStud, ZeroLength,
 };
 
 type D2 = Domain<2, 3, NodeId, Element>;
@@ -88,7 +88,7 @@ fn solve(v_total: f64, slack: f64) -> Out {
         foundation: false,
         floor: None,
     };
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     let line = |wx: f64, wy: f64| WallLoad::TopLine {
         x0: 0.,
         x1: L,
@@ -101,18 +101,18 @@ fn solve(v_total: f64, slack: f64) -> Out {
     loads[1].push(line(v_total / L, 0.));
     let wall = StudWall::new([base[0], base[1], c2, c3], vec![], layout, loads).unwrap();
     let id = d.add_element(Element::StudWall(wall));
-    let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
-    let mut slots = [0.; WALL_SLOTS];
-    slots[0] = 1.;
-    slots[1] = 1.;
-    d.add_element_load(
-        p,
-        id,
-        ElementLoad {
-            wall: slots,
-            ..Default::default()
-        },
-    );
+    // Dead load and lateral shear are two patterns, ramped together.
+    for case in 0..2 {
+        let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
+        d.add_element_load(
+            p,
+            id,
+            ElementLoad {
+                wall: Some(WallCaseLoad { case, factor: 1. }),
+                ..Default::default()
+            },
+        );
+    }
     let mut a = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Transformation)
         .integrator(Integrator::LoadControl { increment: 0.1 })

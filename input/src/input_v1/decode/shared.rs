@@ -9,10 +9,12 @@ use std::collections::HashMap;
 
 use carapace_core::model::{
     transfer_floor, BeamIntegration, Domain, ElementLoadComponents, ElementOps, FloorBounds,
-    FloorContinuity, FloorLoad, FloorSupport, LoadPatternId, Material, Node, Orientation, WallLoad,
+    FloorContinuity, FloorLoad, FloorSupport, LoadPatternId, Material, Node, Orientation,
+    WallCaseLoad, WallLoad,
 };
 
 use super::stages::{compile_stages, load_series_of};
+use crate::building::convert_wall_load;
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::model_output::ModelOutput;
 use crate::input_v1::sequence::{BulkQuantity, BulkTable, GaussQuantity, RecorderSpec};
@@ -148,16 +150,62 @@ pub(super) fn reject_tables(tables: &[(&'static str, bool)]) -> Result<(), Decod
     Ok(())
 }
 
-pub(super) fn floor_wall_loads(
-    floors: &[crate::input_v1::tables::FloorTransferSpec],
+/// The wall loads of every pattern, gathered before the walls are built: each (pattern, wall) pair with loads is
+/// one load case of that wall.
+pub(super) struct WallLoadPlan {
+    /// Per wall (row of `studWalls`): its load cases.
+    pub cases: Vec<Vec<Vec<WallLoad>>>,
+    /// One entry per case: `(pattern row, wall row, case index on that wall, stage)`.
+    pub pairs: Vec<(u32, usize, u32, u32)>,
+}
+
+/// Groups `wallLoad` element loads and the reactions of `floorLoads` rows by (pattern, wall): all of a pattern's
+/// loads on a wall become one case, so two patterns on a wall never merge and one pattern's loads never split. A
+/// `wallLoad` row on another element kind, a wall row past the table or a floor row naming a missing pattern is an
+/// error, as are `wallLoad` rows of one (pattern, wall) pair in different stages.
+pub(super) fn wall_load_plan(
+    input: &CarapaceInputV1,
     wall_count: usize,
-) -> Result<Vec<[Vec<WallLoad>; 8]>, DecodeError> {
-    use crate::building::{FloorContinuitySpec, FloorLoadSpec};
-    use crate::input_v1::tables::WallTargetSpec;
-    let mut out = (0..wall_count)
-        .map(|_| std::array::from_fn(|_| Vec::new()))
-        .collect::<Vec<_>>();
-    for (fi, floor) in floors.iter().enumerate() {
+) -> Result<WallLoadPlan, DecodeError> {
+    use crate::input_v1::tables::{FloorTransferLoadSpec, WallTargetSpec};
+    type Group = (Vec<WallLoad>, Option<u32>);
+    let mut groups: std::collections::BTreeMap<(u32, usize), Group> = Default::default();
+    let loads = &input.element_loads;
+    for i in 0..loads.element_index.len() {
+        let ElementLoadSpec::WallLoad { load } = loads.load[i] else {
+            continue;
+        };
+        let kind = loads.element_kind[i];
+        if !matches!(kind, ElementKind::StudWall) {
+            return Err(DecodeError::UnsupportedElementLoad {
+                element_kind: kind.table(),
+            });
+        }
+        let wall = loads.element_index[i] as usize;
+        if wall >= wall_count {
+            return Err(DecodeError::UnknownElementIndex {
+                table: kind.table(),
+                row: wall as u32,
+            });
+        }
+        let entry = groups.entry((loads.pattern[i], wall)).or_default();
+        if entry.1.is_some_and(|stage| stage != loads.stage[i]) {
+            return Err(invalid_row(
+                "element_loads",
+                i,
+                "wallLoad rows of one pattern on one wall must share a stage",
+            ));
+        }
+        entry.1 = Some(loads.stage[i]);
+        entry.0.push(convert_wall_load(load));
+    }
+    for (fi, floor) in input.floor_loads.iter().enumerate() {
+        if floor.pattern as usize >= input.load_patterns.series.len() {
+            return Err(DecodeError::UnknownPatternIndex {
+                table: "floor_loads",
+                row: floor.pattern,
+            });
+        }
         let bounds = FloorBounds {
             s0: floor.bounds[0],
             s1: floor.bounds[1],
@@ -173,48 +221,70 @@ pub(super) fn floor_wall_loads(
                 t1: s.t1,
             })
             .collect::<Vec<_>>();
-        let loads = floor
+        let floor_loads = floor
             .loads
             .iter()
             .map(|l| match *l {
-                FloorLoadSpec::Area { slot, w, region } => FloorLoad::Area { slot, w, region },
-                FloorLoadSpec::Line { slot, w, s, t0, t1 } => {
-                    FloorLoad::Line { slot, w, s, t0, t1 }
-                }
-                FloorLoadSpec::LineAlong { slot, w, t, s0, s1 } => {
-                    FloorLoad::LineAlong { slot, w, t, s0, s1 }
-                }
-                FloorLoadSpec::Point { slot, p, s, t } => FloorLoad::Point { slot, p, s, t },
+                FloorTransferLoadSpec::Area { w, region } => FloorLoad::Area { slot: 0, w, region },
+                FloorTransferLoadSpec::Line { w, s, t0, t1 } => FloorLoad::Line {
+                    slot: 0,
+                    w,
+                    s,
+                    t0,
+                    t1,
+                },
+                FloorTransferLoadSpec::LineAlong { w, t, s0, s1 } => FloorLoad::LineAlong {
+                    slot: 0,
+                    w,
+                    t,
+                    s0,
+                    s1,
+                },
+                FloorTransferLoadSpec::Point { p, s, t } => FloorLoad::Point { slot: 0, p, s, t },
             })
             .collect::<Vec<_>>();
         let continuity = match floor.continuity {
-            FloorContinuitySpec::Simple => FloorContinuity::Simple,
-            FloorContinuitySpec::Continuous => FloorContinuity::Continuous,
+            crate::building::FloorContinuitySpec::Simple => FloorContinuity::Simple,
+            crate::building::FloorContinuitySpec::Continuous => FloorContinuity::Continuous,
         };
-        let reactions = transfer_floor(bounds, &supports, &loads, continuity).map_err(|e| {
-            DecodeError::InvalidFloorTransfer {
-                row: fi as u32,
-                reason: e.to_string(),
-            }
-        })?;
-        for (si, support) in floor.supports.iter().enumerate() {
-            let index = match support.wall {
-                WallTargetSpec::StudWall { index } => index as usize,
-            };
-            let target = out.get_mut(index).ok_or(DecodeError::UnknownElementIndex {
-                table: "stud_walls",
-                row: index as u32,
+        let reactions =
+            transfer_floor(bounds, &supports, &floor_loads, continuity).map_err(|e| {
+                DecodeError::InvalidFloorTransfer {
+                    row: fi as u32,
+                    reason: e.to_string(),
+                }
             })?;
-            for (slot, loads) in reactions.per_support[si]
+        for (si, support) in floor.supports.iter().enumerate() {
+            let WallTargetSpec::StudWall { index } = support.wall;
+            if index as usize >= wall_count {
+                return Err(DecodeError::UnknownElementIndex {
+                    table: "stud_walls",
+                    row: index,
+                });
+            }
+            let entry = groups.entry((floor.pattern, index as usize)).or_default();
+            for loads in reactions.per_support[si]
                 .wall_loads(support.x_at_t0, support.reversed)
-                .into_iter()
-                .enumerate()
+                .into_values()
             {
-                target[slot].extend(loads);
+                entry.0.extend(loads);
             }
         }
     }
-    Ok(out)
+    let mut plan = WallLoadPlan {
+        cases: vec![Vec::new(); wall_count],
+        pairs: Vec::new(),
+    };
+    for ((pattern, wall), (loads, stage)) in groups {
+        plan.pairs.push((
+            pattern,
+            wall,
+            plan.cases[wall].len() as u32,
+            stage.unwrap_or(0),
+        ));
+        plan.cases[wall].push(loads);
+    }
+    Ok(plan)
 }
 
 /// `fibers.z`: empty in 2D, parallel to `y` in 3D.
@@ -652,6 +722,7 @@ where
 /// Per stage, the `(pattern, element, load)` triples that stage adds.
 type StagedLoads<I, L> = Vec<Vec<(LoadPatternId, I, L)>>;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     mut domain: Domain<NDIM, NDOF, NId, E>,
     input: &CarapaceInputV1,
@@ -659,7 +730,9 @@ pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     elements: ElementIds<E::Id>,
     model_output: &ModelOutput,
     extra_nodal_loads: Vec<(u32, u32, NId, usize, f64)>,
+    wall_pairs: &[(u32, usize, u32, u32)],
     make_load: impl Fn(&ElementLoadSpec) -> Option<E::Load>,
+    make_wall_load: impl Fn(WallCaseLoad) -> E::Load,
 ) -> Result<ModelSession<NDIM, NDOF, NId, E>, DecodeError>
 where
     NId: NodeKey + Copy,
@@ -739,9 +812,7 @@ where
             ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
                 kind.is_shell()
             }
-            ElementLoadSpec::WallSlots { .. } => {
-                matches!(kind, ElementKind::StudWall)
-            }
+            ElementLoadSpec::WallLoad { .. } => matches!(kind, ElementKind::StudWall),
         };
         if !carried {
             return Err(DecodeError::UnsupportedElementLoad {
@@ -772,6 +843,9 @@ where
                 }
             }
         }
+        if matches!(spec, ElementLoadSpec::WallLoad { .. }) {
+            continue; // grouped into one load case per (pattern, wall) by `wall_load_plan`, added below
+        }
         let load = make_load(&spec).ok_or(DecodeError::UnsupportedElementLoad {
             element_kind: kind.table(),
         })?;
@@ -782,6 +856,17 @@ where
                 row: i as u32,
             })?
             .push((pattern, element_id, load));
+    }
+    for &(pattern, wall, case, stage) in wall_pairs {
+        let element_id = elements.get(ElementKind::StudWall, wall as u32, ndm)?;
+        let load = make_wall_load(WallCaseLoad { case, factor: 1.0 });
+        element_loads_by_stage
+            .get_mut(stage as usize)
+            .ok_or(DecodeError::UnknownStageIndex {
+                table: "element_loads",
+                row: 0,
+            })?
+            .push((pattern_at(pattern)?, element_id, load));
     }
 
     let stages = compile_stages(

@@ -24,8 +24,8 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     ChordDistribution, Domain, Element, ElementLoad, Material, Node, NodeId, StudWall,
-    StudWallLayout, WallChord, WallLoad, WallSheathing, WallStation, WallStud, ZeroLength,
-    WALL_SLOTS,
+    StudWallLayout, WallCaseLoad, WallChord, WallLoad, WallSheathing, WallStation, WallStud,
+    ZeroLength,
 };
 
 type D2 = Domain<2, 3, NodeId, Element>;
@@ -316,7 +316,7 @@ fn element_model_mode(c: &Case, v: Variant, use_foundation: bool, nonlinear: boo
             )
             .map(|(chord, x, node)| WallStation { chord, x, node })
             .collect();
-        let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+        let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
         if v.corner_load {
             d.add_nodal_load(pattern, top_left, 0, c.forces[i] / 2.);
             d.add_nodal_load(pattern, top_right, 0, c.forces[i] / 2.);
@@ -342,13 +342,14 @@ fn element_model_mode(c: &Case, v: Variant, use_foundation: bool, nonlinear: boo
         let id = d.add_element(Element::StudWall(wall));
         wall_ids.push(id);
         if !v.corner_load {
-            let mut wall = [0.; WALL_SLOTS];
-            wall[0] = 1.;
             d.add_element_load(
                 pattern,
                 id,
                 ElementLoad {
-                    wall,
+                    wall: Some(WallCaseLoad {
+                        case: 0,
+                        factor: 1.,
+                    }),
                     ..Default::default()
                 },
             );

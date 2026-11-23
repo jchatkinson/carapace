@@ -4,8 +4,8 @@ use carapace_core::analysis::{
     Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
 };
 use carapace_core::model::{
-    ChordDistribution, ElementLoad, StudWall, StudWallLayout, WallChord, WallLoad, WallStation,
-    WallStud, WALL_SLOTS,
+    ChordDistribution, ElementLoad, StudWall, StudWallLayout, WallCaseLoad, WallChord, WallLoad,
+    WallStation, WallStud,
 };
 use carapace_core::model::{Domain, Element, Node};
 use carapace_core::model::{ElasticBeamColumn, GeomTransf, Material, Truss};
@@ -47,7 +47,7 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
         d.add_node(Node::new([10., 8.])),
         d.add_node(Node::new([0., 8.])),
     ];
-    let error = StudWall::new(c, vec![], l, std::array::from_fn(|_| vec![])).unwrap_err();
+    let error = StudWall::new(c, vec![], l, vec![]).unwrap_err();
     assert!(error.to_string().contains("studs[1]"));
 
     let mut bad_law = layout();
@@ -58,7 +58,7 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
             nail_diameter: 3.25,
         },
     });
-    let error = StudWall::new(c, vec![], bad_law, std::array::from_fn(|_| vec![])).unwrap_err();
+    let error = StudWall::new(c, vec![], bad_law, vec![]).unwrap_err();
     assert!(error.to_string().contains("O86 bv"));
 
     let mut l = layout();
@@ -72,7 +72,7 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
             node: station,
         }],
         l,
-        std::array::from_fn(|_| vec![]),
+        vec![],
     )
     .expect(
         "a bottom station on a foundation replaces the internal support there (for a hold-down)",
@@ -114,7 +114,7 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
         floor: None,
     };
     many_piers.studs.last_mut().unwrap().x = 390.;
-    let error = StudWall::new(c, vec![], many_piers, std::array::from_fn(|_| vec![])).unwrap_err();
+    let error = StudWall::new(c, vec![], many_piers, vec![]).unwrap_err();
     assert!(error.to_string().contains("pier count 65"));
 
     let mut nonlinear_layout = layout();
@@ -133,24 +133,24 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
         })
         .collect();
     // 33 exterior nodes: nonlinear walls share the 256-node limit (the old 32-node cap is gone).
-    assert!(StudWall::new(
-        c,
-        stations,
-        nonlinear_layout,
-        std::array::from_fn(|_| vec![]),
-    )
-    .is_ok());
+    assert!(StudWall::new(c, stations, nonlinear_layout, vec![],).is_ok());
 
-    let a = ElementLoad {
-        wall: [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    // Wall loads of one case add; different cases cannot, and the sum is rejected by `Domain::validate`.
+    let load = |case, factor| ElementLoad {
+        wall: Some(WallCaseLoad { case, factor }),
         ..Default::default()
     };
-    let b = ElementLoad {
-        wall: [3.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ..Default::default()
-    };
-    assert_eq!((a + b * 2.0).wall, [7.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-    assert_eq!(WALL_SLOTS, 8);
+    assert_eq!(
+        (load(5, 1.0) + load(5, 3.0) * 2.0).wall,
+        Some(WallCaseLoad {
+            case: 5,
+            factor: 7.0
+        })
+    );
+    assert_eq!(
+        (load(1, 1.0) + load(2, 1.0)).wall,
+        Some(WallCaseLoad::MIXED)
+    );
 }
 
 /// A partial top line load is accepted into its requested pattern slot and preserves the exterior node order.
@@ -165,7 +165,7 @@ fn partial_line_load_has_correct_resultant() {
         d.add_node(Node::new([10., 8.])),
         d.add_node(Node::new([0., 8.])),
     ];
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[2].push(WallLoad::TopLine {
         x0: 2.0,
         x1: 8.0,
@@ -211,7 +211,7 @@ fn kinematic_wall(
             law: carapace_core::model::WallShearLaw::Linear { ga: 100. },
         });
     }
-    let wall = StudWall::new(corners, vec![], layout, std::array::from_fn(|_| vec![])).unwrap();
+    let wall = StudWall::new(corners, vec![], layout, vec![]).unwrap();
     let id = d.add_element(Element::StudWall(wall));
     (d, id)
 }
@@ -311,8 +311,8 @@ fn frame_layout(distribution: ChordDistribution, door: bool) -> StudWallLayout {
         floor: None,
     }
 }
-fn wall_loads() -> [Vec<WallLoad>; WALL_SLOTS] {
-    let mut l: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+fn wall_loads() -> Vec<Vec<WallLoad>> {
+    let mut l: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     l[0].push(WallLoad::TopPoint {
         x: 0.55,
         fx: 4.,
@@ -706,13 +706,14 @@ fn loaded_condensation_matches_explicit_frame_across_slots() {
                     factor,
                 )
             };
-            let mut selector = [0.; WALL_SLOTS];
-            selector[slot] = 1.;
             wall_domain.add_element_load(
                 pattern,
                 wall_id,
                 ElementLoad {
-                    wall: selector,
+                    wall: Some(WallCaseLoad {
+                        case: slot,
+                        factor: 1.,
+                    }),
                     ..Default::default()
                 },
             );
@@ -844,13 +845,14 @@ fn elastic_material_law_reproduces_linear_window_and_door_walls() {
                         factor,
                     )
                 };
-                let mut selector = [0.; WALL_SLOTS];
-                selector[slot] = 1.;
                 d.add_element_load(
                     pattern,
                     id,
                     ElementLoad {
-                        wall: selector,
+                        wall: Some(WallCaseLoad {
+                            case: slot,
+                            factor: 1.,
+                        }),
                         ..Default::default()
                     },
                 );
@@ -968,7 +970,10 @@ fn unsheathed_walls_match_explicit_frames() {
             wall_domain.default_pattern(),
             wall_id,
             ElementLoad {
-                wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+                wall: Some(WallCaseLoad {
+                    case: 0,
+                    factor: 1.0,
+                }),
                 ..Default::default()
             },
         );
@@ -1127,7 +1132,7 @@ fn single_sheathed_pier_matches_sdpws_terms() {
         d.add_node(Node::new([length, height])),
         d.add_node(Node::new([0., height])),
     ];
-    let wall = StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap();
+    let wall = StudWall::new(corners, vec![], l, vec![]).unwrap();
     let id = d.add_element(Element::StudWall(wall));
     let pattern = d.default_pattern();
     d.add_nodal_load(pattern, corners[2], 0, lateral / 2.);
@@ -1211,7 +1216,7 @@ fn single_o86_pier_matches_nonlinear_deflection() {
         d.add_node(Node::new([0., height])),
     ];
     let id = d.add_element(Element::StudWall(
-        StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap(),
+        StudWall::new(corners, vec![], l, vec![]).unwrap(),
     ));
     let pattern = d.default_pattern();
     d.add_nodal_load(pattern, corners[2], 0, lateral / 2.);
@@ -1276,7 +1281,7 @@ fn nonlinear_wall_end_force_matches_slot_loaded_response_after_commit() {
             nail_diameter: 3.25,
         },
     });
-    let mut slots: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut slots: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     slots[0].push(WallLoad::TopLine {
         x0: 0.,
         x1: length,
@@ -1293,7 +1298,10 @@ fn nonlinear_wall_end_force_matches_slot_loaded_response_after_commit() {
         pattern,
         id,
         ElementLoad {
-            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.0,
+            }),
             ..Default::default()
         },
     );
@@ -1352,7 +1360,7 @@ fn material_sheathing_tracks_cyclic_steel01_shear_history() {
         law: carapace_core::model::WallShearLaw::Material(material.clone()),
     });
     let wall = d.add_element(Element::StudWall(
-        StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap(),
+        StudWall::new(corners, vec![], l, vec![]).unwrap(),
     ));
     let pattern = d.add_load_pattern(carapace_core::model::LoadSeries::Linear { slope: 1. });
     d.add_nodal_load(pattern, corners[2], 0, 1.);
@@ -1418,7 +1426,7 @@ fn door_piers_sum_to_applied_and_reported_base_shear() {
         law: carapace_core::model::WallShearLaw::Linear { ga: 8e4 },
     });
     l.foundation = true;
-    let wall = StudWall::new(corners, vec![], l, std::array::from_fn(|_| vec![])).unwrap();
+    let wall = StudWall::new(corners, vec![], l, vec![]).unwrap();
     let id = d.add_element(Element::StudWall(wall));
     let pattern = d.default_pattern();
     d.add_nodal_load(pattern, corners[2], 0, lateral / 2.);
@@ -1480,15 +1488,7 @@ fn adjacent_walls_with_different_ga_balance_individually_and_together() {
         foundation: false,
         floor: None,
     };
-    let make_wall = |corners, ga| {
-        StudWall::new(
-            corners,
-            vec![],
-            make_layout(ga),
-            std::array::from_fn(|_| vec![]),
-        )
-        .unwrap()
-    };
+    let make_wall = |corners, ga| StudWall::new(corners, vec![], make_layout(ga), vec![]).unwrap();
     let a_id = d.add_element(Element::StudWall(make_wall([lb, mb, mt, lt], 1e5)));
     let b_id = d.add_element(Element::StudWall(make_wall([mb, rb, rt, mt], 3e5)));
     let pattern = d.default_pattern();
@@ -1565,7 +1565,7 @@ fn unloaded_stations_inside_a_pier_leave_response_unchanged() {
             floor: None,
         };
         let id = d.add_element(Element::StudWall(
-            StudWall::new(corners, stations, layout, std::array::from_fn(|_| vec![])).unwrap(),
+            StudWall::new(corners, stations, layout, vec![]).unwrap(),
         ));
         let pattern = d.default_pattern();
         d.add_nodal_load(pattern, corners[2], 0, lateral / 2.);

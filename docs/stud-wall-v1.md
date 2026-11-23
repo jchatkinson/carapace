@@ -22,7 +22,7 @@ sheathing law can be nonlinear.
 | Studs and stud packs (one row each), top chord `beam` or `direct`, bottom chord, openings with header, jacks and cripples (windows and doors) | Sills and cripples below windows, force transfer around openings (segmented design only) |
 | Stations (exterior nodes) on either chord | Automatic station generation (a PySees/decoder concern) |
 | Linear sheathing (`ga`), CSA O86:19 nonlinear-elastic shear and nail-slip law, and uniaxial material laws, each one constant-shear field per full-height pier | Hysteretic member framing, staged installation |
-| Top point and top line loads in up to 8 pattern slots | Self-weight, mass, out-of-plane output (PySees post-processing) |
+| Top point and top line loads in any number of wall load cases (selected by patterns) | Self-weight, mass, out-of-plane output (PySees post-processing) |
 | Core API and core tests | Wire format, CLI, wasm and PySees mirror (a later phase) |
 
 ## 2. Frame and exterior nodes
@@ -154,12 +154,12 @@ only) and `A = diag(A_p)`. Eliminating the internal DOFs leaves a P×P system in
 ```
 
 - `y` is the pier strain of the unsheathed frame: `G = B_eᵀ − B_iᵀ K_ii⁻¹ K_ie` (the exterior map) and
-  `y_k = B_iᵀ K_ii⁻¹ p_i,k` (slot `k`).
+  `y_k = B_iᵀ K_ii⁻¹ p_i,k` (load case `k`; `λ_k` are the effective case factors, the sum over active patterns).
 - A local Newton solve (fixed-size buffers, hand-written LU with partial pivoting, residual `≤ 1e-14 (1 + max|y|)`,
   at most 40 iterations) starts from `γ_sh = y` and evaluates each law and its tangent `D = diag(dq/dγ_sh)`.
   `Material` laws are evaluated as trials from their committed state.
 - Exterior resisting force: `K_c,frame u_e + C q`, with `C = G ᵀ A`, the condensed force map of the pier
-  fields. The slot loads are applied by `assemble_load` as in the linear path.
+  fields. The case loads are applied by `assemble_load` as in the linear path.
 - Consistent tangent: `K_e = K_c,frame + C D (I + S D)⁻¹ G` (implicit derivative of the local system; `S`
   is not symmetric, so the order matters).
 - Internal recovery: `u_i = Σ_k λ_k w_k − R u_e − K_ii⁻¹ B_i A q`.
@@ -188,24 +188,26 @@ orientation comes from the corner coordinates at call time. The linear path reta
 
 - `K_c = K_ee − K_ei K_ii⁻¹ K_ie` (dense is fine; walls have at most a few hundred internal DOFs).
 - `R = K_ii⁻¹ K_ie`, stored for recovery.
-- Per load slot `k`: `f_k = p_e,k − K_ei K_ii⁻¹ p_i,k` and `w_k = K_ii⁻¹ p_i,k`.
-- Recovery: `u_i = Σ_k λ_k w_k − R u_e`, where `λ_k` are the effective slot factors.
+- Per load case `k`: `f_k = p_e,k − K_ei K_ii⁻¹ p_i,k` and `w_k = K_ii⁻¹ p_i,k`.
+- Recovery: `u_i = Σ_k λ_k w_k − R u_e`, where `λ_k` are the effective case factors.
 
 Every element method gives the same answer whether or not `prepare` has run.
 
 For nonlinear sheathing, the constructor instead condenses the bare frame and stores the pier coupling and
 compliance maps. The pier Newton solve and consistent correction run at each tangent evaluation.
 
-## 5. Loads: pattern slots
+## 5. Loads: pattern-owned cases
 
-- **Slot field.** `ElementLoad` gains `wall: [f64; 8]` (`WALL_SLOTS = 8`). It is additive and scalable like the
-  other fields. Other elements reject a nonzero `wall`; the stud wall rejects every other field.
-- **Slot contents.** The stud wall holds, per slot, a list of `WallLoad`:
+- **Case field.** `ElementLoad` gains `wall: Option<WallCaseLoad { case, factor }>`, scalable like the other
+  fields (the same case adds factors; different cases on one element in one pattern are `WallCaseLoad::MIXED`, which
+  `Domain::validate` rejects). Other elements reject a `wall`; the stud wall rejects every other field and a case
+  index it does not have. Across patterns the wall receives the list of active `(case, factor)` pairs.
+- **Case contents.** The stud wall holds, per case, a list of `WallLoad`:
   - `TopPoint { x, fx, fy }`;
   - `TopLine { x0, x1, wx0, wx1, wy0, wy1 }`, linear along `x`, in local axes.
 
-  A pattern's loads on a wall go in one slot. The pattern then carries `wall = e_slot`, and its factor scales
-  the slot.
+  A pattern's loads on a wall go in one case. The pattern then carries `wall = Some(case)`, and its factor
+  scales the case.
 - **Discretization** into internal and exterior consistent loads, per top chord segment:
   - `Beam`: fixed-end forces of the beam segment for points and trapezoid pieces.
   - `Direct`: simple-span (lever-rule) reactions to the two end nodes, for both `fx` and `fy`.

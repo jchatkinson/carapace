@@ -3,6 +3,7 @@
 mod build;
 mod spec;
 
+pub(crate) use build::convert_wall_load;
 pub use build::{
     build, BuildError, Building, BuildingWall, HoldDownForce, LevelHandle, StoreyDrift,
 };

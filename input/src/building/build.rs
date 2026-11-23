@@ -5,8 +5,8 @@ use carapace_core::model::{
     flexible_diaphragm_loads, lump_line_reaction, transfer_floor, AnchorageBearing,
     ChordDistribution, Domain3, Element3, Element3Id, ElementLoad3, FloorBounds, FloorContinuity,
     FloorLoad, FloorReactions, FloorSupport, FloorZone, LoadPatternId, LoadSeries, Material, Node3,
-    Node3Id, StudWall, StudWallLayout, WallChord, WallLoad, WallOpening, WallShearLaw,
-    WallSheathing, WallStation, WallStud, ZeroLength3, WALL_SLOTS,
+    Node3Id, StudWall, StudWallLayout, WallCaseLoad, WallChord, WallLoad, WallOpening,
+    WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3,
 };
 use slotmap::Key;
 
@@ -64,18 +64,24 @@ pub struct Building {
     pub links: Vec<Vec<Element3Id>>,
     pub levels: Vec<LevelHandle>,
     pub floor_reactions: Vec<FloorReactions>,
-    patterns: [LoadPatternId; WALL_SLOTS],
+    /// One load pattern per slot that carries a load (the slot is the index).
+    patterns: [Option<LoadPatternId>; SLOTS],
 }
 
+/// Number of load slots of a building (`BuildingSpec::combination`).
+const SLOTS: usize = 8;
+
 impl Building {
-    /// Apply slot combination factors to the builder's eight independent load patterns.
-    /// Set the eight pattern factors before building an analysis.
-    pub fn apply_combination(&mut self, factors: [f64; WALL_SLOTS]) -> Result<(), BuildError> {
+    /// Apply slot combination factors: slot `k`'s load pattern (one per slot that carries a load; the others are
+    /// ignored) is scaled by `factors[k]`. Set them before building an analysis.
+    pub fn apply_combination(&mut self, factors: [f64; SLOTS]) -> Result<(), BuildError> {
         if factors.iter().any(|v| !v.is_finite()) {
             return Err(err("combination factors must be finite"));
         }
         for (pattern, factor) in self.patterns.iter().zip(factors) {
-            self.domain.set_load_pattern_scale_factor(*pattern, factor);
+            if let Some(pattern) = pattern {
+                self.domain.set_load_pattern_scale_factor(*pattern, factor);
+            }
         }
         Ok(())
     }
@@ -184,8 +190,7 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
     let mut domain = Domain3::new();
     let mut wall_nodes: Vec<BTreeMap<String, GeneratedWallNodes>> = Vec::new();
     let mut floor_reactions = Vec::new();
-    let patterns =
-        std::array::from_fn(|_| domain.add_load_pattern(LoadSeries::Linear { slope: 1. }));
+    let mut patterns: [Option<LoadPatternId>; SLOTS] = [None; SLOTS];
     for (si, s) in spec.storeys.iter().enumerate() {
         if !s.wall_height.is_finite()
             || s.wall_height <= 0.
@@ -380,7 +385,7 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                 };
                 let x_at_t0 = (t0 - coord) / sign;
                 let loads = reactions.per_support[i].wall_loads(x_at_t0, sign < 0.);
-                for (slot, group) in loads.into_iter().enumerate() {
+                for (slot, group) in loads {
                     for load in group {
                         wall.0.loads.push(SlotWallLoad {
                             slot,
@@ -399,15 +404,20 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
     let mut links = vec![Vec::new(); spec.storeys.len()];
     for si in 0..spec.storeys.len() {
         for (name, (ws, layout, corners, top, bottom)) in wall_nodes[si].clone() {
-            let mut load_slots: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
+            // One load case per slot that loads this wall; the slot's pattern selects it below.
+            let mut slot_loads: BTreeMap<usize, Vec<WallLoad>> = BTreeMap::new();
             for l in ws.loads {
-                if l.slot >= WALL_SLOTS {
+                if l.slot >= SLOTS {
                     return Err(err(format!(
                         "storey {si} wall {name}: load slot out of range"
                     )));
                 }
-                load_slots[l.slot].push(convert_wall_load(l.load));
+                slot_loads
+                    .entry(l.slot)
+                    .or_default()
+                    .push(convert_wall_load(l.load));
             }
+            let (case_slots, load_cases): (Vec<_>, Vec<_>) = slot_loads.into_iter().unzip();
             let mut sorted: Vec<f64> = top.keys().map(|k| *k as f64 / 1e6).collect();
             sorted.sort_by(f64::total_cmp);
             sorted.dedup_by(|a, b| (*a - *b).abs() < 1e-9 * layout.length);
@@ -443,17 +453,19 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                         .collect::<Vec<_>>()
                 })
                 .collect();
-            let wall = StudWall::new3(corners, stations, layout.clone(), load_slots)
+            let wall = StudWall::new3(corners, stations, layout.clone(), load_cases)
                 .map_err(|e| err(format!("storey {si} wall {name}: {e}")))?;
             let eid = domain.add_element(Element3::StudWall(wall));
-            for (slot, pattern) in patterns.iter().enumerate() {
-                let mut factors = [0.; WALL_SLOTS];
-                factors[slot] = 1.;
+            for (case, slot) in case_slots.into_iter().enumerate() {
+                let pattern = pattern_of(&mut domain, &mut patterns, slot);
                 domain.add_element_load(
-                    *pattern,
+                    pattern,
                     eid,
                     ElementLoad3 {
-                        wall: factors,
+                        wall: Some(WallCaseLoad {
+                            case: case as u32,
+                            factor: 1.,
+                        }),
                         ..Default::default()
                     },
                 );
@@ -576,13 +588,12 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
             None
         };
         for l in &s.lateral {
-            if l.slot >= WALL_SLOTS || ![l.fx, l.fz, l.at[0], l.at[1]].iter().all(|v| v.is_finite())
-            {
+            if l.slot >= SLOTS || ![l.fx, l.fz, l.at[0], l.at[1]].iter().all(|v| v.is_finite()) {
                 return Err(err(format!("storey {si}: invalid lateral load")));
             }
             // Rigid load is attached to the retained node; flexible distribution is handled by floor helpers.
             if let Some(m) = master {
-                let pattern = patterns[l.slot];
+                let pattern = pattern_of(&mut domain, &mut patterns, l.slot);
                 *nodal.entry((pattern, m, 0)).or_default() += l.fx;
                 *nodal.entry((pattern, m, 2)).or_default() += l.fz;
                 let c = domain.node(m).coords;
@@ -591,7 +602,8 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                 let my = l.fx * (l.at[1] - c[2]) - l.fz * (l.at[0] - c[0]);
                 *nodal.entry((pattern, m, 4)).or_default() += my;
             } else {
-                distribute_flexible(&domain, &mut nodal, &walls[si], l, patterns[l.slot])?;
+                let pattern = pattern_of(&mut domain, &mut patterns, l.slot);
+                distribute_flexible(&domain, &mut nodal, &walls[si], l, pattern)?;
             }
         }
         if master.is_none() {
@@ -625,6 +637,15 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
         floor_reactions,
         patterns,
     })
+}
+
+/// Slot `slot`'s load pattern, created on first use.
+fn pattern_of(
+    domain: &mut Domain3,
+    patterns: &mut [Option<LoadPatternId>; SLOTS],
+    slot: usize,
+) -> LoadPatternId {
+    *patterns[slot].get_or_insert_with(|| domain.add_load_pattern(LoadSeries::Linear { slope: 1. }))
 }
 
 fn key(x: f64) -> i64 {
@@ -697,7 +718,7 @@ fn convert_layout(l: &WallLayoutSpec, si: usize, name: &str) -> Result<StudWallL
     }
     Ok(x)
 }
-fn convert_wall_load(l: WallLoadSpec) -> WallLoad {
+pub(crate) fn convert_wall_load(l: WallLoadSpec) -> WallLoad {
     match l {
         WallLoadSpec::TopPoint { x, fx, fy } => WallLoad::TopPoint { x, fx, fy },
         WallLoadSpec::TopLine {

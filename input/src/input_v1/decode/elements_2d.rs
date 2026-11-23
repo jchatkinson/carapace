@@ -16,11 +16,11 @@ use carapace_core::model::{
 
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
-    build_fiber_section, check_fibers, finish, floor_wall_loads, friction_by_row, integration_of,
-    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables,
-    validate_stud_wall_geometry, ElementIds,
+    build_fiber_section, check_fibers, finish, friction_by_row, integration_of, material_lookup,
+    materials_by_row, node_lookup, orientations_by_row, reject_tables, validate_stud_wall_geometry,
+    wall_load_plan, ElementIds,
 };
-use crate::building::{ChordDistributionSpec, WallChordSpec, WallLoadSpec, WallShearLawSpec};
+use crate::building::{ChordDistributionSpec, WallChordSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::{
@@ -176,7 +176,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         add_quads(&mut domain, &input.quads, &node_at, &plane_materials)?,
     );
 
-    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls.len())?;
+    let wall_plan = wall_load_plan(&input, input.stud_walls.len())?;
     elements.set(
         ElementKind::StudWall,
         decode_stud_walls(
@@ -184,7 +184,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
             &input.stud_walls,
             &input.nodes,
             &node_at,
-            &floor_wall_loads,
+            &wall_plan.cases,
         )?,
     );
 
@@ -206,6 +206,7 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         elements,
         &model_output,
         bar_end_loads,
+        &wall_plan.pairs,
         |spec| {
             Some(match *spec {
                 ElementLoadSpec::Uniform { wx, wy, .. } => ElementLoad::uniform(wx, wy),
@@ -222,14 +223,14 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
                 ElementLoadSpec::EdgePressure { edge, pressure } => {
                     ElementLoad::edge_pressure(edge as usize, pressure)
                 }
-                ElementLoadSpec::ShellPressure { .. } | ElementLoadSpec::ShellBody { .. } => {
-                    return None
-                }
-                ElementLoadSpec::WallSlots { factors } => ElementLoad {
-                    wall: factors,
-                    ..Default::default()
-                },
+                ElementLoadSpec::ShellPressure { .. }
+                | ElementLoadSpec::ShellBody { .. }
+                | ElementLoadSpec::WallLoad { .. } => return None,
             })
+        },
+        |case| ElementLoad {
+            wall: Some(case),
+            ..Default::default()
         },
     )?;
     session.set_model_output(model_output);
@@ -287,32 +288,12 @@ fn decode_layout(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
         }),
     }
 }
-fn decode_wall_load(l: WallLoadSpec) -> WallLoad {
-    match l {
-        WallLoadSpec::TopPoint { x, fx, fy } => WallLoad::TopPoint { x, fx, fy },
-        WallLoadSpec::TopLine {
-            x0,
-            x1,
-            wx0,
-            wx1,
-            wy0,
-            wy1,
-        } => WallLoad::TopLine {
-            x0,
-            x1,
-            wx0,
-            wx1,
-            wy0,
-            wy1,
-        },
-    }
-}
 fn decode_stud_walls(
     domain: &mut Domain,
     t: &[crate::input_v1::tables::StudWallSpec],
     node_table: &crate::input_v1::tables::NodeTable,
     node: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
-    extra: &[[Vec<WallLoad>; 8]],
+    cases: &[Vec<Vec<WallLoad>>],
 ) -> Result<Vec<ElementId>, DecodeError> {
     let mut out = Vec::with_capacity(t.len());
     for (i, r) in t.iter().enumerate() {
@@ -344,27 +325,14 @@ fn decode_stud_walls(
                 reason: reason.into(),
             }
         })?;
-        let mut loads: [Vec<WallLoad>; 8] = std::array::from_fn(|_| Vec::new());
-        for x in &r.loads {
-            if x.slot >= 8 {
-                return Err(DecodeError::InvalidWallSlot {
+        let wall =
+            StudWall::new(c, st, decode_layout(&r.layout), cases[i].clone()).map_err(|e| {
+                DecodeError::InvalidMacroElement {
                     table: "stud_walls",
                     row: i as u32,
-                    slot: x.slot as u32,
-                });
-            }
-            loads[x.slot].push(decode_wall_load(x.load));
-        }
-        for k in 0..8 {
-            loads[k].extend(extra[i][k].iter().copied());
-        }
-        let wall = StudWall::new(c, st, decode_layout(&r.layout), loads).map_err(|e| {
-            DecodeError::InvalidMacroElement {
-                table: "stud_walls",
-                row: i as u32,
-                reason: e.to_string(),
-            }
-        })?;
+                    reason: e.to_string(),
+                }
+            })?;
         out.push(domain.add_element(Element::StudWall(wall)));
     }
     Ok(out)

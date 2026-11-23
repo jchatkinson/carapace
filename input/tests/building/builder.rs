@@ -5,7 +5,6 @@
 use carapace_core::analysis::{
     Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
 };
-use carapace_core::model::WALL_SLOTS;
 use carapace_input::building::*;
 
 fn layout(window: bool) -> WallLayoutSpec {
@@ -136,7 +135,7 @@ fn one_storey_wall_and_returns() {
         at: [2000., 4000. / 3.],
     });
     let mut b = build(&spec(vec![s], DiaphragmKind::Rigid)).unwrap();
-    let loadfactors = [1.; WALL_SLOTS];
+    let loadfactors = [1.; 8];
     b.apply_combination(loadfactors).unwrap();
     let id = b.walls[0]["x"].element;
     let d = solve(b);
@@ -314,7 +313,7 @@ fn gravity_reactions_to_window_wall() {
         .map(|x| x.w * (x.t1 - x.t0))
         .sum();
     assert!((sum - 48_000_000.).abs() <= 48_000_000. * 1e-12);
-    let mut factors = [0.; WALL_SLOTS];
+    let mut factors = [0.; 8];
     factors[0] = 1.25;
     factors[1] = 1.5;
     b.apply_combination(factors).unwrap();
@@ -414,7 +413,7 @@ fn nonlinear_long_walls_with_roof_band() {
         s
     };
     let mut built = build(&spec(vec![level(254.), level(254.)], DiaphragmKind::Rigid)).unwrap();
-    built.apply_combination([1.; WALL_SLOTS]).unwrap();
+    built.apply_combination([1.; 8]).unwrap();
     let ids = [0, 1].map(|s| {
         [
             built.walls[s]["front"].element,
@@ -502,7 +501,7 @@ fn z_span_floor_on_rectangular_plan() {
             "line {w} over {len}"
         );
     }
-    b.apply_combination([1.; WALL_SLOTS]).unwrap();
+    b.apply_combination([1.; 8]).unwrap();
     let ids = ["front", "back"].map(|n| b.walls[0][n].element);
     let d = solve(b);
     for id in ids {

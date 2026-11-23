@@ -9,11 +9,11 @@ use carapace_core::analysis::{
 use carapace_core::model::{
     AnchorageBearing, ChordDistribution, Domain, Element, ElementLoad, FloorBounds,
     FloorContinuity, FloorLoad, FloorSupport, LoadSeries, Material, Node, StudWall, StudWallLayout,
-    WallLoad, WallShearLaw, WallSheathing, WallStud, ZeroLength, WALL_SLOTS,
+    WallCaseLoad, WallLoad, WallShearLaw, WallSheathing, WallStud, ZeroLength,
 };
 use carapace_input::building::{
     AnchorageBearingSpec, AnchorageSpec, BuildingSpec, DiaphragmKind, FloorContinuitySpec,
-    FloorLoadSpec, FloorSpec, LateralLoad, SlotWallLoad, SpanAxis, StoreySpec, WallSpec,
+    FloorLoadSpec, FloorSpec, LateralLoad, SpanAxis, StoreySpec, WallSpec,
 };
 use carapace_input::building::{
     ChordDistributionSpec, FloorZoneSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec,
@@ -62,14 +62,6 @@ fn input_wall() -> carapace_input::input_v1::CarapaceInputV1 {
         corners: [0, 1, 2, 3],
         stations: vec![],
         layout: layout(),
-        loads: vec![SlotWallLoad {
-            slot: 0,
-            load: WallLoadSpec::TopPoint {
-                x: 500.,
-                fx: 100.,
-                fy: 0.,
-            },
-        }],
     }];
     i.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1. }],
@@ -79,8 +71,12 @@ fn input_wall() -> carapace_input::input_v1::CarapaceInputV1 {
         pattern: vec![0],
         element_kind: vec![ElementKind::StudWall],
         element_index: vec![0],
-        load: vec![ElementLoadSpec::WallSlots {
-            factors: [1., 0., 0., 0., 0., 0., 0., 0.],
+        load: vec![ElementLoadSpec::WallLoad {
+            load: WallLoadSpec::TopPoint {
+                x: 500.,
+                fx: 100.,
+                fy: 0.,
+            },
         }],
         stage: vec![0],
     };
@@ -122,7 +118,7 @@ fn core_wall_values() -> (f64, f64) {
         foundation: false,
         floor: None,
     };
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[0].push(WallLoad::TopPoint {
         x: 500.,
         fx: 100.,
@@ -136,7 +132,10 @@ fn core_wall_values() -> (f64, f64) {
         p,
         id,
         ElementLoad {
-            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.0,
+            }),
             ..Default::default()
         },
     );
@@ -252,7 +251,7 @@ fn stud_wall_floor_zone_wire_matches_direct_core() {
         ga: 5e5,
         rim_ea: 1e8,
     });
-    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     loads[0].push(WallLoad::TopPoint {
         x: 500.,
         fx: 100.,
@@ -266,7 +265,10 @@ fn stud_wall_floor_zone_wire_matches_direct_core() {
         p,
         id,
         ElementLoad {
-            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.0,
+            }),
             ..Default::default()
         },
     );
@@ -305,17 +307,16 @@ fn macro_table_errors_are_reported() {
         Err(carapace_input::input_v1::DecodeError::UnknownNodeIndex { .. })
     ));
     let mut bad = input_wall();
-    bad.stud_walls[0].loads[0].slot = 8;
+    bad.element_loads.pattern[0] = 3;
     assert!(matches!(
         decode(bad),
-        Err(carapace_input::input_v1::DecodeError::InvalidWallSlot { .. })
+        Err(carapace_input::input_v1::DecodeError::UnknownPatternIndex { .. })
     ));
     let mut bad = input_wall();
     bad.stud_walls = vec![StudWallSpec {
         corners: [0; 4],
         stations: vec![],
         layout: layout(),
-        loads: vec![],
     }];
     assert!(matches!(
         decode(bad),
@@ -384,7 +385,6 @@ fn floor_loads_window_wall_matches_direct_core() {
             corners: [wall * 4, wall * 4 + 1, wall * 4 + 2, wall * 4 + 3],
             stations: vec![],
             layout: window_layout(wall == 0),
-            loads: vec![],
         })
         .to_vec();
     input.floor_loads = vec![FloorTransferSpec {
@@ -402,39 +402,28 @@ fn floor_loads_window_wall_matches_direct_core() {
                 reversed: false,
             })
             .collect(),
-        loads: vec![
-            FloorLoadSpec::Area {
-                slot: 0,
-                w: 2.,
-                region: None,
-            },
-            FloorLoadSpec::Area {
-                slot: 1,
-                w: 1.,
-                region: None,
-            },
-        ],
+        pattern: 0,
+        loads: vec![FloorTransferLoadSpec::Area {
+            w: 2.,
+            region: None,
+        }],
     }];
+    // Live load is a second floor row on pattern 1 (the rows share their supports).
+    let live = FloorTransferSpec {
+        pattern: 1,
+        loads: vec![FloorTransferLoadSpec::Area {
+            w: 1.,
+            region: None,
+        }],
+        ..input.floor_loads[0].clone()
+    };
+    input.floor_loads.push(live);
     input.load_patterns = LoadPatternTable {
         series: vec![
             TimeSeriesSpec::Linear { slope: 1. },
             TimeSeriesSpec::Linear { slope: 1. },
         ],
-        scale_factor: vec![1., 1.],
-    };
-    input.element_loads = ElementLoadTable {
-        pattern: vec![0, 1],
-        element_kind: vec![ElementKind::StudWall; 2],
-        element_index: vec![0, 0],
-        load: vec![
-            ElementLoadSpec::WallSlots {
-                factors: [1.25, 0., 0., 0., 0., 0., 0., 0.],
-            },
-            ElementLoadSpec::WallSlots {
-                factors: [0., 1.5, 0., 0., 0., 0., 0., 0.],
-            },
-        ],
-        stage: vec![0, 0],
+        scale_factor: vec![1.25, 1.5],
     };
     input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
@@ -584,12 +573,10 @@ fn floor_loads_window_wall_matches_direct_core() {
     )
     .unwrap();
     let mut d = Domain::new();
-    let mut loads_by_support: Vec<[Vec<WallLoad>; WALL_SLOTS]> =
-        (0..2).map(|_| std::array::from_fn(|_| vec![])).collect();
+    let mut loads_by_support: Vec<Vec<Vec<WallLoad>>> = vec![vec![vec![]; 2]; 2];
     for (support_index, support) in reactions.per_support.iter().enumerate() {
-        let mapped = support.wall_loads(0., false);
-        for slot in 0..WALL_SLOTS {
-            loads_by_support[support_index][slot].extend(mapped[slot].iter().cloned());
+        for (slot, loads) in support.wall_loads(0., false) {
+            loads_by_support[support_index][slot].extend(loads);
         }
     }
     let id = make_direct_wall(&mut d, 0., &window_layout(true), loads_by_support.remove(0));
@@ -599,15 +586,13 @@ fn floor_loads_window_wall_matches_direct_core() {
         &window_layout(false),
         loads_by_support.remove(0),
     );
-    for (slot, factor) in [(0, 1.25), (1, 1.5)] {
-        let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
-        let mut factors = [0.; WALL_SLOTS];
-        factors[slot] = factor;
+    for (case, factor) in [(0, 1.25), (1, 1.5)] {
+        let p = d.add_load_pattern_scaled(LoadSeries::Linear { slope: 1. }, factor);
         d.add_element_load(
             p,
             id,
             ElementLoad {
-                wall: factors,
+                wall: Some(WallCaseLoad { case, factor: 1. }),
                 ..Default::default()
             },
         );
@@ -709,9 +694,18 @@ fn anchorage_wire_drift_matches_direct_core() {
             foundation: false,
             floor: None,
         },
-        loads: vec![
-            SlotWallLoad {
-                slot: 0,
+    }];
+    // Dead load and lateral shear are two patterns, ramped together.
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1. }; 2],
+        scale_factor: vec![1.; 2],
+    };
+    input.element_loads = ElementLoadTable {
+        pattern: vec![0, 1],
+        element_kind: vec![ElementKind::StudWall; 2],
+        element_index: vec![0; 2],
+        load: vec![
+            ElementLoadSpec::WallLoad {
                 load: WallLoadSpec::TopLine {
                     x0: 0.,
                     x1: LENGTH,
@@ -721,8 +715,7 @@ fn anchorage_wire_drift_matches_direct_core() {
                     wy1: -DEAD,
                 },
             },
-            SlotWallLoad {
-                slot: 1,
+            ElementLoadSpec::WallLoad {
                 load: WallLoadSpec::TopLine {
                     x0: 0.,
                     x1: LENGTH,
@@ -733,19 +726,7 @@ fn anchorage_wire_drift_matches_direct_core() {
                 },
             },
         ],
-    }];
-    input.load_patterns = LoadPatternTable {
-        series: vec![TimeSeriesSpec::Linear { slope: 1. }],
-        scale_factor: vec![1.],
-    };
-    input.element_loads = ElementLoadTable {
-        pattern: vec![0],
-        element_kind: vec![ElementKind::StudWall],
-        element_index: vec![0],
-        load: vec![ElementLoadSpec::WallSlots {
-            factors: [1., 1., 0., 0., 0., 0., 0., 0.],
-        }],
-        stage: vec![0],
+        stage: vec![0; 2],
     };
     input.sequence = SequenceSpec {
         stages: vec![StageSpec::Static {
@@ -782,7 +763,7 @@ fn anchorage_wire_drift_matches_direct_core() {
     });
     let c2 = d.add_node(Node::new([LENGTH, HEIGHT]));
     let c3 = d.add_node(Node::new([0., HEIGHT]));
-    let mut slots: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    let mut slots: Vec<Vec<WallLoad>> = vec![vec![]; 8];
     slots[0].push(WallLoad::TopLine {
         x0: 0.,
         x1: LENGTH,
@@ -824,15 +805,17 @@ fn anchorage_wire_drift_matches_direct_core() {
     let wall = d.add_element(Element::StudWall(
         StudWall::new([base[0], base[1], c2, c3], vec![], layout, slots).unwrap(),
     ));
-    let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
-    d.add_element_load(
-        p,
-        wall,
-        ElementLoad {
-            wall: [1., 1., 0., 0., 0., 0., 0., 0.],
-            ..Default::default()
-        },
-    );
+    for case in 0..2 {
+        let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
+        d.add_element_load(
+            p,
+            wall,
+            ElementLoad {
+                wall: Some(WallCaseLoad { case, factor: 1. }),
+                ..Default::default()
+            },
+        );
+    }
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Transformation)
         .integrator(Integrator::LoadControl { increment: 0.1 })
@@ -1082,7 +1065,6 @@ fn shared_stud_wall_table_decodes_in_3d_and_rejects_nonorthogonal_geometry() {
         corners: [0, 1, 2, 3],
         stations: vec![],
         layout: layout(),
-        loads: vec![],
     }];
     let json = serde_json::to_value(&i).unwrap();
     let back: carapace_input::input_v1::CarapaceInputV1 =
@@ -1100,7 +1082,7 @@ fn shared_stud_wall_table_decodes_in_3d_and_rejects_nonorthogonal_geometry() {
 }
 
 #[test]
-fn wall_slot_load_is_rejected_on_a_non_wall_and_wall_constructor_errors_surface() {
+fn wall_load_is_rejected_on_a_non_wall_and_wall_constructor_errors_surface() {
     let mut i = empty_input(2);
     i.nodes = NodeTable {
         coords: vec![0., 0., 1., 0.],
@@ -1124,7 +1106,13 @@ fn wall_slot_load_is_rejected_on_a_non_wall_and_wall_constructor_errors_surface(
         pattern: vec![0],
         element_kind: vec![ElementKind::Truss],
         element_index: vec![0],
-        load: vec![ElementLoadSpec::WallSlots { factors: [1.; 8] }],
+        load: vec![ElementLoadSpec::WallLoad {
+            load: WallLoadSpec::TopPoint {
+                x: 0.,
+                fx: 1.,
+                fy: 0.,
+            },
+        }],
         stage: vec![0],
     };
     assert!(matches!(
@@ -1174,6 +1162,7 @@ fn floor_transfer_errors_are_not_dropped() {
         bounds: [1., 0., 0., 1000.],
         continuity: FloorContinuitySpec::Simple,
         supports: vec![],
+        pattern: 0,
         loads: vec![],
     }];
     assert!(matches!(
@@ -1182,12 +1171,12 @@ fn floor_transfer_errors_are_not_dropped() {
     ));
 }
 
-/// A one-way floor's two simple-span reactions become ordinary wall slot loads and the decoded wall solves.
+/// A one-way floor's two simple-span reactions become `wallLoad`s of the row's pattern and the decoded wall solves.
 /// Reference: statics gives 500 N per support for 1 kN total load; tolerance 1e-12 on total reaction.
 #[test]
-fn floor_transfer_loads_are_appended_to_wall_slots() {
+fn floor_transfer_loads_become_wall_loads_of_the_pattern() {
     let mut i = input_wall();
-    i.stud_walls[0].loads.clear();
+    i.element_loads = ElementLoadTable::default();
     i.floor_loads = vec![FloorTransferSpec {
         bounds: [0., 1000., 0., 1000.],
         continuity: FloorContinuitySpec::Simple,
@@ -1202,8 +1191,8 @@ fn floor_transfer_loads_are_appended_to_wall_slots() {
                 reversed: false,
             })
             .collect(),
-        loads: vec![FloorLoadSpec::Area {
-            slot: 0,
+        pattern: 0,
+        loads: vec![FloorTransferLoadSpec::Area {
             w: 0.001,
             region: None,
         }],
@@ -1342,4 +1331,221 @@ fn building_is_exclusive_with_explicit_tables_and_combination_defaults_to_one() 
         decode(input),
         Err(carapace_input::input_v1::DecodeError::TableNotInProfile { table: "building" })
     ));
+}
+
+fn wall_load_row(
+    input: &mut carapace_input::input_v1::CarapaceInputV1,
+    pattern: u32,
+    fx: f64,
+    x: f64,
+) {
+    let table = &mut input.element_loads;
+    table.pattern.push(pattern);
+    table.element_kind.push(ElementKind::StudWall);
+    table.element_index.push(0);
+    table.load.push(ElementLoadSpec::WallLoad {
+        load: WallLoadSpec::TopPoint { x, fx, fy: -fx },
+    });
+    table.stage.push(0);
+}
+
+/// Top-corner ux of the decoded model after the (linear, single-step) run.
+fn top_ux(input: carapace_input::input_v1::CarapaceInputV1) -> f64 {
+    let mut session = decode(input).unwrap();
+    let outcome = session.advance(10);
+    assert!(outcome.done && outcome.error.is_none(), "{outcome:?}");
+    outcome.recorder_batches[0].samples[0].1
+}
+
+/// `wallLoad` rows of one pattern on one wall form one load case (the decoder emits one element load per pattern
+/// and wall; two different cases from one pattern would fail `Domain::validate`): the rows give the same response
+/// in either order, and the same rows split over two patterns give the same response (superposition, 1e-12).
+#[test]
+fn wall_loads_of_one_pattern_merge_into_one_case() {
+    let combined = {
+        let mut i = input_wall();
+        i.element_loads = ElementLoadTable::default();
+        wall_load_row(&mut i, 0, 100., 500.);
+        wall_load_row(&mut i, 0, 40., 200.);
+        i
+    };
+    // The same two loads as two `wallLoad` rows of one pattern, in the opposite order.
+    let mut reordered = combined.clone();
+    for column in [
+        &mut reordered.element_loads.pattern,
+        &mut reordered.element_loads.element_index,
+        &mut reordered.element_loads.stage,
+    ] {
+        column.reverse();
+    }
+    reordered.element_loads.load.reverse();
+    let (a, b) = (top_ux(combined.clone()), top_ux(reordered));
+    assert!(a.abs() > 1e-9);
+    near_relative(b, a, 1e-12, "reordered rows");
+    // Two patterns (both factor 1) carry the loads as two cases.
+    let mut two = combined.clone();
+    two.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1. }; 2],
+        scale_factor: vec![1.; 2],
+    };
+    two.element_loads.pattern[1] = 1;
+    near_relative(top_ux(two), a, 1e-12, "two patterns");
+}
+
+/// Twelve patterns load one wall through the wire (no cap on patterns per wall); each has its own scale factor and
+/// the response equals one pattern carrying the factored loads (1e-12).
+#[test]
+fn twelve_wall_load_patterns_equal_one_combined_pattern() {
+    let factors: Vec<f64> = (0..12).map(|k| 0.5 + 0.2 * k as f64).collect();
+    let mut many = input_wall();
+    many.element_loads = ElementLoadTable::default();
+    many.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1. }; 12],
+        scale_factor: factors.clone(),
+    };
+    let mut one = input_wall();
+    one.element_loads = ElementLoadTable::default();
+    for (k, f) in factors.iter().enumerate() {
+        wall_load_row(&mut many, k as u32, 10. + k as f64, 100. + 60. * k as f64);
+        wall_load_row(&mut one, 0, f * (10. + k as f64), 100. + 60. * k as f64);
+    }
+    near_relative(top_ux(many), top_ux(one), 1e-12, "12 patterns");
+}
+
+/// A `floorLoads` row loads the pattern it names: its reactions become `wallLoad`s of that pattern. Splitting one
+/// floor load into two rows of the same pattern, or putting the floor and a `wallLoad` in different patterns,
+/// gives the same response as the merged form (linear superposition, 1e-12).
+#[test]
+fn floor_load_rows_load_their_pattern() {
+    let floor = |pattern: u32, w: f64| FloorTransferSpec {
+        bounds: [0., 1000., 0., 1000.],
+        continuity: FloorContinuitySpec::Simple,
+        supports: [0., 1000.]
+            .into_iter()
+            .map(|s| FloorTransferSupportSpec {
+                s,
+                t0: 0.,
+                t1: 1000.,
+                wall: WallTargetSpec::StudWall { index: 0 },
+                x_at_t0: 0.,
+                reversed: false,
+            })
+            .collect(),
+        pattern,
+        loads: vec![FloorTransferLoadSpec::Area { w, region: None }],
+    };
+    let base = || {
+        let mut i = input_wall();
+        i.load_patterns = LoadPatternTable {
+            series: vec![TimeSeriesSpec::Linear { slope: 1. }; 2],
+            scale_factor: vec![1.; 2],
+        };
+        i
+    };
+    // Reference: one floor row, pattern 0, plus the wallLoad of `input_wall` in pattern 0.
+    let mut reference = base();
+    reference.floor_loads = vec![floor(0, 0.002)];
+    let expected = top_ux(reference);
+    let mut split = base();
+    split.floor_loads = vec![floor(0, 0.001), floor(0, 0.001)];
+    near_relative(top_ux(split), expected, 1e-12, "split floor rows");
+    let mut apart = base();
+    apart.floor_loads = vec![floor(1, 0.002)];
+    near_relative(top_ux(apart), expected, 1e-12, "floor in another pattern");
+}
+
+/// Misuse is an error, never dropped: a floor row naming a missing pattern, a `wallLoad` on a wall row past the
+/// table, and `wallLoad` rows of one pattern and wall in different stages.
+#[test]
+fn wall_load_and_floor_load_misuse_is_an_error() {
+    use carapace_input::input_v1::DecodeError;
+    let mut bad = input_wall();
+    bad.floor_loads = vec![FloorTransferSpec {
+        bounds: [0., 1000., 0., 1000.],
+        continuity: FloorContinuitySpec::Simple,
+        supports: vec![],
+        pattern: 1,
+        loads: vec![],
+    }];
+    assert!(matches!(
+        decode(bad),
+        Err(DecodeError::UnknownPatternIndex {
+            table: "floor_loads",
+            row: 1
+        })
+    ));
+    let mut bad = input_wall();
+    bad.element_loads.element_index[0] = 4;
+    assert!(matches!(
+        decode(bad),
+        Err(DecodeError::UnknownElementIndex { .. })
+    ));
+    let mut bad = input_wall();
+    wall_load_row(&mut bad, 0, 1., 100.);
+    bad.element_loads.stage[1] = 1;
+    assert!(matches!(
+        decode(bad),
+        Err(DecodeError::InvalidRow {
+            table: "element_loads",
+            ..
+        })
+    ));
+}
+
+/// The `wallLoad` element load and the `pattern` of a `floorLoads` row serialize to the documented JSON and read
+/// back unchanged.
+#[test]
+fn wall_load_and_floor_pattern_round_trip() {
+    let load = ElementLoadSpec::WallLoad {
+        load: WallLoadSpec::TopLine {
+            x0: 0.,
+            x1: 100.,
+            wx0: 1.,
+            wx1: 2.,
+            wy0: -3.,
+            wy1: -4.,
+        },
+    };
+    let value = serde_json::to_value(load).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({"kind": "wallLoad", "load": {"kind": "topLine", "x0": 0.0, "x1": 100.0,
+            "wx0": 1.0, "wx1": 2.0, "wy0": -3.0, "wy1": -4.0}})
+    );
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<ElementLoadSpec>(value.clone()).unwrap())
+            .unwrap(),
+        value
+    );
+    let floor = FloorTransferSpec {
+        bounds: [0., 1., 0., 1.],
+        continuity: FloorContinuitySpec::Continuous,
+        supports: vec![],
+        pattern: 3,
+        loads: vec![
+            FloorTransferLoadSpec::Area {
+                w: 1.,
+                region: Some([0., 1., 0., 1.]),
+            },
+            FloorTransferLoadSpec::Point {
+                p: 2.,
+                s: 0.5,
+                t: 0.5,
+            },
+        ],
+    };
+    let value = serde_json::to_value(&floor).unwrap();
+    assert_eq!(value["pattern"], 3);
+    assert_eq!(value["loads"][0]["kind"], "area");
+    assert!(value["loads"][0].get("slot").is_none());
+    let back: FloorTransferSpec = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(back).unwrap(), value);
+    // The retired wire forms are rejected rather than ignored (a `loads` field on a `studWalls` row too).
+    let mut row = serde_json::to_value(&input_wall().stud_walls[0]).unwrap();
+    row["loads"] = serde_json::json!([]);
+    assert!(serde_json::from_value::<StudWallSpec>(row).is_err());
+    assert!(serde_json::from_value::<ElementLoadSpec>(
+        serde_json::json!({"kind": "wallSlots", "factors": [1, 0, 0, 0, 0, 0, 0, 0]})
+    )
+    .is_err());
 }

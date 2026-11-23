@@ -16,10 +16,8 @@ use nalgebra::{DMatrix, DVector};
 use super::floor_zone::{bay_response, bay_stiffness};
 use super::wall_plane::PlaneMap;
 use super::{DofMask, NodeView, TangentSink, VectorSink};
-use crate::model::{ElementForce, ElementLoad, Material, Node3Id, NodeId, NodeKey};
+use crate::model::{ElementForce, ElementLoad, Material, Node3Id, NodeId, NodeKey, WallCaseLoad};
 
-/// Number of load slots per wall; see [`WallLoad`] and `ElementLoad::wall`.
-pub const WALL_SLOTS: usize = crate::model::WALL_SLOTS;
 /// Prepared assembly supports up to 256 exterior nodes (512 translational DOFs).
 const MAX_EXTERIOR_NODES: usize = 256;
 const MAX_EXTERIOR_DOFS: usize = MAX_EXTERIOR_NODES * 3;
@@ -205,9 +203,9 @@ impl StudWallLayout {
     }
 }
 
-/// A load on the top plate, in local axes (`fx` along the wall, `fy` along the studs, negative down). Loads are
-/// grouped into `WALL_SLOTS` slots at construction; a load pattern scales slot `k` through
-/// `ElementLoad::wall[k]`.
+/// A load on the top plate, in local axes (`fx` along the wall, `fy` along the studs, negative down). A wall owns a
+/// list of load cases (lists of these, given at construction); a load pattern selects case `k` and scales it through
+/// `ElementLoad::wall`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WallLoad {
     /// Point load at `x`.
@@ -438,16 +436,16 @@ pub struct StudWall<K: NodeKey = NodeId> {
 
 impl StudWall<NodeId> {
     /// Builds and condenses the wall. `corners` are `[c0, c1, c2, c3]`, counter-clockwise from bottom-left;
-    /// `loads[k]` are the top-plate loads of slot `k`. Fails with [`StudWallError`] for an invalid layout,
+    /// `cases[k]` are the top-plate loads of load case `k` (any number of cases). Fails with [`StudWallError`] for an invalid layout,
     /// station or load, a reused node, or a singular internal stiffness. Corner geometry is checked later,
     /// by `validate`, when the analysis is built.
     pub fn new(
         corners: [NodeId; 4],
         stations: Vec<WallStation>,
         layout: StudWallLayout,
-        loads: [Vec<WallLoad>; WALL_SLOTS],
+        cases: Vec<Vec<WallLoad>>,
     ) -> Result<Self, StudWallError> {
-        Self::build(corners, stations, layout, loads)
+        Self::build(corners, stations, layout, cases)
     }
 }
 
@@ -456,7 +454,7 @@ impl<K: NodeKey> StudWall<K> {
         corners: [K; 4],
         stations: Vec<WallStation<K>>,
         layout: StudWallLayout,
-        loads: [Vec<WallLoad>; WALL_SLOTS],
+        cases: Vec<Vec<WallLoad>>,
     ) -> Result<Self, StudWallError> {
         validate_layout(&layout, &stations)?;
         let is_nonlinear = layout
@@ -800,10 +798,10 @@ impl<K: NodeKey> StudWall<K> {
         } else {
             Vec::new()
         };
-        let mut load_slots = Vec::with_capacity(WALL_SLOTS);
-        let mut load_recovery = Vec::with_capacity(WALL_SLOTS);
-        let mut full_load_slots = Vec::with_capacity(WALL_SLOTS);
-        for (slot, slot_loads) in loads.iter().enumerate() {
+        let mut load_slots = Vec::with_capacity(cases.len());
+        let mut load_recovery = Vec::with_capacity(cases.len());
+        let mut full_load_slots = Vec::with_capacity(cases.len());
+        for (slot, slot_loads) in cases.iter().enumerate() {
             let mut p = DVector::zeros(model.ndof);
             for l in slot_loads {
                 discretize_load(
@@ -828,13 +826,13 @@ impl<K: NodeKey> StudWall<K> {
             load_slots.push(f);
             load_recovery.push(w);
         }
-        let beam_load_slots = (0..WALL_SLOTS)
+        let beam_load_slots = (0..cases.len())
             .map(|slot| {
                 beams
                     .iter()
                     .map(|b| {
                         if b.chord == WallChord::Top {
-                            segment_load(&loads[slot], b.x0, b.x1, layout.length, true)
+                            segment_load(&cases[slot], b.x0, b.x1, layout.length, true)
                         } else {
                             [0.; 6]
                         }
@@ -842,14 +840,14 @@ impl<K: NodeKey> StudWall<K> {
                     .collect()
             })
             .collect();
-        let axial_load_slots = (0..WALL_SLOTS)
+        let axial_load_slots = (0..cases.len())
             .map(|slot| {
                 axial_chords
                     .iter()
                     .map(|b| {
                         let v = if b.chord == WallChord::Top {
                             segment_load(
-                                &loads[slot],
+                                &cases[slot],
                                 b.x0,
                                 b.x1,
                                 layout.length,
@@ -925,7 +923,15 @@ impl<K: NodeKey> StudWall<K> {
         }
     }
     pub fn accepts_load(&self, load: &ElementLoad) -> bool {
-        !load.has_beam() && !load.has_body() && !load.has_edge()
+        !load.has_beam() && !load.has_body() && !load.has_edge() && self.has_case(load.wall)
+    }
+    /// Number of load cases this wall owns.
+    pub fn case_count(&self) -> usize {
+        self.load_slots.len()
+    }
+    /// Whether `load` selects no case or one of this wall's cases (a [`WallCaseLoad::MIXED`] never does).
+    pub fn has_case(&self, load: Option<WallCaseLoad>) -> bool {
+        load.is_none_or(|w| (w.case as usize) < self.load_slots.len())
     }
     pub fn validate<const NDIM: usize, const NDOF: usize>(
         &self,
@@ -965,7 +971,7 @@ impl<K: NodeKey> StudWall<K> {
     pub fn assemble_tangent<const NDIM: usize, const NDOF: usize, S: TangentSink<K>>(
         &self,
         nodes: &NodeView<'_, NDIM, NDOF, K>,
-        _load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
         sink: &mut S,
     ) {
         let map = self.frame(nodes);
@@ -995,7 +1001,7 @@ impl<K: NodeKey> StudWall<K> {
             let d = nodes.get(id).displacement;
             gd.extend(map.slots.iter().map(|&slot| d[slot as usize]));
         }
-        let trial = self.nonlinear_trial(u.as_slice(), _load);
+        let trial = self.nonlinear_trial(u.as_slice(), cases);
         let mut q = ArrayVec::<f64, MAX_WALL_PIERS>::new();
         let mut m = ArrayVec::<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>::new();
         if let Some((_, tq, tm)) = trial {
@@ -1041,10 +1047,12 @@ impl<K: NodeKey> StudWall<K> {
     pub fn assemble_load<const NDIM: usize, const NDOF: usize, S: VectorSink<K>>(
         &self,
         nodes: &NodeView<'_, NDIM, NDOF, K>,
-        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
         sink: &mut S,
     ) {
-        let Some(load) = load else { return };
+        if cases.is_empty() {
+            return;
+        }
         let map = self.frame(nodes);
         let mut exterior_dofs = ArrayVec::<(K, u8), MAX_EXTERIOR_DOFS>::new();
         exterior_dofs.extend(
@@ -1059,9 +1067,9 @@ impl<K: NodeKey> StudWall<K> {
             .unwrap_or_else(|| &owned.as_ref().unwrap().0);
         let mut f = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
         f.extend((0..self.nodes.len() * map.slots.len()).map(|_| 0.));
-        for k in 0..WALL_SLOTS {
+        for c in cases {
             for (i, v) in f.iter_mut().enumerate() {
-                *v += load.wall[k] * prepared.loads[k][i];
+                *v += c.factor * prepared.loads[c.case as usize][i];
             }
         }
         sink.add_dyn(&exterior_dofs, &f);
@@ -1078,13 +1086,13 @@ impl<K: NodeKey> StudWall<K> {
     pub fn commit<const NDIM: usize, const NDOF: usize>(
         &mut self,
         nodes: &NodeView<'_, NDIM, NDOF, K>,
-        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
     ) {
         if self.nonlinear.is_none() {
             return;
         }
         let ue = self.local_displacement(nodes);
-        if let Some((gamma, q, _)) = self.nonlinear_trial(ue.as_slice(), load) {
+        if let Some((gamma, q, _)) = self.nonlinear_trial(ue.as_slice(), cases) {
             self.committed_gamma.clear();
             self.committed_gamma.extend(gamma.iter().copied());
             self.committed_q.clear();
@@ -1127,38 +1135,34 @@ impl<K: NodeKey> StudWall<K> {
     pub fn local_load_force<const NDIM: usize, const NDOF: usize>(
         &self,
         _nodes: &NodeView<'_, NDIM, NDOF, K>,
-        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
     ) -> ElementForce {
         let n = self.nodes.len() * 2;
         let mut f = vec![0.; n];
-        if let Some(l) = load {
-            for k in 0..WALL_SLOTS {
-                for (i, value) in f.iter_mut().enumerate() {
-                    *value += l.wall[k] * self.load_slots[k][i];
-                }
+        for c in cases {
+            for (i, value) in f.iter_mut().enumerate() {
+                *value += c.factor * self.load_slots[c.case as usize][i];
             }
         }
         ElementForce::from_vec(f)
     }
-    /// Recovered internal response at the nodes' current state, with `load` the effective slot factors (use
+    /// Recovered internal response at the nodes' current state, with `cases` the effective load cases (use
     /// `Domain::element_stud_wall_response`, which supplies them). Nonlinear laws are evaluated from their
     /// committed state, so after a committed step this is the committed response.
     pub fn response<const NDIM: usize, const NDOF: usize>(
         &self,
         nodes: &NodeView<'_, NDIM, NDOF, K>,
-        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
     ) -> StudWallResponse {
         let ue = self.local_displacement(nodes);
         let mut ui = -(&self.recovery * &ue);
-        if let Some(l) = load {
-            for k in 0..WALL_SLOTS {
-                ui += &self.load_recovery[k] * l.wall[k];
-            }
+        for c in cases {
+            ui += &self.load_recovery[c.case as usize] * c.factor;
         }
         let nonlinear_state = self
             .nonlinear
             .as_ref()
-            .and_then(|_| self.nonlinear_trial(ue.as_slice(), load));
+            .and_then(|_| self.nonlinear_trial(ue.as_slice(), cases));
         let nonlinear_q = nonlinear_state.as_ref().map(|(_, q, _)| q.clone());
         if let (Some(cache), Some((_, q, _))) = (&self.nonlinear, &nonlinear_state) {
             for i in 0..ui.len() {
@@ -1194,7 +1198,6 @@ impl<K: NodeKey> StudWall<K> {
             }
         };
         let mut r = StudWallResponse::default();
-        let factors = load.map(|l| l.wall).unwrap_or([0.; WALL_SLOTS]);
         for b in &self.bars {
             let n = b.k * (disp(b.b) - disp(b.a));
             if b.stud {
@@ -1227,15 +1230,9 @@ impl<K: NodeKey> StudWall<K> {
                 });
             }
         }
-        r.top_chord = self.chord_response(&self.top_nodes, &ue, &ui, WallChord::Top, &q, &factors);
-        r.bottom_chord = self.chord_response(
-            &self.bottom_nodes,
-            &ue,
-            &ui,
-            WallChord::Bottom,
-            &q,
-            &factors,
-        );
+        r.top_chord = self.chord_response(&self.top_nodes, &ue, &ui, WallChord::Top, &q, cases);
+        r.bottom_chord =
+            self.chord_response(&self.bottom_nodes, &ue, &ui, WallChord::Bottom, &q, cases);
         for (i, p) in self.piers.iter().enumerate() {
             let gamma = p.beta.dot(&DVector::from_column_slice(&ufull));
             let mid = (p.xa + p.xb) * 0.5;
@@ -1265,8 +1262,8 @@ impl<K: NodeKey> StudWall<K> {
                 }
             }
         }
-        for (k, slot) in self.load_slots.iter().enumerate() {
-            resisting -= slot * factors[k];
+        for c in cases {
+            resisting -= &self.load_slots[c.case as usize] * c.factor;
         }
         for (i, id) in self.nodes.iter().enumerate() {
             if i < 2
@@ -1315,8 +1312,8 @@ impl<K: NodeKey> StudWall<K> {
                     residual += &pier.beta * (pier.area * q[i]);
                 }
             }
-            for (k, p) in self.full_load_slots.iter().enumerate() {
-                residual -= p * factors[k];
+            for c in cases {
+                residual -= &self.full_load_slots[c.case as usize] * c.factor;
             }
             for &(x, u, v) in &self.foundation_supports {
                 let fx = residual[u];
@@ -1337,7 +1334,7 @@ impl<K: NodeKey> StudWall<K> {
         ui: &DVector<f64>,
         chord: WallChord,
         q: &[f64],
-        factors: &[f64; WALL_SLOTS],
+        cases: &[WallCaseLoad],
     ) -> Vec<WallChordResponse> {
         let get = |d: usize| {
             if d < ue.len() {
@@ -1355,11 +1352,13 @@ impl<K: NodeKey> StudWall<K> {
         {
             let l = b.x1 - b.x0;
             let n = b.ea * (get(b.b) - get(b.a)) / l;
-            let p0 = (0..WALL_SLOTS)
-                .map(|k| factors[k] * self.axial_load_slots[k][ai][0])
+            let p0 = cases
+                .iter()
+                .map(|c| c.factor * self.axial_load_slots[c.case as usize][ai][0])
                 .sum::<f64>();
-            let p1 = (0..WALL_SLOTS)
-                .map(|k| factors[k] * self.axial_load_slots[k][ai][1])
+            let p1 = cases
+                .iter()
+                .map(|c| c.factor * self.axial_load_slots[c.case as usize][ai][1])
                 .sum::<f64>();
             let qseg = self
                 .piers
@@ -1378,8 +1377,9 @@ impl<K: NodeKey> StudWall<K> {
                 let k = beam4(m.ei, l);
                 let f: [f64; 4] = std::array::from_fn(|a| (0..4).map(|j| k[a][j] * d[j]).sum());
                 let p: [f64; 6] = std::array::from_fn(|j| {
-                    (0..WALL_SLOTS)
-                        .map(|s| factors[s] * self.beam_load_slots[s][bi][j])
+                    cases
+                        .iter()
+                        .map(|c| c.factor * self.beam_load_slots[c.case as usize][bi][j])
                         .sum()
                 });
                 (f[1] - p[2], f[0] - p[1], f[3] - p[5], -(f[2] - p[4]))
@@ -1460,7 +1460,7 @@ impl<K: NodeKey> StudWall<K> {
     fn nonlinear_trial(
         &self,
         ue: &[f64],
-        load: Option<&ElementLoad>,
+        cases: &[WallCaseLoad],
     ) -> Option<(
         ArrayVec<f64, MAX_WALL_PIERS>,
         ArrayVec<f64, MAX_WALL_PIERS>,
@@ -1472,13 +1472,12 @@ impl<K: NodeKey> StudWall<K> {
         let mut gamma = ArrayVec::<f64, MAX_WALL_PIERS>::new();
         let mut q = ArrayVec::<f64, MAX_WALL_PIERS>::new();
         let mut d = ArrayVec::<f64, MAX_WALL_PIERS>::new();
-        let factors = load.map(|l| l.wall).unwrap_or([0.; WALL_SLOTS]);
         for i in 0..count {
             let mut yi = (0..ue.len())
                 .map(|j| cache.strain_map[(i, j)] * ue[j])
                 .sum::<f64>();
-            for (k, factor) in factors.iter().enumerate() {
-                yi += cache.load_strain[k][i] * factor;
+            for c in cases {
+                yi += cache.load_strain[c.case as usize][i] * c.factor;
             }
             y.push(yi);
             gamma.push(yi);
@@ -1554,9 +1553,9 @@ impl StudWall<Node3Id> {
         corners: [Node3Id; 4],
         stations: Vec<WallStation<Node3Id>>,
         layout: StudWallLayout,
-        loads: [Vec<WallLoad>; WALL_SLOTS],
+        cases: Vec<Vec<WallLoad>>,
     ) -> Result<Self, StudWallError> {
-        Self::build(corners, stations, layout, loads)
+        Self::build(corners, stations, layout, cases)
     }
 }
 
@@ -1743,7 +1742,7 @@ fn make_nonlinear_cache(
         strain_map,
         compliance,
         load_projection,
-        load_strain: Vec::with_capacity(WALL_SLOTS),
+        load_strain: Vec::new(),
         internal_recovery,
     })
 }
@@ -2268,7 +2267,7 @@ fn discretize_load(
     let mut point = |x: f64, fx: f64, fy: f64| -> Result<(), StudWallError> {
         if ![x, fx, fy].iter().all(|v| v.is_finite()) || x < 0. || x > l.length {
             return Err(StudWallError(format!(
-                "loads[{slot}] contains invalid coordinates or intensities"
+                "load case {slot} contains invalid coordinates or intensities"
             )));
         }
         let fx = if ext_top.is_empty() {
@@ -2289,7 +2288,7 @@ fn discretize_load(
             .iter()
             .find(|w| x > w[0].0 && x < w[1].0)
             .ok_or_else(|| {
-                StudWallError(format!("loads[{slot}] point is outside the top chord"))
+                StudWallError(format!("load case {slot} point is outside the top chord"))
             })?;
         let le = pair[1].0 - pair[0].0;
         let t = (x - pair[0].0) / le;
@@ -2332,7 +2331,7 @@ fn discretize_load(
                 || x1 <= x0
             {
                 return Err(StudWallError(format!(
-                    "loads[{slot}] has invalid line bounds or intensities"
+                    "load case {slot} has invalid line bounds or intensities"
                 )));
             }
             for w in segments {

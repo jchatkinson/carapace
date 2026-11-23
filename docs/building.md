@@ -35,8 +35,11 @@ selected through this builder; add a core `Diaphragm` explicitly.
 `FloorSpec` supports rectangular plan bounds `[x0, x1, z0, z1]`, X or Z span (load coordinates `s` run along the span and `t` across it, so for a Z span `s` is z and `t` is x), named bearing walls perpendicular to the span (joists bear
 on the top plate of this storey's walls: platform framing), area,
 line and point loads, and simple or continuous transfer. Reactions remain available as `Building::floor_reactions`
-and are also mapped into the supporting wall's load slots. One constant load pattern is made per wall slot.
-Call `Building::apply_combination([f64; WALL_SLOTS])` before constructing an analysis to scale D/L/W or other
+and are also mapped into the supporting wall's load cases. The builder makes one constant load pattern per slot
+that carries a load (wall, floor or lateral), and each wall has one load case per slot that loads it; a slot's
+pattern selects that case on every wall. The wire format keeps `slot` on the building's loads and
+`combination: [f64; 8]`. Call `Building::apply_combination([f64; 8])` before constructing an analysis: it sets
+pattern `k`'s scale factor to `combination[k]` (slots without a load are ignored), scaling D/L/W or other
 combinations independently.
 
 ## Assumptions and limits

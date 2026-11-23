@@ -24,7 +24,7 @@
 //! `#[serde(rename_all = "camelCase")]` throughout so the JS/TS shape
 //! matches the PySees naming (`nodeI`, not `node_i`).
 
-use crate::building::{SlotWallLoad, WallChordSpec, WallLayoutSpec, WallShearLawSpec};
+use crate::building::{WallChordSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec};
 use serde::{Deserialize, Serialize};
 
 /// Node table: `coords` stride `ndm` (x, y[, z]); `fixed` one bitmask byte per
@@ -644,14 +644,11 @@ pub struct Shell4Table {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StudWallSpec {
     pub corners: [u32; 4],
     pub stations: Vec<WallStationSpec>,
     pub layout: WallLayoutSpec,
-    #[serde(default)]
-    #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub loads: Vec<SlotWallLoad>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -694,7 +691,27 @@ pub struct FloorTransferSpec {
     pub bounds: [f64; 4],
     pub continuity: crate::building::FloorContinuitySpec,
     pub supports: Vec<FloorTransferSupportSpec>,
-    pub loads: Vec<crate::building::FloorLoadSpec>,
+    /// The load pattern the reactions load (an index into `loadPatterns`): each support wall gets them as
+    /// `wallLoad`s of this pattern.
+    pub pattern: u32,
+    pub loads: Vec<FloorTransferLoadSpec>,
+}
+
+/// A floor load in span-aligned coordinates, positive down (`building::FloorLoadSpec` without the building's
+/// load slot: the pattern of the `floorLoads` row says which pattern it belongs to).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
+pub enum FloorTransferLoadSpec {
+    Area { w: f64, region: Option<[f64; 4]> },
+    Line { w: f64, s: f64, t0: f64, t1: f64 },
+    LineAlong { w: f64, t: f64, s0: f64, s1: f64 },
+    Point { p: f64, s: f64, t: f64 },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -897,8 +914,10 @@ pub enum ElementLoadSpec {
     /// Body acceleration on a shell in global axes (a gravity vector `g` points down); the force
     /// per unit area is `rho h b`. Note OpenSees' `ShellMITC4` `-selfWeight` has the opposite sign.
     ShellBody { bx: f64, by: f64, bz: f64 },
-    /// Eight slot multipliers for a stud-wall macro element.
-    WallSlots { factors: [f64; 8] },
+    /// A top-plate load on a stud wall, in the wall's local axes (stud-wall rows only). All `wallLoad` rows of one
+    /// pattern on one wall form one load case of that wall, scaled by the pattern's factor; they must share a
+    /// `stage`.
+    WallLoad { load: WallLoadSpec },
 }
 
 /// Identity multi-point constraints (`core::Domain::equal_dof`'s doc

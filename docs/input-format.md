@@ -89,7 +89,7 @@ Only `header` is required.
 | `shell4s` | `Shell4Table` | 3D |
 | `studWalls` | `StudWallSpec[]` | both (profile from `header.ndm`) |
 | `diaphragms` | `DiaphragmTable` | 3D |
-| `floorLoads` | `FloorTransferSpec[]` | both (reactions become wall slot loads at decode) |
+| `floorLoads` | `FloorTransferSpec[]` | both (reactions become `wallLoad`s of the row's pattern at decode) |
 | `building` | `BuildingSpec` | 3D; exclusive with explicit model tables |
 | `zeroLengths` | `ZeroLengthTable` | both |
 | `zeroLengthSections` | `ZeroLengthSectionTable` | both |
@@ -156,18 +156,18 @@ to other arena entries; cycles are rejected (`cyclicMaterialReference`).
 
 ### Stud walls (with floor zones) and diaphragms
 
-`studWalls` is an array of rows: `{ corners: [u32, u32, u32, u32], stations: { chord: "top" | "bottom", x, node }[], layout: WallLayoutSpec, loads: { slot, load: WallLoadSpec }[] }`.
+`studWalls` is an array of rows: `{ corners: [u32, u32, u32, u32], stations: { chord: "top" | "bottom", x, node }[], layout: WallLayoutSpec }`. Wall loads are not on the row: they are `wallLoad` element loads in load patterns (below).
 The profile comes from `header.ndm`; there is no `plane` field. Local `x` follows `c0 → c1` and local `y`
 follows `c0 → c3`; the axes must be orthogonal within relative `1e-9`, and every corner and station must lie
 at its declared local coordinate. `layout.foundation` defaults to false. The sheathing law is `{ kind: "linear",
 ga }` or `{ kind: "o86", bv, nailSpacing, nailDiameter }`; every field of these tagged specs (shear laws,
-wall loads, floor loads, anchorage bearing) is camelCase. Slot indices are 0 through 7. Invalid node indices,
-degenerate/non-orthogonal geometry, bad slots, and constructor failures produce decode errors.
+wall loads, floor loads, anchorage bearing) is camelCase. Invalid node indices,
+degenerate/non-orthogonal geometry and constructor failures produce decode errors.
 
 `layout.floor` is optional: `{ depth, ga, rimEa }` puts a floor zone of depth `depth` on top of the wall (shear
 rigidity `ga > 0`, rim axial stiffness `rimEa >= 0`; see [stud-wall.md](stud-wall.md#2a-floor-zone)). The exterior top
 corners `c2`, `c3` and every top station then lie at local `y = H + depth`, each top station must coincide with a
-stud, jack or cripple position, and top slot loads act on that exterior row. There is no `floorBands` table, `floorBand`
+stud, jack or cripple position, and top loads act on that exterior row. There is no `floorBands` table, `floorBand`
 element kind or `floorBandBay` recorder: a floor band is the zone of the wall below it, joined to the wall above by
 vertical `zeroLengths` and `equalDofs`. A `building` spec takes the zone from its storey (`floorDepth`, `bandGa`,
 `rimEa`) and rejects a `layout.floor`.
@@ -176,11 +176,11 @@ Its normal is the global axis on which all nodes share a coordinate. The in-plan
 axes `((normal + 1) % 3, (normal + 2) % 3)`; for a Y-normal grid this means `(u, v) = (Z, X)`.
 Constructor failures are reported as `invalidMacroElement`; profile mismatches are `tableNotInProfile`.
 
-`floorLoads` rows contain `{ bounds: [s0, s1, t0, t1], continuity: "simple" | "continuous", supports: [{ s, t0, t1, wall: { kind: "studWall", index }, xAtT0, reversed }], loads: FloorLoadSpec[] }`. The decoder runs the statics transfer and appends the reactions to the referenced wall's slot loads before constructing it. Invalid geometry or loads produce `invalidFloorTransfer`; a missing wall index is `unknownElementIndex`.
+`floorLoads` rows contain `{ bounds: [s0, s1, t0, t1], continuity: "simple" | "continuous", supports: [{ s, t0, t1, wall: { kind: "studWall", index }, xAtT0, reversed }], pattern: u32, loads: FloorTransferLoadSpec[] }`, where `pattern` indexes `loadPatterns` and the loads are `{ kind: "area", w, region? }`, `{ kind: "line", w, s, t0, t1 }`, `{ kind: "lineAlong", w, t, s0, s1 }` or `{ kind: "point", p, s, t }` (no `slot`; use one row per pattern, for example dead and live). The decoder runs the statics transfer and adds the reactions to the referenced walls as `wallLoad`s of that pattern, merged with that pattern's `wallLoad` rows on the same wall into one load case; the pattern's `scaleFactor` and series scale them. Invalid geometry or loads produce `invalidFloorTransfer`; a missing wall index is `unknownElementIndex`; a `pattern` past `loadPatterns` is `unknownPatternIndex` (table `floor_loads`).
 
 `building` (3D only) accepts a `BuildingSpec` with an optional `combination: [f64; 8]` (defaults to all ones). It runs the native building builder and applies those slot factors. It is exclusive with explicit node, element, constraint and load tables; the first conflict is `buildingWithTables` naming that table. `sequence` and `header` still apply. `buildingWallPier` addresses a named wall and pier at a storey, and `buildingWallBase` a named wall's base reaction. `buildingStoreyDrift` reports master-node differences for rigid diaphragm levels; it is a decode error for flexible levels, including a flexible level below the requested storey. Generic element-force recorders address generated `studWall` rows.
 
-`ElementLoadSpec` also accepts `{ kind: "wallSlots", factors: [f64, f64, f64, f64, f64, f64, f64, f64] }`, only for stud-wall kinds. Element force recorders use the element's local-force vector; for a stud wall, components follow its condensed exterior-node ordering.
+`ElementLoadSpec` also accepts `{ kind: "wallLoad", load: WallLoadSpec }`, only on `studWall` rows (`unsupportedElementLoad` otherwise), where `WallLoadSpec` is `{ kind: "topPoint", x, fx, fy }` or `{ kind: "topLine", x0, x1, wx0, wx1, wy0, wy1 }` in the wall's local axes (`fy` and `wy` negative is down). All `wallLoad` rows of one pattern on one wall (and the reactions of that pattern's `floorLoads` rows) form one load case of that wall, which the pattern selects with factor 1 and scales by its own series and `scaleFactor`: the decoder emits one element load per (pattern, wall) pair, so a pattern's loads on a wall never split and different patterns never merge. There is no cap on the number of patterns that load a wall. Rows of one pair must share a `stage` (`invalidRow` otherwise); a `wallLoad` on a wall row past the table is `unknownElementIndex`. The retired `{ kind: "wallSlots" }` and the `loads` field of a `studWalls` row are rejected at parse. Element force recorders use the element's local-force vector; for a stud wall, components follow its condensed exterior-node ordering.
 
 All element tables have `nodeI` / `nodeJ` (indices into the node table) and,
 where present, a `density` array for mass.
@@ -538,7 +538,7 @@ Each recorder is one scalar channel, tagged by `response`. `elementKind` is the
 shared kind enum above. `dof` is bounded by the profile's DOFs per node
 (`invalidDof`). `component` of an `elementForce` recorder indexes the element's
 local force vector (width 6 in 2D, 12 in 3D) and of an `elementLoad` recorder
-the load (3D: `wx, wy, wz, bx, by, bz, pressure, wall0..wall7`; 2D: 26 components, `[wx, wy, bx, by, t0x, t0y, p0, ..., t3x, t3y, p3, dwx, dwy, wall0..wall7]` for beam uniform, body force, traction and pressure of each edge, then the beam taper and stud-wall slot factors); one past the width is
+the load (3D: 7 components, `wx, wy, wz, bx, by, bz, pressure`; 2D: 18 components, `[wx, wy, bx, by, t0x, t0y, p0, ..., t3x, t3y, p3, dwx, dwy]` for beam uniform, body force, traction and pressure of each edge, then the beam taper; a stud wall's case selection is not a recorder component); one past the width is
 `invalidRecorderComponent`.
 
 | `response` | Fields |
