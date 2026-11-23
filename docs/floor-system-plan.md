@@ -1,7 +1,7 @@
 # Floors for stud-wall buildings: plan
 
-Status: Phases 1 (floor band), 2 (one-way gravity transfer), 3 (pier-end anchorage material) and 4a (walls and
-bands in 3D) are implemented in the core Rust API; 4b (diaphragms) is implemented; the builder remains. User guide: [floors.md](floors.md). Per-position bearing and
+Status: Phases 1 (floor band), 2 (one-way gravity transfer), 3 (pier-end anchorage material), 4a (walls and
+bands in 3D), 4b (diaphragms) and 4c (native Rust building builder) are implemented. User guide: [floors.md](floors.md). Per-position bearing and
 anchorage links of the band are
 external `ZeroLength` elements (the initial plan's internal vertical links are deliberately not part of the
 band). Companion to `stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
@@ -236,6 +236,9 @@ stand-in limited) and an L corner sharing its post between planes, plus DOF numb
 **Phase 4b status: done.** `Domain3` now has a 3D semi-rigid `Diaphragm` element, rigid-diaphragm documentation and flexible load-transfer helpers. The element is axis-aligned in global X-Z at a specified Y elevation.
 
 ### A `Storey`/`Building` builder in the input layer
+
+**Phase 4c status: done.** The native-first builder and serde/tsify spec mirrors are in `carapace-input`; see
+[`building.md`](building.md) for generated topology, load combinations, assumptions and verification.
 
 Users won't wire stations by hand. Given walls per storey, floors and bands, the builder should:
 

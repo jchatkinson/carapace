@@ -466,6 +466,10 @@ where
         self
     }
 
+    pub(crate) fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.scale_factor = scale_factor;
+    }
+
     pub(crate) fn factor(&self, pseudo_time: f64) -> f64 {
         self.frozen_factor
             .unwrap_or_else(|| self.series.factor(pseudo_time) * self.scale_factor)

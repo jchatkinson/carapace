@@ -242,6 +242,11 @@ where
         self.nodes.insert(node)
     }
 
+    /// Mark one node degree of freedom fixed after node creation.
+    pub fn fix_node_dof(&mut self, node: NId, dof: usize) {
+        self.nodes[node].fixed[dof] = true;
+    }
+
     pub fn add_element(&mut self, element: E) -> E::Id {
         self.elements.insert(element)
     }
@@ -561,6 +566,11 @@ where
     ) -> LoadPatternId {
         self.load_patterns
             .insert(LoadPattern::new(series).with_scale_factor(scale_factor))
+    }
+
+    /// Set a pattern's scale factor before analysis without changing its time series.
+    pub fn set_load_pattern_scale_factor(&mut self, pattern: LoadPatternId, scale_factor: f64) {
+        self.load_patterns[pattern].set_scale_factor(scale_factor);
     }
 
     /// Add a nodal load to `pattern` — Xara/OpenSees's `load <node> <...>`

@@ -48,6 +48,8 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
   are external `ZeroLength` elements. Core Rust API only; see [`docs/floors.md`](docs/floors.md)
 - [x] One-way floor gravity transfer — rectangular area, line and point loads to wall and beam supports by
   simple-span statics or continuous-beam reactions. Core Rust API only; see [`docs/floors.md`](docs/floors.md)
+- [x] Native 3D stacked stud-wall building builder — generated stations, anchorage, bands, diaphragms, floor
+  transfer, and independent load-slot combinations; see [`docs/building.md`](docs/building.md)
 - [x] 2D co-rotational transform (large-displacement geometry)
 - [ ] 3D co-rotational transform — scoped, deliberately shelved: unlike planar
   rotations (a single commuting scalar angle), 3D rotations don't commute, so

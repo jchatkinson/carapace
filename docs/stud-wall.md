@@ -422,7 +422,8 @@ Not modelled, or not yet available:
   (segmented design only).
 - Nonlinear or hysteretic framing members; staged sheathing installation.
 - Internal hold-downs, tension-only bearing and slip inside the element: use exterior `ZeroLength`s.
-- A built-in floor band is core Rust only; wire format and automatic storey builder are not implemented.
+- The automatic stacked building builder is native Rust only; it does not yet have a wire format or PySees surface
+  ([building.md](building.md)).
 - Unilateral interior-stud bearing (uplift of interior studs).
 - Automatic station generation.
 - O86 gypsum `e_n`, unblocked `J_us` and the no-hold-down `d_a` equation (11.7.1.2); SDPWS's nail-slip form.

@@ -3,6 +3,7 @@
 //! Native-first and free of wasm dependencies; the `tsify` feature only adds TypeScript definition
 //! derives for `carapace-wasm`.
 
+pub mod building;
 pub mod input_v1;
 pub mod material_probe;
 pub mod section_probe;
