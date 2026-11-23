@@ -14,7 +14,7 @@ scripts/build-wasm.sh
 ```
 
 PySees mirrors only the tables its compiler emits and omits the rest. Its current compiler has no stud-wall
-support, so the wall, floor-band, diaphragm, floor-transfer and anchorage additions do not require a PySees change.
+support, so the wall (with its floor zone), diaphragm, floor-transfer and anchorage additions do not require a PySees change.
 
 Field-level semantics live in the Rust doc comments, which tsify copies into the
 `.d.ts`. `wasm-bridge/tests/boundary-smoke.ts` is a type-checked, working
@@ -88,7 +88,6 @@ Only `header` is required.
 | `shell3s` | `Shell3Table` | 3D |
 | `shell4s` | `Shell4Table` | 3D |
 | `studWalls` | `StudWallSpec[]` | both (profile from `header.ndm`) |
-| `floorBands` | `FloorBandSpec[]` | both (profile from `header.ndm`) |
 | `diaphragms` | `DiaphragmTable` | 3D |
 | `floorLoads` | `FloorTransferSpec[]` | both (reactions become wall slot loads at decode) |
 | `building` | `BuildingSpec` | 3D; exclusive with explicit model tables |
@@ -155,7 +154,7 @@ to other arena entries; cycles are rejected (`cyclicMaterialReference`).
 
 ## Elements
 
-### Stud walls, floor bands and diaphragms
+### Stud walls (with floor zones) and diaphragms
 
 `studWalls` is an array of rows: `{ corners: [u32, u32, u32, u32], stations: { chord: "top" | "bottom", x, node }[], layout: WallLayoutSpec, loads: { slot, load: WallLoadSpec }[] }`.
 The profile comes from `header.ndm`; there is no `plane` field. Local `x` follows `c0 → c1` and local `y`
@@ -165,8 +164,13 @@ ga }` or `{ kind: "o86", bv, nailSpacing, nailDiameter }`; every field of these 
 wall loads, floor loads, anchorage bearing) is camelCase. Slot indices are 0 through 7. Invalid node indices,
 degenerate/non-orthogonal geometry, bad slots, and constructor failures produce decode errors.
 
-`floorBands` rows contain `bottom`, `top`, `layout: { length, depth, xs, bays: (number | null)[], rimEa }`;
-their profile also comes from `header.ndm`, and their local axes are derived from bottom-row and top-row nodes.
+`layout.floor` is optional: `{ depth, ga, rimEa }` puts a floor zone of depth `depth` on top of the wall (shear
+rigidity `ga > 0`, rim axial stiffness `rimEa >= 0`; see [stud-wall.md](stud-wall.md#2a-floor-zone)). The exterior top
+corners `c2`, `c3` and every top station then lie at local `y = H + depth`, each top station must coincide with a
+stud, jack or cripple position, and top slot loads act on that exterior row. There is no `floorBands` table, `floorBand`
+element kind or `floorBandBay` recorder: a floor band is the zone of the wall below it, joined to the wall above by
+vertical `zeroLengths` and `equalDofs`. A `building` spec takes the zone from its storey (`floorDepth`, `bandGa`,
+`rimEa`) and rejects a `layout.floor`.
 `diaphragms` is 3D only and contains `{ nodes, layout: { u, v, level, bays: (WallShearLawSpec | null)[], eaU, eaV } }`.
 Its normal is the global axis on which all nodes share a coordinate. The in-plane coordinates follow the cyclic
 axes `((normal + 1) % 3, (normal + 2) % 3)`; for a Y-normal grid this means `(u, v) = (Z, X)`.
@@ -174,7 +178,7 @@ Constructor failures are reported as `invalidMacroElement`; profile mismatches a
 
 `floorLoads` rows contain `{ bounds: [s0, s1, t0, t1], continuity: "simple" | "continuous", supports: [{ s, t0, t1, wall: { kind: "studWall", index }, xAtT0, reversed }], loads: FloorLoadSpec[] }`. The decoder runs the statics transfer and appends the reactions to the referenced wall's slot loads before constructing it. Invalid geometry or loads produce `invalidFloorTransfer`; a missing wall index is `unknownElementIndex`.
 
-`building` (3D only) accepts a `BuildingSpec` with an optional `combination: [f64; 8]` (defaults to all ones). It runs the native building builder and applies those slot factors. It is exclusive with explicit node, element, constraint and load tables; the first conflict is `buildingWithTables` naming that table. `sequence` and `header` still apply. `buildingWallPier` addresses a named wall and pier at a storey, and `buildingWallBase` a named wall's base reaction. `buildingStoreyDrift` reports master-node differences for rigid diaphragm levels; it is a decode error for flexible levels, including a flexible level below the requested storey. Generic element-force recorders address generated `studWall` and `floorBand` rows.
+`building` (3D only) accepts a `BuildingSpec` with an optional `combination: [f64; 8]` (defaults to all ones). It runs the native building builder and applies those slot factors. It is exclusive with explicit node, element, constraint and load tables; the first conflict is `buildingWithTables` naming that table. `sequence` and `header` still apply. `buildingWallPier` addresses a named wall and pier at a storey, and `buildingWallBase` a named wall's base reaction. `buildingStoreyDrift` reports master-node differences for rigid diaphragm levels; it is a decode error for flexible levels, including a flexible level below the requested storey. Generic element-force recorders address generated `studWall` rows.
 
 `ElementLoadSpec` also accepts `{ kind: "wallSlots", factors: [f64, f64, f64, f64, f64, f64, f64, f64] }`, only for stud-wall kinds. Element force recorders use the element's local-force vector; for a stud wall, components follow its condensed exterior-node ordering.
 
@@ -543,7 +547,7 @@ the load (3D: `wx, wy, wz, bx, by, bz, pressure, wall0..wall7`; 2D: 26 component
 | `nodeDifference` | `node`, optional `otherNode` (omitted means zero), `dof` |
 | `elementForce`, `elementLoad` | `elementKind`, `elementIndex`, `component` |
 | `studWallPier` | `elementKind: "studWall"`, `elementIndex`, `pier`, `quantity: "q" \| "gamma" \| "momentBase" \| "momentTop" \| "chordLeft" \| "chordRight"`; a missing pier is `invalidRecorderPier`. |
-| `floorBandBay`, `diaphragmBay` | `elementIndex`, `bay`, `quantity: "q" \| "gamma"`; an out-of-range bay is `invalidRecorderBay`. |
+| `diaphragmBay` | `elementIndex`, `bay`, `quantity: "q" \| "gamma"`; an out-of-range bay is `invalidRecorderBay`. |
 | `buildingWallPier` | `storey`, `wall` name, `pier`, `quantity` (the `studWallPier` quantities); requires `building`, and unknown names are `unknownBuildingWall`. |
 | `studWallBase` | `elementKind: "studWall"`, `elementIndex`, `component: "shear" \| "axial" \| "moment"`: the wall's total base reaction in its local axes (`StudWallResponse::base`; axial follows local `+y`, so a gravity takedown is positive; moment is `Σ (x − L/2) f_y`). |
 | `buildingWallBase` | `storey`, `wall` name, `component` (as `studWallBase`); requires `building`. |

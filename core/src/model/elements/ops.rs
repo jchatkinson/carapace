@@ -15,8 +15,8 @@ use arrayvec::ArrayVec;
 use nalgebra::{SMatrix, SVector};
 use slotmap::{Key, SlotMap};
 
+use crate::model::DiaphragmResponse;
 use crate::model::StudWallResponse;
-use crate::model::{DiaphragmResponse, FloorBandResponse};
 use crate::model::{LimitKind, LimitStateConfig, Node};
 
 /// Inline node-list capacity used by the existing fixed-connectivity catalog.
@@ -254,13 +254,6 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
         _nodes: &NodeView<'_, NDIM, NDOF, NId>,
         _load: Option<&Self::Load>,
     ) -> Option<StudWallResponse> {
-        None
-    }
-
-    fn floor_band_response(
-        &self,
-        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
-    ) -> Option<FloorBandResponse> {
         None
     }
 

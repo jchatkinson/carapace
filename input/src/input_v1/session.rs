@@ -83,24 +83,6 @@ where
     })
 }
 
-fn floor_band_bay_value<const NDIM: usize, const NDOF: usize, NId, E>(
-    domain: &Domain<NDIM, NDOF, NId, E>,
-    element: E::Id,
-    bay: u32,
-    quantity: super::sequence::WallBayQuantity,
-) -> Option<f64>
-where
-    NId: NodeKey,
-    E: ElementOps<NDIM, NDOF, NId>,
-{
-    let response = domain.element_floor_band_response(element)?;
-    let b = response.bays.get(bay as usize)?;
-    Some(match quantity {
-        super::sequence::WallBayQuantity::Q => b.q,
-        super::sequence::WallBayQuantity::Gamma => b.gamma,
-    })
-}
-
 fn diaphragm_bay_value<const NDIM: usize, const NDOF: usize, NId, E>(
     domain: &Domain<NDIM, NDOF, NId, E>,
     element: E::Id,
@@ -489,11 +471,6 @@ pub enum ResolvedRecorder<NId, EId> {
     StudWallBase {
         element: EId,
         component: super::sequence::StudWallBaseComponent,
-    },
-    FloorBandBay {
-        element: EId,
-        bay: u32,
-        quantity: super::sequence::WallBayQuantity,
     },
     DiaphragmBay {
         element: EId,
@@ -1489,11 +1466,6 @@ where
                             .domain()
                             .element_stud_wall_response(element, progress)
                             .map(|r| r.base[component as usize]),
-                        ResolvedRecorder::FloorBandBay {
-                            element,
-                            bay,
-                            quantity,
-                        } => floor_band_bay_value(analysis.domain(), element, bay, quantity),
                         ResolvedRecorder::DiaphragmBay {
                             element,
                             bay,
@@ -1589,11 +1561,6 @@ where
                             .domain()
                             .element_stud_wall_response(element, progress)
                             .map(|r| r.base[component as usize]),
-                        ResolvedRecorder::FloorBandBay {
-                            element,
-                            bay,
-                            quantity,
-                        } => floor_band_bay_value(analysis.domain(), element, bay, quantity),
                         ResolvedRecorder::DiaphragmBay {
                             element,
                             bay,

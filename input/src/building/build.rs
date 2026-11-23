@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use super::spec::*;
 use carapace_core::model::{
     flexible_diaphragm_loads, lump_line_reaction, transfer_floor, AnchorageBearing,
-    ChordDistribution, Domain3, Element3, Element3Id, ElementLoad3, FloorBand, FloorBandLayout,
-    FloorBounds, FloorContinuity, FloorLoad, FloorReactions, FloorSupport, LoadPatternId,
-    LoadSeries, Material, Node3, Node3Id, StudWall, StudWallLayout, WallChord, WallLoad,
-    WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3, WALL_SLOTS,
+    ChordDistribution, Domain3, Element3, Element3Id, ElementLoad3, FloorBounds, FloorContinuity,
+    FloorLoad, FloorReactions, FloorSupport, FloorZone, LoadPatternId, LoadSeries, Material, Node3,
+    Node3Id, StudWall, StudWallLayout, WallChord, WallLoad, WallOpening, WallShearLaw,
+    WallSheathing, WallStation, WallStud, ZeroLength3, WALL_SLOTS,
 };
 use slotmap::Key;
 
@@ -60,7 +60,8 @@ pub struct HoldDownForce {
 pub struct Building {
     pub domain: Domain3,
     pub walls: Vec<BTreeMap<String, BuildingWall>>,
-    pub bands: Vec<Vec<Element3Id>>,
+    /// Vertical links (anchorage at pier ends, bearing elsewhere) joining each storey's walls to the walls below.
+    pub links: Vec<Vec<Element3Id>>,
     pub levels: Vec<LevelHandle>,
     pub floor_reactions: Vec<FloorReactions>,
     patterns: [LoadPatternId; WALL_SLOTS],
@@ -236,7 +237,20 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
             if level.contains_key(&w.name) {
                 return Err(err(format!("storey {si}: duplicate wall {}", w.name)));
             }
-            let layout = convert_layout(&w.layout, si, &w.name)?;
+            if w.layout.floor.is_some() {
+                return Err(err(format!(
+                    "storey {si} wall {}: the floor zone comes from the storey (floorDepth, bandGa, rimEa), not the wall layout",
+                    w.name
+                )));
+            }
+            let mut layout = convert_layout(&w.layout, si, &w.name)?;
+            if s.floor_depth > 0. {
+                layout.floor = Some(FloorZone {
+                    depth: s.floor_depth,
+                    ga: s.band_ga,
+                    rim_ea: s.rim_ea,
+                });
+            }
             if si > 0 {
                 let below = &spec.storeys[si - 1].walls;
                 let matching = below.iter().any(|b| {
@@ -256,6 +270,8 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                 .iter()
                 .map(|p| p.wall_height + p.floor_depth)
                 .sum();
+            // The exterior top row is the floor zone's top: `H + depth` above the base.
+            let y_top = y0 + s.wall_height + s.floor_depth;
             let corners = [
                 domain.add_node(Node3::new([w.start[0], y0, w.start[1]])),
                 domain.add_node(Node3::new([
@@ -265,20 +281,13 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                 ])),
                 domain.add_node(Node3::new([
                     w.start[0] + ex * len,
-                    y0 + s.wall_height,
+                    y_top,
                     w.start[1] + ez * len,
                 ])),
-                domain.add_node(Node3::new([w.start[0], y0 + s.wall_height, w.start[1]])),
+                domain.add_node(Node3::new([w.start[0], y_top, w.start[1]])),
             ];
             let mut xs: Vec<f64> = layout.studs.iter().map(|x| x.x).collect();
             xs.extend(layout.pier_ends());
-            if si + 1 < spec.storeys.len() && s.floor_depth > 0. {
-                if let Some(above) = spec.storeys[si + 1].walls.iter().find(|a| a.name == w.name) {
-                    let a = convert_layout(&above.layout, si + 1, &above.name)?;
-                    xs.extend(a.studs.iter().map(|x| x.x));
-                    xs.extend(a.pier_ends());
-                }
-            }
             xs.sort_by(f64::total_cmp);
             xs.dedup_by(|a, b| (*a - *b).abs() < 1e-9 * len);
             let top: BTreeMap<i64, Node3Id> = xs
@@ -293,21 +302,35 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                         } else {
                             domain.add_node(Node3::new([
                                 w.start[0] + ex * x,
-                                y0 + s.wall_height,
+                                y_top,
                                 w.start[1] + ez * x,
                             ]))
                         },
                     )
                 })
                 .collect();
+            // Above the first storey the bottom stations stand on the wall below: one at each of its top
+            // positions (the corners and every stud), where the vertical links go. Pier ends (hold-downs) must
+            // be among them.
             let mut bxs: Vec<f64> = layout.studs.iter().map(|x| x.x).collect();
             bxs.extend(layout.pier_ends());
-            if si > 0 && spec.storeys[si - 1].floor_depth > 0. {
-                if let Some(below) = spec.storeys[si - 1].walls.iter().find(|a| a.name == w.name) {
-                    let a = convert_layout(&below.layout, si - 1, &below.name)?;
-                    bxs.extend(a.studs.iter().map(|x| x.x));
-                    bxs.extend(a.pier_ends());
+            if si > 0 {
+                let below = spec.storeys[si - 1]
+                    .walls
+                    .iter()
+                    .find(|a| a.name == w.name)
+                    .expect("stacking was checked above");
+                let below = convert_layout(&below.layout, si - 1, &below.name)?;
+                let supports: Vec<f64> = below.studs.iter().map(|x| x.x).collect();
+                for x in layout.pier_ends() {
+                    if !supports.iter().any(|b| (b - x).abs() < 1e-9 * len) {
+                        return Err(err(format!(
+                            "storey {si} wall {}: pier end at x = {x} has no stud in the wall below to hold down to",
+                            w.name
+                        )));
+                    }
                 }
+                bxs = supports;
             }
             bxs.sort_by(f64::total_cmp);
             bxs.dedup_by(|a, b| (*a - *b).abs() < 1e-9 * len);
@@ -373,7 +396,7 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
     // Foundation supports at all pier ends. The ground's plan translations are fixed; vertical behavior is
     // carried by the anchorage material.
     let mut walls: Vec<BTreeMap<String, BuildingWall>> = vec![BTreeMap::new(); spec.storeys.len()];
-    let mut bands = vec![Vec::new(); spec.storeys.len()];
+    let mut links = vec![Vec::new(); spec.storeys.len()];
     for si in 0..spec.storeys.len() {
         for (name, (ws, layout, corners, top, bottom)) in wall_nodes[si].clone() {
             let mut load_slots: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
@@ -468,13 +491,11 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
             );
         }
     }
-    // Join successive wall planes with a floor band, or with vertical support links when the floor depth is zero.
+    // Join each wall to the wall below: its bottom nodes sit on the lower wall's exterior top nodes (the floor
+    // zone's top row), tied in the wall plane and linked vertically, with the hold-down anchorage at pier ends
+    // and bearing (compression only) elsewhere.
     for si in 1..spec.storeys.len() {
-        let lower_depth = spec.storeys[si - 1].floor_depth;
-        for (name, (_, lower_layout, _, _, _)) in &wall_nodes[si - 1] {
-            let Some((_, upper_layout, _, _, _)) = wall_nodes[si].get(name) else {
-                continue;
-            };
+        for (name, (ws, _, _, _, _)) in &wall_nodes[si] {
             let low_top = walls[si - 1]
                 .get(name)
                 .ok_or_else(|| {
@@ -485,172 +506,57 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                 })?
                 .top_nodes
                 .clone();
-            let up_bottom = walls[si]
+            let up = walls[si]
                 .get(name)
                 .ok_or_else(|| err(format!("storey {si} wall {name}: missing upper handle")))?
-                .bottom_nodes
                 .clone();
-            let mut xs: Vec<f64> = low_top.iter().map(|x| x.0).collect();
-            xs.extend(up_bottom.iter().map(|x| x.0));
-            xs.sort_by(f64::total_cmp);
-            xs.dedup_by(|a, b| (*a - *b).abs() < 1e-8);
-            let lookup = |v: &[(f64, Node3Id)], x: f64| {
-                v.iter().find(|(a, _)| (*a - x).abs() < 1e-8).map(|x| x.1)
-            };
-            if lower_depth > 0. {
-                let layout = FloorBandLayout::between(
-                    lower_layout,
-                    upper_layout,
-                    lower_depth,
-                    spec.storeys[si - 1].band_ga,
-                    spec.storeys[si - 1].rim_ea,
-                )
-                .map_err(|e| err(format!("band below storey {si}: {e}")))?;
-                let bottom_row = layout
-                    .xs
+            let pier = wall_nodes[si][name].1.pier_ends();
+            let dofs: Vec<usize> = [(0, ws.direction[0]), (2, ws.direction[1])]
+                .into_iter()
+                .filter(|(_, c)| c.abs() > 1e-9)
+                .map(|(d, _)| d)
+                .collect();
+            for &(x, upper) in &up.bottom_nodes {
+                let (_, lower) = low_top
                     .iter()
-                    .map(|x| {
-                        lookup(&low_top, *x).ok_or_else(|| {
-                            err(format!("band below storey {si}: missing lower station {x}"))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let top_row = layout
-                    .xs
-                    .iter()
-                    .map(|x| {
-                        lookup(&up_bottom, *x).ok_or_else(|| {
-                            err(format!("band below storey {si}: missing upper station {x}"))
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let band = FloorBand::new3(bottom_row.clone(), top_row.clone(), layout.clone())
-                    .map_err(|e| err(e.to_string()))?;
-                bands[si - 1].push(domain.add_element(Element3::FloorBand(band)));
-                let pier: Vec<f64> = upper_layout.pier_ends();
-                for (i, x) in layout.xs.iter().enumerate() {
-                    let mat = if pier.iter().any(|p| (*p - *x).abs() < 1e-8) {
-                        let (t, sl, b) = anchorage(&spec.storeys[si].anchorage)?;
-                        Material::anchorage(t, sl, b).map_err(|e| err(e.to_string()))?
-                    } else {
-                        Material::anchorage(
-                            0.,
-                            0.,
-                            AnchorageBearing::Linear {
-                                k: spec.storeys[si].bearing,
-                            },
-                        )
-                        .map_err(|e| err(e.to_string()))?
-                    };
-                    let link = ZeroLength3::new(bottom_row[i], top_row[i]).with_material(1, mat);
-                    let id = domain.add_element(Element3::ZeroLength3(link));
-                    bands[si - 1].push(id);
-                    if pier.iter().any(|p| (*p - *x).abs() < 1e-8) {
-                        walls[si].get_mut(name).unwrap().pier_links.push((*x, id));
-                    }
+                    .find(|(a, _)| (*a - x).abs() < 1e-8)
+                    .ok_or_else(|| {
+                        err(format!(
+                            "storey {si} wall {name}: no node below at x = {x} to link to"
+                        ))
+                    })?;
+                let is_pier = pier.iter().any(|p| (*p - x).abs() < 1e-8);
+                let mat = if is_pier {
+                    let (t, sl, b) = anchorage(&spec.storeys[si].anchorage)?;
+                    Material::anchorage(t, sl, b)
+                } else {
+                    Material::anchorage(
+                        0.,
+                        0.,
+                        AnchorageBearing::Linear {
+                            k: spec.storeys[si].bearing,
+                        },
+                    )
                 }
-            } else {
-                for x in xs {
-                    let (Some(a), Some(b)) = (lookup(&low_top, x), lookup(&up_bottom, x)) else {
-                        continue;
-                    };
-                    let is_pier = upper_layout
-                        .pier_ends()
-                        .iter()
-                        .any(|p| (*p - x).abs() < 1e-8);
-                    let mat = if is_pier {
-                        let (t, sl, b) = anchorage(&spec.storeys[si].anchorage)?;
-                        Material::anchorage(t, sl, b).map_err(|e| err(e.to_string()))?
-                    } else {
-                        Material::anchorage(
-                            0.,
-                            0.,
-                            AnchorageBearing::Linear {
-                                k: spec.storeys[si].bearing,
-                            },
-                        )
-                        .map_err(|e| err(e.to_string()))?
-                    };
-                    let id = domain.add_element(Element3::ZeroLength3(
-                        ZeroLength3::new(a, b).with_material(1, mat),
-                    ));
-                    bands[si - 1].push(id);
-                    if is_pier {
-                        walls[si].get_mut(name).unwrap().pier_links.push((x, id));
-                    }
+                .map_err(|e| err(e.to_string()))?;
+                let id = domain.add_element(Element3::ZeroLength3(
+                    ZeroLength3::new(*lower, upper).with_material(1, mat),
+                ));
+                domain.equal_dof(*lower, upper, &dofs);
+                links[si - 1].push(id);
+                if is_pier {
+                    walls[si].get_mut(name).unwrap().pier_links.push((x, id));
                 }
             }
         }
     }
-    // A roof band is a final load/diaphragm level. Nothing bears on it, so its links are elastic in tension and
-    // compression (the rim is fastened to the plate): a tension-free link would leave the band's top row free to lift.
-    let last = spec.storeys.len() - 1;
-    let mut roof_nodes: BTreeMap<String, Vec<Node3Id>> = BTreeMap::new();
-    for (name, (_, layout, _, _, _)) in &wall_nodes[last] {
-        let s = &spec.storeys[last];
-        if s.floor_depth <= 0. {
-            continue;
-        }
-        let wh = &walls[last][name];
-        let mut xs: Vec<f64> = wh.top_nodes.iter().map(|x| x.0).collect();
-        xs.sort_by(f64::total_cmp);
-        xs.dedup_by(|a, b| (*a - *b).abs() < 1e-8);
-        let top_row = xs
-            .iter()
-            .map(|x| {
-                let c = domain
-                    .node(
-                        wh.top_nodes
-                            .iter()
-                            .find(|p| (p.0 - *x).abs() < 1e-8)
-                            .unwrap()
-                            .1,
-                    )
-                    .coords;
-                domain.add_node(Node3::new([c[0], c[1] + s.floor_depth, c[2]]))
-            })
-            .collect::<Vec<_>>();
-        let bottom_row = xs
-            .iter()
-            .map(|x| {
-                wh.top_nodes
-                    .iter()
-                    .find(|p| (p.0 - *x).abs() < 1e-8)
-                    .unwrap()
-                    .1
-            })
-            .collect::<Vec<_>>();
-        let band_layout =
-            FloorBandLayout::between(layout, layout, s.floor_depth, s.band_ga, s.rim_ea)
-                .map_err(|e| err(e.to_string()))?;
-        let band = FloorBand::new3(bottom_row.clone(), top_row.clone(), band_layout.clone())
-            .map_err(|e| err(e.to_string()))?;
-        bands[last].push(domain.add_element(Element3::FloorBand(band)));
-        for i in 0..top_row.len() {
-            let mat = Material::anchorage(s.bearing, 0., AnchorageBearing::Linear { k: s.bearing })
-                .map_err(|e| err(e.to_string()))?;
-            bands[last].push(domain.add_element(Element3::ZeroLength3(
-                ZeroLength3::new(bottom_row[i], top_row[i]).with_material(1, mat),
-            )));
-        }
-        roof_nodes.insert(name.clone(), top_row);
-    }
     let mut levels = Vec::new();
     let mut nodal = NodalLoads::new();
     for (si, s) in spec.storeys.iter().enumerate() {
-        let mut nodes: Vec<Node3Id> = if si + 1 < spec.storeys.len() && s.floor_depth > 0. {
-            walls[si + 1]
-                .values()
-                .flat_map(|w| w.bottom_nodes.iter().map(|x| x.1))
-                .collect()
-        } else if si == last && s.floor_depth > 0. {
-            roof_nodes.values().flatten().copied().collect()
-        } else {
-            walls[si]
-                .values()
-                .flat_map(|w| w.top_nodes.iter().map(|x| x.1))
-                .collect()
-        };
+        let mut nodes: Vec<Node3Id> = walls[si]
+            .values()
+            .flat_map(|w| w.top_nodes.iter().map(|x| x.1))
+            .collect();
         nodes.sort_by_key(|n| n.data().as_ffi());
         nodes.dedup();
         let master = if spec.diaphragm == DiaphragmKind::Rigid {
@@ -714,7 +620,7 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
     Ok(Building {
         domain,
         walls,
-        bands,
+        links,
         levels,
         floor_reactions,
         patterns,
@@ -779,6 +685,7 @@ fn convert_layout(l: &WallLayoutSpec, si: usize, name: &str) -> Result<StudWallL
             .collect(),
         sheathing,
         foundation: si == 0,
+        floor: None,
     };
     if [l.length, l.height, l.top_ea, l.bottom_ea, l.bottom_ei]
         .iter()

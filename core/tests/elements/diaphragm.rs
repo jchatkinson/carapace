@@ -254,6 +254,7 @@ fn flexible_three_line_tributary_reactions_and_lumping() {
                 law: WallShearLaw::Linear { ga: 1e5 },
             }),
             foundation: true,
+            floor: None,
         };
         let id = d.add_element(Element3::StudWall(
             StudWall::new3(
@@ -498,6 +499,7 @@ fn rigid_diaphragm_matches_stiffness_and_torsion_split() {
                 law: WallShearLaw::Linear { ga: 6000. },
             }),
             foundation: true,
+            floor: None,
         };
         let id = d.add_element(Element3::StudWall(
             StudWall::new3(c, vec![], layout, std::array::from_fn(|_| vec![])).unwrap(),

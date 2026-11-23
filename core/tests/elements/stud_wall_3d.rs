@@ -5,9 +5,9 @@ use carapace_core::analysis::{
     Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator,
 };
 use carapace_core::model::{
-    ChordDistribution, Domain, Domain3, Element, Element3, ElementLoad, ElementLoad3, FloorBand,
-    FloorBandLayout, Node, Node3, StudWall, StudWallLayout, WallLoad, WallShearLaw, WallSheathing,
-    WallStud, WALL_SLOTS,
+    ChordDistribution, Domain, Domain3, Element, Element3, ElementLoad, ElementLoad3, FloorZone,
+    Node, Node3, StudWall, StudWallLayout, WallLoad, WallShearLaw, WallSheathing, WallStud,
+    WALL_SLOTS,
 };
 
 /// Geometry-derived masks in a Z-up model activate exactly the translations in the wall plane.
@@ -75,6 +75,7 @@ fn layout() -> StudWallLayout {
             law: WallShearLaw::Linear { ga: 2e5 },
         }),
         foundation: true,
+        floor: None,
     }
 }
 
@@ -273,6 +274,7 @@ fn window_layout() -> StudWallLayout {
             law: WallShearLaw::Linear { ga: 6000. },
         }),
         foundation: true,
+        floor: None,
     }
 }
 
@@ -733,8 +735,9 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
     let mut levels = vec![];
     for i in 0..2 {
         let y = i as f64 * (H + D);
-        let tl = d.add_node(Node::new([0., y + H]));
-        let tr = d.add_node(Node::new([L, y + H]));
+        let ytop = if i == 1 { y + H } else { y + H + D };
+        let tl = d.add_node(Node::new([0., ytop]));
+        let tr = d.add_node(Node::new([L, ytop]));
         let ea = [3., 2.][i] * OPEN_PLY;
         let layout = StudWallLayout {
             length: L,
@@ -752,6 +755,11 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
                 },
             }),
             foundation: false,
+            floor: (i == 0).then_some(FloorZone {
+                depth: D,
+                ga: R,
+                rim_ea: R,
+            }),
         };
         let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
         if i == 1 {
@@ -782,29 +790,16 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
             );
             levels.push([tl, tr]);
         } else {
-            let bl = d.add_node(Node::new([0., y + H + D]));
-            let br = d.add_node(Node::new([L, y + H + D]));
-            d.add_element(Element::FloorBand(
-                FloorBand::new(
-                    vec![tl, tr],
-                    vec![bl, br],
-                    FloorBandLayout {
-                        length: L,
-                        depth: D,
-                        xs: vec![0., L],
-                        bays: vec![Some(R)],
-                        rim_ea: R,
-                    },
-                )
-                .unwrap(),
-            ));
+            let bl = d.add_node(Node::new([0., ytop]));
+            let br = d.add_node(Node::new([L, ytop]));
             for (a, b, k) in [(tl, bl, 20_000.), (tr, br, R)] {
                 d.add_element(Element::ZeroLength(
                     ZeroLength::new(a, b).with_material(1, Material::Elastic { e: k }),
                 ));
+                d.equal_dof(a, b, &[0]);
             }
-            d.add_nodal_load(pattern, bl, 0, 6000.);
-            levels.push([bl, bl]);
+            d.add_nodal_load(pattern, tl, 0, 6000.);
+            levels.push([tl, tl]);
             bottom = [bl, br];
         }
     }
@@ -855,8 +850,9 @@ fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
     let mut levels = vec![];
     for i in 0..2 {
         let y = i as f64 * (H + D);
-        let tl = d.add_node(Node3::new(point(0., y + H, 0.)));
-        let tr = d.add_node(Node3::new(point(0., y + H, L)));
+        let ytop = if i == 1 { y + H } else { y + H + D };
+        let tl = d.add_node(Node3::new(point(0., ytop, 0.)));
+        let tr = d.add_node(Node3::new(point(0., ytop, L)));
         let ea = [3., 2.][i] * OPEN_PLY;
         let layout = StudWallLayout {
             length: L,
@@ -874,6 +870,11 @@ fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
                 },
             }),
             foundation: false,
+            floor: (i == 0).then_some(FloorZone {
+                depth: D,
+                ga: R,
+                rim_ea: R,
+            }),
         };
         let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
         if i == 1 {
@@ -904,29 +905,16 @@ fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
             );
             levels.push([tl, tr]);
         } else {
-            let bl = d.add_node(Node3::new(point(0., y + H + D, 0.)));
-            let br = d.add_node(Node3::new(point(0., y + H + D, L)));
-            d.add_element(Element3::FloorBand(
-                FloorBand::new3(
-                    vec![tl, tr],
-                    vec![bl, br],
-                    FloorBandLayout {
-                        length: L,
-                        depth: D,
-                        xs: vec![0., L],
-                        bays: vec![Some(R)],
-                        rim_ea: R,
-                    },
-                )
-                .unwrap(),
-            ));
+            let bl = d.add_node(Node3::new(point(0., ytop, 0.)));
+            let br = d.add_node(Node3::new(point(0., ytop, L)));
             for (a, b, k) in [(tl, bl, 20_000.), (tr, br, R)] {
                 d.add_element(Element3::ZeroLength3(
                     ZeroLength3::new(a, b).with_material(up, Material::Elastic { e: k }),
                 ));
+                d.equal_dof(a, b, &[wall_axis]);
             }
-            d.add_nodal_load(pattern, bl, wall_axis, 6000.);
-            levels.push([bl, bl]);
+            d.add_nodal_load(pattern, tl, wall_axis, 6000.);
+            levels.push([tl, tl]);
             bottom = [bl, br];
         }
     }
@@ -956,10 +944,10 @@ fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
     )
 }
 
-/// The rigid-band 2-storey stack has the same level drifts and wall chords in Y-up and Z-up 3D models as in 2D.
-/// Reference: the 2-storey rigid-band model and hand-walk case in `floor_band.rs`; displacements and chords, 1e-10.
+/// The rigid-zone 2-storey stack has the same level drifts and wall chords in Y-up and Z-up 3D models as in 2D.
+/// Reference: the 2-storey rigid-zone model and hand-walk case in `floor_zone.rs`; displacements and chords, 1e-10.
 #[test]
-fn rigid_floor_band_stack_matches_2d_in_z() {
+fn rigid_floor_zone_stack_matches_2d_in_z() {
     let a = rigid_stack_2d();
     for b in [rigid_stack_3d(true)] {
         assert_eq!(a.0.len(), b.0.len());
@@ -979,31 +967,163 @@ fn rigid_floor_band_stack_matches_2d_in_z() {
     }
 }
 
-/// A Z-directed 3D floor band reports the same local shear field as its 2D definition.
-/// Reference: constant-shear energy relation `gamma = 0.01`, `q = GA gamma`; tolerance 1e-12.
+/// A Z-up 3D wall (`z` up, along `y`) with a floor zone reports the same bay shear flows, rim forces and
+/// base reaction as its 2D definition: a window wall with a zone, sheared by horizontal loads on the exterior
+/// top row. Reference: the same model in 2D; 1e-10.
 #[test]
-fn z_directed_floor_band_uses_the_wall_plane_map() {
-    let mut d = Domain3::new();
-    let b0 = d.add_node(Node3::new([0., 0., 0.]));
-    let b1 = d.add_node(Node3::new([0., 0., 1000.]));
-    let t0 = d.add_node(Node3::new([0., 100., 0.]).with_initial_displacement(2, 1.));
-    let t1 = d.add_node(Node3::new([0., 100., 1000.]).with_initial_displacement(2, 1.));
-    let band = FloorBand::new3(
-        vec![b0, b1],
-        vec![t0, t1],
-        FloorBandLayout {
-            length: 1000.,
-            depth: 100.,
-            xs: vec![0., 1000.],
-            bays: vec![Some(2e6)],
-            rim_ea: 0.,
-        },
-    )
-    .unwrap();
-    let id = d.add_element(Element3::FloorBand(band));
-    let response = d.element_floor_band_response(id).unwrap();
-    assert!((response.bays[0].gamma - 0.01).abs() < 1e-12);
-    assert!((response.bays[0].q - 2e4).abs() < 1e-8);
+fn z_up_floor_zone_equals_2d() {
+    use carapace_core::model::{LoadSeries, Node3, NodeId, WallChord, WallOpening, WallStation};
+    const L: f64 = 3600.;
+    const H: f64 = 2440.;
+    const D: f64 = 254.;
+    let xs = [0., 800., 1600., 2400., 3200., L];
+    let layout = || StudWallLayout {
+        length: L,
+        height: H,
+        studs: xs.iter().map(|&x| WallStud { x, ea: OPEN_PLY }).collect(),
+        top_ea: 2. * OPEN_PLY,
+        top_ei: None,
+        top_distribution: ChordDistribution::Direct,
+        bottom_ea: OPEN_PLY,
+        bottom_ei: OPEN_PLY,
+        openings: vec![WallOpening {
+            x0: 1600.,
+            x1: 2400.,
+            head_height: 2000.,
+            header_ei: 1e9,
+            jack_ea: OPEN_PLY,
+            door: false,
+        }],
+        sheathing: Some(WallSheathing {
+            law: WallShearLaw::Linear { ga: 6000. },
+        }),
+        foundation: true,
+        floor: Some(FloorZone {
+            depth: D,
+            ga: 5e6,
+            rim_ea: 2e8,
+        }),
+    };
+    let loads = |n: usize| (0..n).map(|i| 1000. + 250. * i as f64);
+    // 2D
+    let mut d: Domain<2, 3, NodeId, Element> = Domain::new();
+    let c0 = d.add_node(Node::new([0., 0.]).fix(0).fix(1));
+    let c1 = d.add_node(Node::new([L, 0.]).fix(0).fix(1));
+    let top: Vec<_> = xs
+        .iter()
+        .map(|&x| d.add_node(Node::new([x, H + D])))
+        .collect();
+    let stations: Vec<_> = xs[1..5]
+        .iter()
+        .zip(&top[1..5])
+        .map(|(&x, &node)| WallStation {
+            chord: WallChord::Top,
+            x,
+            node,
+        })
+        .collect();
+    let wall = d.add_element(Element::StudWall(
+        StudWall::new(
+            [c0, c1, top[5], top[0]],
+            stations,
+            layout(),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
+    for (n, f) in top.iter().zip(loads(6)) {
+        d.add_nodal_load(p, *n, 0, f);
+    }
+    let mut a2 = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Transformation)
+        .integrator(Integrator::LoadControl { increment: 1. })
+        .algorithm(Algorithm::Linear)
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 4,
+        })
+        .build(d);
+    a2.step().unwrap();
+    let r2 = a2.domain().element_stud_wall_response(wall, 1.).unwrap();
+    let top2 = top.clone();
+    // Z-up: wall along y, up is z.
+    let mut d3 = Domain3::new();
+    let pt = |x: f64, z: f64| [0., x, z];
+    let c0 = d3.add_node(Node3::new(pt(0., 0.)).fix(0).fix(1).fix(2));
+    let c1 = d3.add_node(Node3::new(pt(L, 0.)).fix(0).fix(1).fix(2));
+    let top: Vec<_> = xs
+        .iter()
+        .map(|&x| d3.add_node(Node3::new(pt(x, H + D))))
+        .collect();
+    let top3 = top.clone();
+    let stations: Vec<_> = xs[1..5]
+        .iter()
+        .zip(&top[1..5])
+        .map(|(&x, &node)| WallStation {
+            chord: WallChord::Top,
+            x,
+            node,
+        })
+        .collect();
+    let wall3 = d3.add_element(Element3::StudWall(
+        StudWall::new3(
+            [c0, c1, top[5], top[0]],
+            stations,
+            layout(),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let p = d3.add_load_pattern(LoadSeries::Linear { slope: 1. });
+    for (n, f) in top.iter().zip(loads(6)) {
+        d3.add_nodal_load(p, *n, 1, f);
+    }
+    let mut a3 = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Transformation)
+        .integrator(Integrator::LoadControl { increment: 1. })
+        .algorithm(Algorithm::Linear)
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 4,
+        })
+        .build(d3);
+    a3.step().unwrap();
+    let r3 = a3.domain().element_stud_wall_response(wall3, 1.).unwrap();
+    let near = |a: f64, b: f64, what: &str| {
+        assert!(
+            (a - b).abs() <= 1e-10 * a.abs().max(b.abs()).max(1e-3),
+            "{what}: {a} != {b}"
+        )
+    };
+    assert_eq!(r2.floor_bays.len(), 5);
+    for (a, b) in r2.floor_bays.iter().zip(&r3.floor_bays) {
+        near(a.q, b.q, "bay q");
+        near(a.gamma, b.gamma, "bay gamma");
+    }
+    assert_eq!(r2.floor_bays[2].q, 0.);
+    for (a, b) in r2.floor_rim.iter().zip(&r3.floor_rim) {
+        near(*a, *b, "rim");
+    }
+    for (a, b) in r2.piers.iter().zip(&r3.piers) {
+        near(a.q, b.q, "pier q");
+        near(a.moment_base, b.moment_base, "pier moment");
+    }
+    for i in 0..3 {
+        near(r2.base[i], r3.base[i], "base");
+    }
+    for i in 0..6 {
+        near(
+            a2.domain().node(top2[i]).displacement[0],
+            a3.domain().node(top3[i]).displacement[1],
+            "top u",
+        );
+        near(
+            a2.domain().node(top2[i]).displacement[1],
+            a3.domain().node(top3[i]).displacement[2],
+            "top v",
+        );
+    }
 }
 
 /// The 3D wall's threaded and serial assembly paths give bit-identical drift and pier shear.

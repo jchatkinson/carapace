@@ -73,7 +73,8 @@ pub(super) fn validate_stud_wall_geometry(
         ex[0] * ey[1] - ex[1] * ey[0],
     ];
     let length = wall.layout.length;
-    let height = wall.layout.height;
+    // The exterior top row sits a floor-zone depth above the framing.
+    let height = wall.layout.height + wall.layout.floor.map_or(0., |z| z.depth);
     let tol = 1e-9 * length.max(height).max(1.);
     let expected = [(0., 0.), (length, 0.), (length, height), (0., height)];
     let local = |q: [f64; 3]| {
@@ -839,28 +840,6 @@ where
                     ResolvedRecorder::StudWallBase {
                         element: elements.get(element_kind, element_index, ndm)?,
                         component,
-                    }
-                }
-                RecorderSpec::FloorBandBay {
-                    element_index,
-                    bay,
-                    quantity,
-                } => {
-                    let element = elements.get(ElementKind::FloorBand, element_index, ndm)?;
-                    let count = domain
-                        .element_floor_band_response(element)
-                        .map_or(0, |r| r.bays.len());
-                    if bay as usize >= count {
-                        return Err(DecodeError::InvalidRecorderBay {
-                            recorder: index as u32,
-                            bay,
-                            count: count as u32,
-                        });
-                    }
-                    ResolvedRecorder::FloorBandBay {
-                        element,
-                        bay,
-                        quantity,
                     }
                 }
                 RecorderSpec::DiaphragmBay {

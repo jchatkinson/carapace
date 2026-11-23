@@ -40,10 +40,9 @@ use serde::{Deserialize, Serialize};
 use tables::{
     DiaphragmSpec, ElasticBeamColumn2dTable, ElasticBeamColumn3dTable, ElementLoadTable,
     EmbeddedBarSpec, EqualDofTable, FiberBeamColumn2dTable, FiberBeamColumn3dTable, FiberTable,
-    FloorBandSpec, LinearConstraintTable, LoadPatternTable, NodalLoadTable, NodeTable,
-    PlaneMaterialSpec, QuadTable, RigidDiaphragmTable, RigidLinkTable, Shell3Table, Shell4Table,
-    ShellSectionSpec, StudWallSpec, TriangleTable, TrussTable, ZeroLengthSectionTable,
-    ZeroLengthTable,
+    LinearConstraintTable, LoadPatternTable, NodalLoadTable, NodeTable, PlaneMaterialSpec,
+    QuadTable, RigidDiaphragmTable, RigidLinkTable, Shell3Table, Shell4Table, ShellSectionSpec,
+    StudWallSpec, TriangleTable, TrussTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 
 /// Small structured-clone header fields — everything else in
@@ -149,9 +148,6 @@ pub struct CarapaceInputV1 {
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub stud_walls: Vec<StudWallSpec>,
-    #[serde(default)]
-    #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub floor_bands: Vec<FloorBandSpec>,
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub diaphragms: Vec<DiaphragmSpec>,

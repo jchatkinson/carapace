@@ -1,4 +1,4 @@
-//! Wire tables for stud walls, floor bands, diaphragms, the anchorage material, floor loads and the building:
+//! Wire tables for stud walls (with their floor zone), diaphragms, the anchorage material, floor loads and the building:
 //! each decoded model equals the same model built directly through `carapace-core` / `carapace_input::building`
 //! (window wall with floor loads, anchorage drift, building recorders: 1e-12 or 1e-10 as stated per test), specs
 //! round-trip through serde, and every malformed row or misuse is a `DecodeError`.
@@ -16,8 +16,8 @@ use carapace_input::building::{
     FloorLoadSpec, FloorSpec, LateralLoad, SlotWallLoad, SpanAxis, StoreySpec, WallSpec,
 };
 use carapace_input::building::{
-    ChordDistributionSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec, WallSheathingSpec,
-    WallStudSpec,
+    ChordDistributionSpec, FloorZoneSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec,
+    WallSheathingSpec, WallStudSpec,
 };
 use carapace_input::input_v1::{
     decode,
@@ -47,6 +47,7 @@ fn layout() -> WallLayoutSpec {
             law: WallShearLawSpec::Linear { ga: 1e6 },
         }),
         foundation: false,
+        floor: None,
     }
 }
 fn input_wall() -> carapace_input::input_v1::CarapaceInputV1 {
@@ -119,6 +120,7 @@ fn core_wall_values() -> (f64, f64) {
             law: WallShearLaw::Linear { ga: 1e6 },
         }),
         foundation: false,
+        floor: None,
     };
     let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
     loads[0].push(WallLoad::TopPoint {
@@ -200,6 +202,100 @@ fn stud_wall_pier_recorder_matches_core_and_validates_pier_index() {
     ));
 }
 
+/// A wall's `floor` zone decodes (exterior top nodes at `H + depth`), serializes back unchanged, solves like the
+/// same wall built through `carapace-core`, and a zone with a non-positive depth is a row error. Reference: the
+/// direct core construction; top displacement agrees to 1e-12 relative.
+#[test]
+fn stud_wall_floor_zone_wire_matches_direct_core() {
+    let zone = FloorZoneSpec {
+        depth: 200.,
+        ga: 5e5,
+        rim_ea: 1e8,
+    };
+    let mut input = input_wall();
+    input.nodes.coords = vec![0., 0., 1000., 0., 1000., 1200., 0., 1200.];
+    input.nodes.fixed = vec![7, 7, 0, 0];
+    input.stud_walls[0].layout.floor = Some(zone);
+    let value = serde_json::to_value(&input).unwrap();
+    assert_eq!(value["studWalls"][0]["layout"]["floor"]["rimEa"], 1e8);
+    let decoded: carapace_input::input_v1::CarapaceInputV1 =
+        serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded.clone()).unwrap(), value);
+    let mut s = decode(decoded).unwrap();
+    let o = s.advance(10);
+    assert!(o.done && o.error.is_none(), "{o:?}");
+    let got = o.recorder_batches[0].samples[0].1;
+
+    let mut d: Domain = Domain::new();
+    let n0 = d.add_node(Node::new([0., 0.]).fix(0).fix(1).fix(2));
+    let n1 = d.add_node(Node::new([1000., 0.]).fix(0).fix(1).fix(2));
+    let n2 = d.add_node(Node::new([1000., 1200.]));
+    let n3 = d.add_node(Node::new([0., 1200.]));
+    let mut l = StudWallLayout {
+        length: 1000.,
+        height: 1000.,
+        studs: vec![WallStud { x: 0., ea: 1e8 }, WallStud { x: 1000., ea: 1e8 }],
+        top_ea: 1e9,
+        top_ei: Some(1e9),
+        top_distribution: ChordDistribution::Beam,
+        bottom_ea: 1e9,
+        bottom_ei: 1e9,
+        openings: vec![],
+        sheathing: Some(WallSheathing {
+            law: WallShearLaw::Linear { ga: 1e6 },
+        }),
+        foundation: false,
+        floor: None,
+    };
+    l.floor = Some(carapace_core::model::FloorZone {
+        depth: 200.,
+        ga: 5e5,
+        rim_ea: 1e8,
+    });
+    let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
+    loads[0].push(WallLoad::TopPoint {
+        x: 500.,
+        fx: 100.,
+        fy: 0.,
+    });
+    let id = d.add_element(Element::StudWall(
+        StudWall::new([n0, n1, n2, n3], vec![], l, loads).unwrap(),
+    ));
+    let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
+    d.add_element_load(
+        p,
+        id,
+        ElementLoad {
+            wall: [1., 0., 0., 0., 0., 0., 0., 0.],
+            ..Default::default()
+        },
+    );
+    let mut a = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Transformation)
+        .integrator(Integrator::LoadControl { increment: 1. })
+        .algorithm(Algorithm::Linear)
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-10,
+            max_iter: 10,
+        })
+        .build(d);
+    a.step().unwrap();
+    near_relative(got, a.domain().node(n3).displacement[0], 1e-12, "top ux");
+    // The load acts on the exterior row: the base reactions' moment is V (H + d).
+    let r = a.domain().element_stud_wall_response(id, 1.).unwrap();
+    near_relative(r.base[2].abs(), 100. * 1200., 1e-9, "base moment");
+
+    let mut bad = input_wall();
+    bad.nodes.coords = vec![0., 0., 1000., 0., 1000., 1200., 0., 1200.];
+    bad.stud_walls[0].layout.floor = Some(FloorZoneSpec { depth: 0., ..zone });
+    assert!(matches!(
+        decode(bad),
+        Err(carapace_input::input_v1::DecodeError::InvalidMacroElement {
+            table: "stud_walls",
+            ..
+        })
+    ));
+}
 #[test]
 fn macro_table_errors_are_reported() {
     let mut bad = input_wall();
@@ -265,6 +361,7 @@ fn window_layout(foundation: bool) -> WallLayoutSpec {
             law: WallShearLawSpec::Linear { ga: 1e7 },
         }),
         foundation,
+        floor: None,
     }
 }
 
@@ -446,6 +543,7 @@ fn floor_loads_window_wall_matches_direct_core() {
                 law: WallShearLaw::Linear { ga: 1e7 },
             }),
             foundation: layout.foundation,
+            floor: None,
         };
         d.add_element(Element::StudWall(
             StudWall::new(nodes, vec![], core_layout, loads).unwrap(),
@@ -609,6 +707,7 @@ fn anchorage_wire_drift_matches_direct_core() {
                 law: WallShearLawSpec::Linear { ga: GA },
             }),
             foundation: false,
+            floor: None,
         },
         loads: vec![
             SlotWallLoad {
@@ -720,6 +819,7 @@ fn anchorage_wire_drift_matches_direct_core() {
             law: WallShearLaw::Linear { ga: GA },
         }),
         foundation: false,
+        floor: None,
     };
     let wall = d.add_element(Element::StudWall(
         StudWall::new([base[0], base[1], c2, c3], vec![], layout, slots).unwrap(),
@@ -779,6 +879,7 @@ fn building_wall(name: &str, start: [f64; 2], direction: [f64; 2]) -> WallSpec {
                 law: WallShearLawSpec::Linear { ga: 1e7 },
             }),
             foundation: false,
+            floor: None,
         },
         loads: vec![],
     }
@@ -1151,63 +1252,7 @@ fn floor_transfer_loads_are_appended_to_wall_slots() {
 }
 
 #[test]
-fn floor_band_and_diaphragm_tables_decode_and_roundtrip() {
-    let mut band = empty_input(2);
-    band.nodes = NodeTable {
-        coords: vec![0., 0., 100., 0., 0., 100., 100., 100.],
-        fixed: vec![7; 4],
-        mass_node_index: vec![],
-        mass: vec![],
-    };
-    band.floor_bands = vec![FloorBandSpec {
-        bottom: vec![0, 1],
-        top: vec![2, 3],
-        layout: FloorBandLayoutSpec {
-            length: 100.,
-            depth: 100.,
-            xs: vec![0., 100.],
-            bays: vec![Some(1e3)],
-            rim_ea: 1e4,
-        },
-    }];
-    let json = serde_json::to_value(&band).unwrap();
-    let back: carapace_input::input_v1::CarapaceInputV1 =
-        serde_json::from_value(json.clone()).unwrap();
-    assert_eq!(serde_json::to_value(back.clone()).unwrap(), json);
-    assert!(decode(back).is_ok());
-    band.sequence = SequenceSpec {
-        stages: vec![StageSpec::Static {
-            id: "band".into(),
-            steps: 1,
-            integrator: IntegratorSpec::LoadControl { increment: 1. },
-            algorithm: AlgorithmSpec::Linear,
-            convergence: None,
-            hold_patterns_after: vec![],
-        }],
-        recorders: vec![RecorderSpec::FloorBandBay {
-            element_index: 0,
-            bay: 0,
-            quantity: carapace_input::input_v1::sequence::WallBayQuantity::Q,
-        }],
-    };
-    let mut session = decode(band.clone()).unwrap();
-    let outcome = session.advance(5);
-    assert!(outcome.done && outcome.error.is_none());
-    assert_eq!(outcome.recorder_batches[0].samples[0].1, 0.);
-    band.sequence.recorders = vec![RecorderSpec::FloorBandBay {
-        element_index: 0,
-        bay: 1,
-        quantity: carapace_input::input_v1::sequence::WallBayQuantity::Q,
-    }];
-    assert!(matches!(
-        decode(band),
-        Err(carapace_input::input_v1::DecodeError::InvalidRecorderBay {
-            bay: 1,
-            count: 1,
-            ..
-        })
-    ));
-
+fn diaphragm_table_decodes_and_roundtrips() {
     let mut dia = empty_input(3);
     dia.nodes = NodeTable {
         coords: vec![0., 0., 0., 100., 0., 0., 0., 0., 100., 100., 0., 100.],

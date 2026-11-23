@@ -4,73 +4,45 @@ Floor components for stud-wall models (core Rust API and `CarapaceInputV1` table
 [floor-system-plan.md](floor-system-plan.md); the walls themselves are in [stud-wall.md](stud-wall.md).
 For automatic stacked building generation, see [building.md](building.md).
 
-## 1. Floor depth: the floor band
+## 1. Floor depth: the floor zone of the wall
 
-`FloorBand` represents the floor depth `d` between the top plate of the wall below and the bottom plate of the
-wall above. Its two node rows share station positions. The local frame runs from the first to last bottom node;
-it may have any orientation in the 2D plane. Each node contributes `ux, uy` only, so the band never connects
-wall rotations.
+The floor or roof depth `d` between storeys is part of the stud wall that carries it: `StudWallLayout::floor =
+Some(FloorZone { depth, ga, rim_ea })`. The old `FloorBand` element, its `floorBands` table and the
+`floorBandBay` recorder are gone. The model, the O86 Fig. 11.7 levers, the verification and the wire form are in
+[stud-wall.md](stud-wall.md#2a-floor-zone); in short:
 
-`FloorBandLayout::between(&below, &above, d, ga, rim_ea)` forms stations from both walls' stud and pier-end
-positions. It marks bays lying inside an opening below as `None`, because segmented design has no shear transfer
-there. Supply the bottom and top node rows to `FloorBand::new` in station order. Geometry is checked when the
-analysis is built.
+- the wall's exterior top corners and top stations sit at `H + d`, framing (studs, plates, sheathing) over `0..H`
+  as before; the zone is condensed inside the wall (bays of constant shear field `ga`, a rim bar `rim_ea`, rigid
+  vertical posts to the framing), so a wall spans storey grid to storey grid;
+- the zone has **no vertical stiffness** of its own beyond the rigid posts: bearing and hold-downs are
+  `ZeroLength` links *between* walls, from the lower wall's exterior top node to the upper wall's coincident
+  bottom node (tie the two horizontally with `equal_dof`). Without those links the stacked system is a mechanism;
+- apply lateral diaphragm loads as nodal loads on the exterior top row (the sheathing level), or as top slot
+  loads, which act there when a zone exists.
 
-The band has a constant shear field in each active bay and an axial rim bar along each bay. It has **no vertical
-stiffness**: add a `ZeroLength` between corresponding bottom and top nodes for bearing, and anchorage links at
-pier ends. Without vertical links the stacked system is a mechanism. Apply lateral diaphragm loads as nodal loads
-on the band's top row (the sheathing level), spread along it the way the diaphragm delivers it.
+**Where the floor-depth couple goes.** In each bay the shear field takes the horizontal force from the exterior
+row to the framing top, half to each node, and puts its vertical couple `q·a·d` on the framing top: the rim bears
+on the wall below. So the wall carrying the zone gets the lever `V · (H + d)` at its base, and a link across the
+floor (the hold-down between storeys) carries the moment at the top of the zone, the base of the wall above:
+`R21 = F21 (H + h2)/L1` in Fig. 11.7, where `h2` is the depth of the floor or roof above that wall. Give the roof
+storey a zone too if the roof framing depth belongs in its lever.
 
-**Where the floor-depth couple goes.** In each bay the shear field takes the horizontal force from the top row
-to the bottom row, half to each node, and puts its vertical couple `q·a·d` on the **bottom row only**: the rim
-bears on the wall below. So:
+**Stacking.** Wall below (with its zone) → vertical links at each top station → wall above. The 2- and 5-storey
+tests match an exact hand calculation that walks up the stack with the A.11.7.1 storey terms over `H`, a rigid
+rotation over `d`, and true lever arms (1e-5). Compared with the code's own A.11.7.1 with `H_i = H + d` (treating
+the floor depth as flexible wall height), the rigid zone gives 4–6% less drift; leaving out the floor depth
+gives a further 4–6% less.
 
-- the wall below gets the O86 Fig. 11.7 lever `V · (H + d)` at its base;
-- a link across the band (the hold-down between storeys) carries the moment at the **top** of the band, the
-  base of the wall above: `R21 = F21 (H + h2)/L1` in Fig. 11.7, where `h2` is the depth of the floor or roof
-  above that wall.
+**Openings.** A zone bay over an opening of its own wall has no shear field, so each pier takes its own shear.
+The rim still runs over the opening as the floor-level drag strut, and the wall's own top plate also crosses it,
+so the drag runs in two struts a depth `d` apart whose couple ties the piers together slightly. Under a diaphragm
+load spread along the exterior top with a real rim, each pier's moment is within 1% of `V_p (H + d)` (0.5% in the
+test). With a very stiff rim and the whole load entering at one end it reaches about 5%.
 
-For the roof storey, put a band on top of the top wall too if the roof framing depth should be in its lever,
-and apply the roof force at that band's top row.
-
-**Stacking.** Wall below → band (bottom row = the wall's top corners and top stations; top row = the wall
-above's bottom corners and bottom stations) → wall above. The 2- and 5-storey tests match an exact hand
-calculation that walks up the stack with the A.11.7.1 storey terms over `H`, a rigid rotation over `d`, and
-true lever arms (1e-5). Compared with the code's own A.11.7.1 with `H_i = H + d` (treating the floor depth as
-flexible wall height), the rigid band gives 4–6% less drift; leaving out the floor depth gives a further 4–6% less
-than the band.
-
-**Openings in the wall below.** `between` gives the bays over an opening no shear field, so each pier takes its
-own shear. The rim still runs over the opening as the floor-level drag strut. The wall's own top plate also
-crosses it (axially), so the drag runs in two struts a depth `d` apart, and their couple ties the piers
-together slightly. Under a diaphragm load spread along the band with a real rim, each pier's moment is within
-1% of `V_p (H + d)` (0.5% in the test). With a very stiff rim and the whole load entering at one end, it reaches
-about 5%.
-
-```rust
-let layout = FloorBandLayout::between(&below_layout, &above_layout, 254.0, 1e10, 1e12)?;
-let band = FloorBand::new(bottom_nodes, top_nodes, layout)?;
-let id = domain.add_element(Element::FloorBand(band));
-// Add a vertical bearing ZeroLength at each station and Anchorage links at pier ends.
-// Apply diaphragm shear as nodal loads on the top-node row.
-let response = domain.element_floor_band_response(id).unwrap();
-```
-
-Choosing `ga`: the band's shear stiffness is the rim joist and blocking with their nailing; it is usually much
-stiffer than the walls, and a large value (a rigid stand-in such as `1e10` N/mm) is the normal choice. Bearing
-links: perpendicular-to-grain stiffness of the plates and rim at each stud, or a rigid stand-in. Very large
-stand-ins limit the solution to about 1e-9 relative.
-
-`FloorBandResponse` reports each bay's `gamma` and shear flow `q` (zero for inactive bays), plus rim axial force
-per segment (tension positive). The band is linear and stateless; it has no element loads.
-
-### 3D wall planes
-
-`FloorBand::new3(bottom, top, layout)` derives local `x` from the first to last node in the bottom row and
-local `y` from the first bottom node to the first top node. Those directions must be orthogonal within relative
-`1e-9`; every band node must lie at its declared station in that plane. No global up axis is assumed. Its DOF
-mask contains only translations with a component in either local axis; rotations and the plane-normal
-translation remain unstiffened.
+Choosing `ga`: the zone's shear stiffness is the rim joist and blocking with their nailing; it is usually much
+stiffer than the walls, and a large value (a rigid stand-in such as `1e10` N/mm) is the normal choice. Very large
+stand-ins limit the solution to about 1e-9 relative. `StudWallResponse::floor_bays` / `floor_rim` report each
+bay's `gamma` and shear flow `q` (zero over an opening) and the rim force per bay (tension positive).
 
 ## 2. Gravity: one-way joist transfer
 
@@ -168,7 +140,7 @@ domain.rigid_diaphragm(master, &level_nodes);
 `flexible_diaphragm_loads` wraps the simple-span statics in [`transfer_floor`](../core/src/model/floor.rs).
 Supports are wall lines perpendicular to the lateral load, and area loads represent lateral force per floor
 area. Returned line reactions are distributed to those supports without using wall stiffness. Use
-`lump_line_reaction` to distribute each uniform reaction piece to ordered band-top nodes by midpoint
+`lump_line_reaction` to distribute each uniform reaction piece to ordered exterior top nodes by midpoint
 tributary length; the nodal forces sum exactly to the line reaction.
 
 ```rust,ignore

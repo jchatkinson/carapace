@@ -12,10 +12,10 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, DiaphragmResponse, DofRef, Element, Element3, ElementForce, ElementOps,
-    FloorBandResponse, GaussResponse, LimitKind, LimitStateConfig, LoadPatternId, LoadSeries,
-    ModelError, Node, Node3Id, NodeId, NodeView, ShellResponse, SparseMatrix, StudWallResponse,
-    TangentSink, VectorSink, NDF, PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DiaphragmResponse, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse,
+    LimitKind, LimitStateConfig, LoadPatternId, LoadSeries, ModelError, Node, Node3Id, NodeId,
+    NodeView, ShellResponse, SparseMatrix, StudWallResponse, TangentSink, VectorSink, NDF,
+    PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -305,11 +305,6 @@ where
         element.stud_wall_response(&self.node_view(), load.as_ref())
     }
 
-    pub fn element_floor_band_response(&self, id: E::Id) -> Option<FloorBandResponse> {
-        self.elements
-            .get(id)?
-            .floor_band_response(&self.node_view())
-    }
     pub fn element_diaphragm_response(&self, id: E::Id) -> Option<DiaphragmResponse> {
         self.elements.get(id)?.diaphragm_response(&self.node_view())
     }

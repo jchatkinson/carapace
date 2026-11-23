@@ -1,3 +1,7 @@
+> Superseded in part: the `FloorBand` element of Phase 1 was folded into the stud wall as its floor zone
+> (`StudWallLayout::floor`; see [stud-wall.md](stud-wall.md#2a-floor-zone) and
+> [stud-wall-elements-plan.md](stud-wall-elements-plan.md), phase C2). This plan is kept as the design record.
+
 # Floors for stud-wall buildings: plan
 
 Status: all phases are implemented: 1 (floor band), 2 (one-way gravity transfer), 3 (pier-end anchorage

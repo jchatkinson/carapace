@@ -13,13 +13,13 @@ It is built for design:
   11.7.1.2 deflection terms for one storey, and the O86 Annex A.11.7.1 multi-storey method for stacked walls;
 - **design forces** per pier: shear flow `q` and the M/jd chord (hold-down) force.
 
-Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls`, `floorBands`,
+Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls`,
 `diaphragms`, wall slot factors and `floorLoads`). The CLI consumes the same format. PySees does not compile these
 tables and has no stud-wall model API. Implementation details
 are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
 design and its rationale in [`stud-wall-panel.md`](stud-wall-panel.md).
 
-Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [3 Sheathing laws](#3-sheathing-laws) ·
+Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [2a Floor zone](#2a-floor-zone) · [3 Sheathing laws](#3-sheathing-laws) ·
 [4 Supports](#4-supports-anchorage-and-hold-downs) · [5 Loads](#5-loads) · [6 Analysis](#6-analysis-setup) ·
 [7 Results](#7-results) · [8 Example](#8-example) · [9 Assumptions](#9-built-in-assumptions) ·
 [10 Limitations](#10-limitations) · [11 Errors and limits](#11-errors-and-limits) ·
@@ -28,7 +28,7 @@ Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [3 She
 ## 1. Geometry and nodes
 
 - **Corners.** `StudWall::new([c0, c1, c2, c3], stations, layout, loads)`. The corners go counter-clockwise from
-  bottom-left: `c0` at local `(0, 0)`, `c1` at `(L, 0)`, `c2` at `(L, H)`, `c3` at `(0, H)`. Local `x` runs
+  bottom-left: `c0` at local `(0, 0)`, `c1` at `(L, 0)`, `c2` at `(L, H)`, `c3` at `(0, H)` (at `H + d` with a [floor zone](#2a-floor-zone)). Local `x` runs
   along the bottom plate from `c0` to `c1`; local `y` is up the studs. The rectangle may have any orientation
   in the global plane; `validate` checks it against `L` and `H` (relative 1e-9) when the analysis is built.
 - **Stations** (`WallStation { chord: Top | Bottom, x, node }`) are extra exterior nodes on a plate, at local
@@ -68,6 +68,7 @@ All values are in consistent units (N and mm throughout this guide), in the wall
 | `bottom_ea`, `bottom_ei` | Bottom plate `EA` and `EI`. The bottom plate is always a beam. |
 | `openings: Vec<WallOpening>` | `x0`, `x1` (clear opening edges, where the jacks are), `head_height` (underside of header), `header_ei`, `jack_ea` (all plies of one side), `door` (cuts the bottom plate between `x0` and `x1`). |
 | `sheathing: Option<WallSheathing { law }>` | One shear law for the whole wall, applied to each pier ([Section 3](#3-sheathing-laws)). `None` for a gravity-only wall. |
+| `floor: Option<FloorZone { depth, ga, rim_ea }>` | The floor or roof depth carried by the wall top ([Section 2a](#2a-floor-zone)): exterior top corners and stations at `y = H + depth`. `None` for a wall that ends at its top plate. |
 | `foundation: bool` | The wall bears on a rigid foundation: every interior bottom-plate position (each stud and jack) is fixed internally in `u` (sill anchorage) and `v` (bearing). The bottom corners remain exterior nodes, and a bottom station replaces the internal support at its position, for hold-downs at interior pier ends ([Section 4](#4-supports-anchorage-and-hold-downs)). |
 
 **Openings.**
@@ -88,6 +89,48 @@ studs, so **without a king stud at the opening edge a pier stops at the last reg
 to the opening is unsheathed in the model. `layout.pier_ends()` lists the pier end positions. Only piers carry
 shear: sheathing above and below openings is ignored, which is segmented design
 ([Section 9](#9-built-in-assumptions)).
+
+## 2a. Floor zone
+
+`layout.floor = Some(FloorZone { depth, ga, rim_ea })` puts the floor or roof system (depth `d`) on top of the
+wall, so a stacked building's walls span storey grid to storey grid. The framing is unchanged over `0..H`; the
+exterior top corners `c2`, `c3` and every top station sit at local `y = H + d`. The zone is linear and is
+condensed with the other internals (the nonlinear `O86` and `Material` laws keep working). It consists of:
+
+- **Bays** between consecutive top positions (the two corners and every top station), each with the constant
+  shear field of the former `FloorBand` (`q = ga·γ`, energy `ga·a·d·γ²/2`), between the framing top
+  (`y = H`) and the exterior top row. A bay over an opening of this wall carries no shear (segmented design).
+  Each bay's vertical couple `q·a·d` goes to the framing top, so a lateral load on the exterior row gives the
+  wall the O86 Fig. 11.7 lever `H + d`, and a link across the floor carries the moment at its top.
+- **The rim:** an axial bar along the exterior top row, `EA = rim_ea`, in addition to the top plate. Over an
+  opening the rim and the top plate are two drag struts a depth `d` apart.
+- **Rigid vertical posts** from each top position's framing node to the exterior node at the same `x`: the
+  vertical load path. Crushing and hold-downs are the links *between* walls, at coincident nodes on the storey
+  grid, so the zone itself has no vertical flexibility.
+
+Every top station must coincide with a stud, jack or cripple position (an error otherwise), since a post stands
+there. Place stations at every stud where the wall above bears. Top slot loads act on the exterior row (see
+[Section 5](#5-loads)). `moment_top` is at the framing top; `moment_base` uses the true lever.
+
+**Stacking.** The wall above starts on new nodes coincident with the exterior top nodes of the wall below.
+Join each pair with a vertical `ZeroLength` (`Material::anchorage` at pier ends, bearing elsewhere) and tie the
+in-plane horizontals with `equal_dof`. The building builder does exactly this ([building.md](building.md)).
+
+**Verification** (`core/tests/elements/floor_zone.rs`, `stud_wall_3d.rs`):
+
+| Check | Result |
+|---|---|
+| One storey: base moment `V(H+d)` and zone flow `Σ q·a = V` (O86 Fig. 11.7 statics) | 1e-9 |
+| O86 and `Material` sheathing keep the zone: `q = V/L`, base moment `V(H+d)` | 1e-8 |
+| Slot top loads on the exterior row = nodal loads by the lever rule; base moment `wL(H+d)` | 1e-9 / 1e-10 |
+| 2- and 5-storey stacks (254 mm rigid zones) vs the exact hand walk with true levers | 1e-5 (chords, moments 1e-6) |
+| Window wall with a real rim: pier shears sum to the load; pier moments vs `V_p(H+d)` | 1e-8; 1% (0.5% observed) |
+| Rigid translation and rotation: zero element force, bay strain and rim force | 1e-9 of `GA·a` scale |
+| Layout errors named (`floor.depth`, `floor.ga`, `floor.rim_ea`, off-stud top station) | exact |
+| Equal to the former wall + `FloorBand` + links model (numbers recorded before its removal): one storey, window wall incl. bay flows and rim forces | 1e-8 |
+| Same, 2- and 5-storey stacks | 1e-6 (observed 1e-7: the old model's own statics residual is 3e-8) |
+| Z-up 3D wall equals 2D (bay flows, rim, piers, base, top displacements); Z-up 2-storey stack | 1e-10 |
+| Serial and threaded assembly | bit-identical |
 
 ## 3. Sheathing laws
 
@@ -137,7 +180,7 @@ window in a probe. The M/jd forces are right either way.
 Use `Material::anchorage(tension, slack, bearing)` on a vertical `ZeroLength` at every pier end, at the
 foundation and between storeys. It combines tension-only hold-down action and compression bearing/crushing in
 one path-independent law. Positive relative `uy` is uplift. In a between-storey link, order nodes so positive
-`uy` means the upper post rises relative to the lower one. Use the same link for each pier end of a `FloorBand`.
+`uy` means the upper post rises relative to the lower one. Use the same link for each pier end between walls.
 
 `tension` is the effective hold-down stiffness in N/mm: combine device stiffness (`T_cap / delta_max`), rod
 stiffness (`A E / L`) and fastener slip in series. Set it to zero for bearing only. `slack` is shrinkage plus
@@ -159,8 +202,9 @@ needs a hold-down (both directions).
 
 **On a floor or another wall**, leave `foundation: false` and connect the bottom plate with stations: a
 station at each stud and each opening edge, joined to the plate or wall below (shared nodes, or `ZeroLength`
-springs for bearing and slip), with hold-downs at the pier ends. For stacked storeys with floor depth, use a
-`FloorBand` between the walls ([floors.md](floors.md)); its bearing and hold-down links are external.
+springs for bearing and slip), with hold-downs at the pier ends. For stacked storeys with floor depth, give the
+lower wall a [floor zone](#2a-floor-zone): the upper wall's bottom nodes sit on its exterior top nodes, joined by
+vertical `ZeroLength` links (bearing and hold-downs) and tied horizontally with `equal_dof`.
 
 **Anchor the bottom plate along its length**, not only at its corners. If it is anchored only at the corners,
 it acts as a drag strut, and the wall comes out 1–5% more flexible than the code equations. `foundation: true`
@@ -184,6 +228,9 @@ on with a scale factor.
   `ElementLoad { wall: e_slot, ..Default::default() }` for the wall (`wall[slot] = 1.0`); the pattern's series
   and factor then scale that slot. Several patterns can scale the same slot.
 - Loads at exterior nodes (corners and stations) can also be ordinary nodal loads.
+- With a [floor zone](#2a-floor-zone), top slot loads act on the exterior top row (`y = H + depth`): the
+  horizontal part is split between the neighbouring top positions by the lever rule and goes through the zone, so
+  the base moment is `V (H + d)`; the vertical part is distributed on the top plate as before.
 - The wall rejects other element-load kinds (beam, body, edge), and other elements reject a nonzero `wall`.
 - There is no self-weight or mass: include wall weight as a top line load, or as nodal loads.
 
@@ -222,6 +269,7 @@ analysis time). All quantities are in local axes, with **axial tension positive*
 | `piers` | Per pier: `xa`, `xb`, `q` (N/mm), `gamma`; `moment_base`, `moment_top`; `jd = xb − xa`; `chords`. |
 | `base_nodes` | Force on the wall at each supported bottom position: `c0`, `c1`, bottom stations, and with `foundation` every internal bearing position, sorted by `x`. Gravity gives positive `fy`. |
 | `base` | `[Fx, Fy, M]`: the sums over `base_nodes`, with `M` about `(L/2, 0)`. |
+| `floor_bays`, `floor_rim` | With a [floor zone](#2a-floor-zone): each bay's `x0`, `x1`, shear strain `gamma` and flow `q` (zero over an opening), and the rim axial force per bay (tension positive). Empty without a zone. |
 
 **Design use.**
 - **Shear:** pier `q` is the design shear flow for sheathing and nailing.
@@ -231,7 +279,8 @@ analysis time). All quantities are in local axes, with **axial tension positive*
   `studs`) per your load combination. A +x (rightward) lateral load gives tension in the left post.
   - `moment_base` and `moment_top` are the moment of the stud axial forces about the pier mid-width, CCW
     positive. They equal the overturning from everything above that section, so a +x load gives negative
-    values, and `moment_top = moment_base + q·b·H`.
+    values, and `moment_top = moment_base + q·b·H`. With a floor zone `moment_top` is at the framing top
+    (`y = H`), while `moment_base` carries the true lever: a load at the exterior top gives `V (H + d)`.
 - **Do not size hold-downs from the end-stud force** when interior studs bear (`foundation: true` or bearing
   stations). Interior studs then carry part of the overturning, and the end-stud force is 4–11% below M/jd in
   the 2- and 5-storey tests.
@@ -404,8 +453,8 @@ reports its M/jd chord forces for its two hold-downs.
 - Shear lag: the plates' and end posts' axial flexibility under the linearly varying edge forces is included
   in series with the law.
 - Interior studs inside a pier get equal and opposite sheathing traction, so they carry no lag force.
-- `FloorBand` has no vertical bearing or anchorage stiffness. Those connections must be modelled externally; omit
-  them and the stacked model has a mechanism.
+- A floor zone has no vertical bearing or anchorage stiffness (its posts are rigid). Those connections are the
+  links between walls, modelled externally; omit them and the stacked model has a mechanism.
 
 **Code alignment.**
 - With rigid plates, end posts `EA` and rigid anchorage, one pier reproduces the SDPWS/O86 bending and shear
@@ -442,6 +491,8 @@ very soft or descending `Material` branches.
 - openings out of range (`0 < x0 < x1 < L`, `0 < head_height < H`), overlapping, or without a full-height
   stud between them;
 - with `Direct`, a top station not at a stud or cripple; a bottom station inside a door;
+- a floor zone with a non-positive or non-finite `depth` or `ga`, a negative or non-finite `rim_ea`, or (with the
+  zone) a top station not at a stud, jack or cripple position (`Beam` also allows opening edges);
 - corners or stations reusing a node; a singular internal stiffness (a layout bug, never regularized);
 - too many exterior nodes (256) or, for `O86`/`Material` walls, more than 16 piers.
 
@@ -463,10 +514,11 @@ Each check below is a test in `core/tests/elements/stud_wall*.rs`. The docs site
 | Consistent tangent vs finite differences (O86, hysteretic) | 1e-6 |
 | Cyclic `Steel01` sheathing vs the material driven directly | 1e-5 |
 | Window wall with king studs and hold-downs at every pier end vs separate pier walls + drag strut (`Direct` and rim-stiff `Beam` top plates) | 1e-10 |
-| FloorBand constant shear response, objectivity and rigid-body modes vs energy hand equations | 1e-12 |
-| One-storey wall on FloorBand: base moment versus `V(H+d)` | 1e-9 |
-| 2- and 5-storey walls with 254 mm floor bands vs an exact hand walk (A.11.7.1 terms, rigid band) | 1e-5 |
-| Window wall under a floor band: pier moments vs `V_p(H+d)` (rim and top-plate drag couple) | 1% |
+| Floor zone: rigid-body modes, bays over an opening, zone shear flow integrates to the load | 1e-9 to 1e-12 |
+| One-storey wall with a floor zone: base moment versus `V(H+d)` | 1e-9 |
+| 2- and 5-storey walls with 254 mm floor zones vs an exact hand walk (A.11.7.1 terms, rigid zone) | 1e-5 |
+| Window wall with a floor zone: pier moments vs `V_p(H+d)` (rim and top-plate drag couple) | 1% |
+| Wall with a floor zone vs the former wall + `FloorBand` + links model (recorded) | 1e-8 (stacks 1e-6) |
 | Single-storey wall on `Anchorage` links vs O86 11.7.1.2 with `d_a = slack + T/k + crush(C)` | 1e-5 |
 | Window wall with nonlinear `Anchorage` at all pier ends vs separate pier walls | 1e-10 |
 | 3D walls (along X, Z, 30°: window wall, takedown, O86 law, L corner) vs the 2D wall | 1e-10 (1e-9 nonlinear) |

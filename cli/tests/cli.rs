@@ -92,13 +92,7 @@ fn io_errors_and_schema() {
     let (output, json) = run(&["schema"]);
     assert!(output.status.success());
     assert!(json["properties"]["header"].is_object());
-    for table in [
-        "studWalls",
-        "floorBands",
-        "diaphragms",
-        "floorLoads",
-        "building",
-    ] {
+    for table in ["studWalls", "diaphragms", "floorLoads", "building"] {
         assert!(
             json["properties"][table].is_object(),
             "schema missing {table}"

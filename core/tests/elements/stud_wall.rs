@@ -30,6 +30,7 @@ fn layout() -> StudWallLayout {
         openings: vec![],
         sheathing: None,
         foundation: false,
+        floor: None,
     }
 }
 
@@ -110,6 +111,7 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
             },
         }),
         foundation: false,
+        floor: None,
     };
     many_piers.studs.last_mut().unwrap().x = 390.;
     let error = StudWall::new(c, vec![], many_piers, std::array::from_fn(|_| vec![])).unwrap_err();
@@ -306,6 +308,7 @@ fn frame_layout(distribution: ChordDistribution, door: bool) -> StudWallLayout {
         }],
         sheathing: None,
         foundation: false,
+        floor: None,
     }
 }
 fn wall_loads() -> [Vec<WallLoad>; WALL_SLOTS] {
@@ -1114,6 +1117,7 @@ fn single_sheathed_pier_matches_sdpws_terms() {
             law: carapace_core::model::WallShearLaw::Linear { ga },
         }),
         foundation: false,
+        floor: None,
     };
     l.height = height;
     let mut d: D2 = Domain::new();
@@ -1196,6 +1200,7 @@ fn single_o86_pier_matches_nonlinear_deflection() {
             },
         }),
         foundation: false,
+        floor: None,
     };
     l.height = height;
     let mut d: D2 = Domain::new();
@@ -1473,6 +1478,7 @@ fn adjacent_walls_with_different_ga_balance_individually_and_together() {
             law: carapace_core::model::WallShearLaw::Linear { ga },
         }),
         foundation: false,
+        floor: None,
     };
     let make_wall = |corners, ga| {
         StudWall::new(
@@ -1556,6 +1562,7 @@ fn unloaded_stations_inside_a_pier_leave_response_unchanged() {
                 law: carapace_core::model::WallShearLaw::Linear { ga: 2e5 },
             }),
             foundation: false,
+            floor: None,
         };
         let id = d.add_element(Element::StudWall(
             StudWall::new(corners, stations, layout, std::array::from_fn(|_| vec![])).unwrap(),

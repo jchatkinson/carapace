@@ -63,13 +63,6 @@ impl PlaneMap {
         }
         out
     }
-    pub fn global(&self, f: [f64; 2]) -> ArrayVec<f64, 3> {
-        self.slots
-            .iter()
-            .enumerate()
-            .map(|(k, _)| self.t[k][0] * f[0] + self.t[k][1] * f[1])
-            .collect()
-    }
     pub fn point(&self, p: &[f64]) -> (f64, f64, f64) {
         let d = [
             p[0] - self.origin[0],

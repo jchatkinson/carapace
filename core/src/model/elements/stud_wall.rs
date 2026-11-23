@@ -4,7 +4,8 @@
 //! The framing is linear elastic. Each full-height pier carries one constant shear field whose law is linear
 //! (`ga`), the CSA O86:19 shear-plus-nail-slip law, or any uniaxial [`Material`]. Linear walls are condensed
 //! once at construction; nonlinear walls condense the bare frame and solve a small per-pier system at each
-//! state. Exterior DOFs are `ux, uy` only.
+//! state. Exterior DOFs are `ux, uy` only. An optional [`FloorZone`] puts the floor depth above the framing
+//! (exterior top nodes at `y = H + depth`) and condenses it with the rest.
 //!
 //! User guide (layout, laws, supports, loads, analysis, results, assumptions, limitations):
 //! `docs/stud-wall.md`. Implementation spec and verification: `docs/stud-wall-v1.md`.
@@ -12,6 +13,7 @@
 use arrayvec::ArrayVec;
 use nalgebra::{DMatrix, DVector};
 
+use super::floor_zone::{bay_response, bay_stiffness};
 use super::wall_plane::PlaneMap;
 use super::{DofMask, NodeView, TangentSink, VectorSink};
 use crate::model::{ElementForce, ElementLoad, Material, Node3Id, NodeId, NodeKey};
@@ -141,6 +143,21 @@ pub struct WallStation<K = NodeId> {
     /// The exterior node; distinct from the corners and other stations.
     pub node: K,
 }
+/// The floor or roof depth carried by the wall top, between the framing top (`y = H`) and the exterior top row
+/// (`y = H + depth`): constant-shear bays between consecutive top positions (the corners and every top station),
+/// an axial rim bar along the exterior top row, and rigid vertical posts from each top position's framing node to
+/// its exterior node (the vertical load path; crushing and hold-downs belong to the links between walls). It
+/// reproduces the O86:19 Fig. 11.7 levers `H + depth` for the wall's overturning.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloorZone {
+    /// Depth `d` of the floor system, `> 0`.
+    pub depth: f64,
+    /// Shear rigidity `GA` (force per length) of the floor diaphragm, `> 0`. Bays over an opening of this wall
+    /// carry no shear field (segmented design); the rim spans them.
+    pub ga: f64,
+    /// Rim axial stiffness `EA` (all of it, `>= 0`), along the exterior top row, in addition to the top plate.
+    pub rim_ea: f64,
+}
 /// Framing of one wall, in its local frame (`x` along the bottom plate from `c0` to `c1`, `y` up the studs) and
 /// consistent units. Validated by [`StudWall::new`].
 #[derive(Debug, Clone)]
@@ -171,6 +188,10 @@ pub struct StudWallLayout {
     /// internal support at its position, so hold-downs can attach at interior pier ends
     /// ([`StudWallLayout::pier_ends`]).
     pub foundation: bool,
+    /// Floor zone above the framing. With it the exterior top corners and top stations sit at local
+    /// `y = H + depth`, top-slot loads act on that row, and every top station must coincide with a stud, jack or
+    /// cripple position.
+    pub floor: Option<FloorZone>,
 }
 impl StudWallLayout {
     /// Pier end-post positions (each pier's `xa` and `xb`, in `x` order): where segmented design needs
@@ -292,8 +313,31 @@ pub struct StudWallResponse {
     pub base_nodes: Vec<WallBaseResponse>,
     /// `[Fx, Fy, M]`: sums over `base_nodes`, `M = Σ (x − L/2)·fy`.
     pub base: [f64; 3],
+    /// Floor-zone bays between consecutive top positions (empty without a zone).
+    pub floor_bays: Vec<WallFloorBay>,
+    /// Rim axial force per bay (tension positive; empty without a zone).
+    pub floor_rim: Vec<f64>,
+}
+/// One floor-zone bay's shear field. `q` is zero for a bay over an opening.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WallFloorBay {
+    pub x0: f64,
+    pub x1: f64,
+    /// Shear strain.
+    pub gamma: f64,
+    /// Shear flow `ga·gamma`.
+    pub q: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ZoneBayRec {
+    x0: f64,
+    x1: f64,
+    /// `[bottom i, bottom j, top i, top j]`, each `(u, v)`.
+    dofs: [usize; 8],
+    /// Shear rigidity; zero over an opening.
+    ga: f64,
+}
 #[derive(Clone, Copy, Debug)]
 struct BarRec {
     x: f64,
@@ -380,6 +424,7 @@ pub struct StudWall<K: NodeKey = NodeId> {
     piers: Vec<PierRec>,
     top_nodes: Vec<(f64, [usize; 3])>,
     bottom_nodes: Vec<(f64, [usize; 3])>,
+    zone_bays: Vec<ZoneBayRec>,
     prepared: Option<PreparedAssembly>,
     prepared_nonlinear: Option<PreparedNonlinear>,
     full_stiffness: Option<DMatrix<f64>>,
@@ -499,6 +544,7 @@ impl<K: NodeKey> StudWall<K> {
             layout.height,
             WallChord::Top,
             top_dofs,
+            layout.floor.is_some(),
             &corners,
             &stations,
             &nodes,
@@ -509,10 +555,61 @@ impl<K: NodeKey> StudWall<K> {
             0.,
             WallChord::Bottom,
             3,
+            false,
             &corners,
             &stations,
             &nodes,
         );
+        // Floor zone: bays between consecutive top positions (corners and top stations), rim included.
+        let mut zone_bays = Vec::new();
+        if let Some(z) = layout.floor {
+            let mut pos: Vec<(f64, usize)> = vec![(0., 3), (layout.length, 2)];
+            for (j, s) in stations.iter().enumerate() {
+                if s.chord == WallChord::Top {
+                    pos.push((s.x, 4 + j));
+                }
+            }
+            pos.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let tol = 1e-9 * layout.length;
+            for w in pos.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let fa = find_chord(&top_nodes, a.0)
+                    .ok_or_else(|| StudWallError("missing top position node".into()))?;
+                let fb = find_chord(&top_nodes, b.0)
+                    .ok_or_else(|| StudWallError("missing top position node".into()))?;
+                let ga = if layout
+                    .openings
+                    .iter()
+                    .any(|o| a.0 >= o.x0 - tol && b.0 <= o.x1 + tol)
+                {
+                    0.
+                } else {
+                    z.ga
+                };
+                let dofs = [
+                    fa[0],
+                    fa[1],
+                    fb[0],
+                    fb[1],
+                    2 * a.1,
+                    2 * a.1 + 1,
+                    2 * b.1,
+                    2 * b.1 + 1,
+                ];
+                let k = bay_stiffness(b.0 - a.0, z.depth, ga, z.rim_ea);
+                for i in 0..8 {
+                    for j in 0..8 {
+                        model.k[(dofs[i], dofs[j])] += k[(i, j)];
+                    }
+                }
+                zone_bays.push(ZoneBayRec {
+                    x0: a.0,
+                    x1: b.0,
+                    dofs,
+                    ga,
+                });
+            }
+        }
         let mut header_nodes = Vec::new();
         for o in &layout.openings {
             let mut xs = vec![o.x0, o.x1];
@@ -688,13 +785,36 @@ impl<K: NodeKey> StudWall<K> {
             None
         };
         let (kc, recovery, _ki) = model.condense(ne)?;
+        // Horizontal top loads act on the exterior top row when there is a floor zone.
+        let ext_top: Vec<(f64, usize)> = if layout.floor.is_some() {
+            let mut v = vec![(0., 6), (layout.length, 4)];
+            v.extend(
+                stations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.chord == WallChord::Top)
+                    .map(|(j, s)| (s.x, 2 * (4 + j))),
+            );
+            v.sort_by(|a, b| a.0.total_cmp(&b.0));
+            v
+        } else {
+            Vec::new()
+        };
         let mut load_slots = Vec::with_capacity(WALL_SLOTS);
         let mut load_recovery = Vec::with_capacity(WALL_SLOTS);
         let mut full_load_slots = Vec::with_capacity(WALL_SLOTS);
         for (slot, slot_loads) in loads.iter().enumerate() {
             let mut p = DVector::zeros(model.ndof);
             for l in slot_loads {
-                discretize_load(l, slot, &layout, &top_nodes, &top_segments, &mut p)?;
+                discretize_load(
+                    l,
+                    slot,
+                    &layout,
+                    &top_nodes,
+                    &top_segments,
+                    &ext_top,
+                    &mut p,
+                )?;
             }
             if let Some(cache) = &mut nonlinear {
                 cache
@@ -738,7 +858,12 @@ impl<K: NodeKey> StudWall<K> {
                         } else {
                             [0.; 6]
                         };
-                        [v[0], v[3]]
+                        // A floor zone takes the horizontal load on the exterior row, not on the plate.
+                        if layout.floor.is_some() {
+                            [0., 0.]
+                        } else {
+                            [v[0], v[3]]
+                        }
                     })
                     .collect()
             })
@@ -765,6 +890,7 @@ impl<K: NodeKey> StudWall<K> {
             piers,
             top_nodes,
             bottom_nodes,
+            zone_bays,
             prepared: None,
             prepared_nonlinear: None,
             full_stiffness,
@@ -808,8 +934,8 @@ impl<K: NodeKey> StudWall<K> {
         let p = self.corners.map(|id| nodes.get(id).coords);
         let map = PlaneMap::from_corners(p[0], p[1], p[3])?;
         let l = self.layout.length;
-        let h = self.layout.height;
-        let tol = 1e-9 * self.layout.length.max(self.layout.height).max(1.);
+        let h = self.layout.height + self.layout.floor.map_or(0., |z| z.depth);
+        let tol = 1e-9 * self.layout.length.max(h).max(1.);
         let expected = [(0., 0.), (l, 0.), (l, h), (0., h)];
         for (i, point) in p.iter().enumerate() {
             let (x, y, off) = map.point(point);
@@ -829,11 +955,7 @@ impl<K: NodeKey> StudWall<K> {
         for s in &self.stations {
             let q = nodes.get(s.node).coords;
             let (x, y, off) = map.point(&q);
-            let target = if s.chord == WallChord::Top {
-                self.layout.height
-            } else {
-                0.
-            };
+            let target = if s.chord == WallChord::Top { h } else { 0. };
             if (x - s.x).abs().max((y - target).abs()).max(off.abs()) > tol {
                 return Err("station does not lie at its declared chord location");
             }
@@ -1170,6 +1292,19 @@ impl<K: NodeKey> StudWall<K> {
                 r.base[1] += fy;
                 r.base[2] += (x - self.layout.length / 2.) * fy;
                 r.base_nodes.push(WallBaseResponse { x, fx, fy });
+            }
+        }
+        if let Some(z) = self.layout.floor {
+            for b in &self.zone_bays {
+                let u: [f64; 8] = std::array::from_fn(|i| disp(b.dofs[i]));
+                let (gamma, q, rim) = bay_response(b.x1 - b.x0, z.depth, b.ga, z.rim_ea, &u);
+                r.floor_bays.push(WallFloorBay {
+                    x0: b.x0,
+                    x1: b.x1,
+                    gamma,
+                    q,
+                });
+                r.floor_rim.push(rim);
             }
         }
         if !self.foundation_supports.is_empty() {
@@ -1672,6 +1807,24 @@ fn validate_layout<K: NodeKey>(
             return Err(StudWallError(format!("{name} must be positive and finite")));
         }
     }
+    if let Some(z) = &l.floor {
+        for (name, v, ok) in [
+            ("floor.depth", z.depth, z.depth > 0.),
+            ("floor.ga", z.ga, z.ga > 0.),
+            ("floor.rim_ea", z.rim_ea, z.rim_ea >= 0.),
+        ] {
+            if !v.is_finite() || !ok {
+                return Err(StudWallError(format!(
+                    "{name} must be finite and {}",
+                    if name == "floor.rim_ea" {
+                        "nonnegative"
+                    } else {
+                        "positive"
+                    }
+                )));
+            }
+        }
+    }
     if l.top_distribution == ChordDistribution::Beam
         && l.top_ei.is_none_or(|x| !x.is_finite() || x <= 0.)
     {
@@ -1784,6 +1937,24 @@ fn validate_layout<K: NodeKey>(
         {
             return Err(StudWallError(format!("stations[{i}] lies inside a door")));
         }
+        if l.floor.is_some()
+            && s.chord == WallChord::Top
+            && !l
+                .studs
+                .iter()
+                .map(|w| w.x)
+                .chain(
+                    l.openings
+                        .iter()
+                        .filter(|_| l.top_distribution == ChordDistribution::Beam)
+                        .flat_map(|o| [o.x0, o.x1]),
+                )
+                .any(|x| (x - s.x).abs() < 1e-12 * l.length.max(1.))
+        {
+            return Err(StudWallError(format!(
+                "stations[{i}] floor-zone top station must coincide with a stud, jack or cripple position"
+            )));
+        }
         if l.top_distribution == ChordDistribution::Direct
             && s.chord == WallChord::Top
             && !l.studs.iter().any(|w| w.x == s.x)
@@ -1807,6 +1978,7 @@ fn make_chord_nodes<K: NodeKey>(
     y: f64,
     chord: WallChord,
     nslot: usize,
+    zone: bool,
     corners: &[K; 4],
     stations: &[WallStation<K>],
     nodes: &[K],
@@ -1833,7 +2005,17 @@ fn make_chord_nodes<K: NodeKey>(
                     .and_then(|s| nodes.iter().position(|n| *n == s.node).map(|i| (s.node, i)))
             };
             let mut d = [None; 3];
-            if let Some((_, i)) = external {
+            if let (Some((_, i)), true) = (external, zone && chord == WallChord::Top) {
+                // Under a floor zone the framing node keeps its own `u` and shares the exterior node's `v`
+                // (the rigid post); the exterior `u` is reached through the zone bays.
+                model.grow();
+                d[0] = Some(model.ndof - 1);
+                d[1] = Some(2 * i + 1);
+                if nslot == 3 {
+                    model.grow();
+                    d[2] = Some(model.ndof - 1);
+                }
+            } else if let Some((_, i)) = external {
                 d[0] = Some(2 * i);
                 d[1] = Some(2 * i + 1);
                 if nslot == 3 {
@@ -2069,14 +2251,32 @@ fn discretize_load(
     l: &StudWallLayout,
     nodes: &[(f64, [usize; 3])],
     segments: &[ChordSegment],
+    ext_top: &[(f64, usize)],
     p: &mut DVector<f64>,
 ) -> Result<(), StudWallError> {
+    // Lever-rule split of a horizontal force onto the exterior top row (floor zone only).
+    let lever = |p: &mut DVector<f64>, x: f64, f: f64| {
+        let i = ext_top
+            .windows(2)
+            .position(|w| x <= w[1].0)
+            .unwrap_or(ext_top.len() - 2);
+        let (a, b) = (ext_top[i], ext_top[i + 1]);
+        let t = ((x - a.0) / (b.0 - a.0)).clamp(0., 1.);
+        p[a.1] += (1. - t) * f;
+        p[b.1] += t * f;
+    };
     let mut point = |x: f64, fx: f64, fy: f64| -> Result<(), StudWallError> {
         if ![x, fx, fy].iter().all(|v| v.is_finite()) || x < 0. || x > l.length {
             return Err(StudWallError(format!(
                 "loads[{slot}] contains invalid coordinates or intensities"
             )));
         }
+        let fx = if ext_top.is_empty() {
+            fx
+        } else {
+            lever(p, x, fx);
+            0.
+        };
         if let Some((_, d)) = nodes
             .iter()
             .find(|(xx, _)| (*xx - x).abs() < 1e-12 * l.length)
@@ -2164,6 +2364,12 @@ fn discretize_load(
                     let wy = wy0 + (wy1 - wy0) * t;
                     let s = (x - w[0].0) / (w[1].0 - w[0].0);
                     let fac = dx * gw;
+                    let wx = if ext_top.is_empty() {
+                        wx
+                    } else {
+                        lever(p, x, fac * wx);
+                        0.
+                    };
                     if l.top_distribution == ChordDistribution::Direct {
                         for (d, v) in [
                             (w[0].1[0], (1. - s) * wx),

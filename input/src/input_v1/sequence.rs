@@ -599,11 +599,6 @@ pub enum RecorderSpec {
         wall: String,
         component: StudWallBaseComponent,
     },
-    FloorBandBay {
-        element_index: u32,
-        bay: u32,
-        quantity: WallBayQuantity,
-    },
     DiaphragmBay {
         element_index: u32,
         bay: u32,

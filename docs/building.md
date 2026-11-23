@@ -14,15 +14,20 @@ let mut domain = building.domain;
 Each `WallSpec` defines a vertical wall plane by a plan start, unit direction and local `WallLayoutSpec`.
 Stations are generated at stud rows and pier ends. Storey zero has `foundation: true`; interior pier ends are
 connected to fixed ground nodes with the selected anchorage law. At an upper storey, matching named walls must
-have identical plan start, direction and length. A positive `floorDepth` creates a `FloorBand` with external
-vertical links; zero depth connects adjacent walls with vertical anchorage/bearing links. A final positive depth
-creates a roof band whose links are linear in tension and compression (stiffness `bearing`): nothing bears on it, so a tension-free link would let its top row lift.
+have identical plan start, direction and length. A positive `floorDepth` gives the storey's walls a
+[floor zone](stud-wall.md#2a-floor-zone) (`depth = floorDepth`, `ga = bandGa`, `rimEa`), including the roof storey:
+the wall spans storey grid to storey grid, its exterior top row (a station at every stud) lies at `H + floorDepth`,
+and the wall above starts on new nodes coincident with it. Each pair of coincident nodes is tied in the wall plane
+(`equal_dof`) and joined by a vertical `ZeroLength` link: the anchorage law at pier ends, linear bearing
+(`bearing`, compression only) elsewhere. A zero depth links the walls the same way with no zone. A roof zone
+needs no links. A wall layout's own `floor` is rejected: the zone comes from the storey. The wall above has bottom
+stations at every stud of the wall below; its pier ends must be among them (`BuildError` otherwise).
 
 Rigid diaphragms retain one node at the centroid of the level nodes. A lateral load's force is applied at that
 node, and its plan offset becomes the moment about `+Y`, `M_y = f_x (z - z_m) - f_z (x - x_m)` (`r × F`), the
 convention of `Domain3::rigid_diaphragm` (a rotation `θ` moves a point by `θ dz` in x and `-θ dx` in z).
 Flexible diaphragms span between the wall lines that resist the load (lines parallel to it), distribute it by
-the floor transfer statics, and lump each reaction onto the wall's level stations. Nodal loads are summed per
+the floor transfer statics, and lump each reaction onto the wall's exterior top stations. Nodal loads are summed per
 node and DOF before they are added to the domain (`add_nodal_load` replaces an existing value for the same node
 and DOF). Unsupported plan-normal motion is restrained at the level nodes. Semi-rigid diaphragms are not
 selected through this builder; add a core `Diaphragm` explicitly.
@@ -41,8 +46,7 @@ combinations independently.
 - Floor bounds are rectangles, supports are full wall lines, and a floor has one axis-aligned span direction.
 - A storey has one diaphragm idealization, shared by all its levels in this phase. Flexible distribution is a
   tributary statics model; use a core semi-rigid diaphragm element when floor stiffness matters.
-- Pier ends receive anchorage links. Other band stations receive linear bearing. Roof-band links are linear
-  both ways with the `bearing` stiffness.
+- Pier ends receive anchorage links. Other stations receive linear bearing (compression only).
 - Plan-normal translation at flexible diaphragm stations is restrained. Crossing wall lines are not merged into
   common nodes by this builder.
 - Loads and material parameters must be finite; invalid names, slots, wall alignment and support geometry return
@@ -55,7 +59,7 @@ combinations independently.
 | Case | Reference | Tolerance |
 | --- | --- | ---: |
 | One storey, one X wall + two Z returns, rigid: X wall carries the whole storey shear | statics | 1e-9 |
-| Symmetric two-storey box with a 254 mm band: each X wall takes half of each storey; lower base moment `5000(2H + d) + 5000(H + d)` | statics, O86 Fig. 11.7 levers | 1e-8 |
+| Symmetric two-storey box with a 254 mm floor zone: each X wall takes half of each storey; lower base moment `5000(2H + d) + 5000(H + d)` | statics, O86 Fig. 11.7 levers | 1e-8 |
 | Eccentric X force, rigid, four separate equal walls: shears `F/2 ∓ M d/J`, `+Y` rotation | rigid-body stiffness + torsion split | 1e-8 |
 | Flexible, three parallel lines under uniform load: 3/6/3 kN | tributary reactions | 1e-9 |
 | Floor D + L at 1.25D + 1.5L to a window wall: base 32e6 N, header 4.8e6 N per end from the cripple tributaries | hand takedown | 1e-9 |

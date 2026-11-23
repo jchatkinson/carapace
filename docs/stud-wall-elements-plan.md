@@ -1,6 +1,6 @@
 # Plan: stud walls as ordinary elements (Carapace and PySees)
 
-Status: C1 complete; C2–C4 and P1–P5 proposed, 2026-11-23. Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
+Status: C1 and C2 complete; C3–C4 and P1–P5 proposed, 2026-11-23. Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
 approach.
 
 ## Why
@@ -17,7 +17,7 @@ of which the user can edit after a template has generated them.
    zone of depth `d` at the top: sheathing, studs and chords stay over the framed height `H`; the zone carries the
    storey force down to the framing as the band does now (couple into the chords, O86 Fig. 11.7 levers `H + d`),
    and the rim's EA adds to the top chord (one drag strut over openings, which also settles the rim + top plate
-   coupling question). The rim's shear stiffness is taken as rigid. The `FloorBand` element and its tables
+   coupling question). The zone keeps the band's shear stiffness (`floor_ga`) and its vertical load path is rigid posts at the top stations; crushing and hold-downs stay in the links between the walls. The `FloorBand` element and its tables
    are removed.
 2. **Geometry defines the wall plane.** A wall's local x runs `c0 → c1` and local y `c0 → c3`, in 2D and 3D, with no
    up axis assumed, so Z-up PySees models and Y-up models both work. The `plane` field goes. The semi-rigid
@@ -61,11 +61,18 @@ its normal from its grid nodes (axis-aligned grids in any of the three planes). 
 keep passing; new tests: the same wall in a Y-up and a Z-up model, and a skew wall, agree to 1e-10; a Z-up diaphragm
 equals the Y-up one.
 
-**C2. Floor zone in the wall; FloorBand removed.** `StudWallLayout { floor_depth, rim_ea, .. }`: exterior top
+**C2. Floor zone in the wall; FloorBand removed — done.** `StudWallLayout { floor: Option<FloorZone { depth, ga, rim_ea }>, .. }`: exterior top
 corners and stations sit at `H + d`; the zone is condensed internally. Verification: equal to today's wall +
 FloorBand with a stiff band (1e-9); the 2- and 5-storey stacks and the O86 Fig. 11.7 hand checks
 (`floor_band.rs`) pass on the new form; drift and hold-down results of the guide example unchanged. Remove
 `FloorBand`, its tables, `floorBandBay`, docs.
+
+*Outcome.* Implemented as briefed (`FloorZone`, `floor_zone.rs` bay math shared by the wall, rigid posts by
+sharing the exterior node's `v` DOF with the framing node, builder on coincident nodes + `ZeroLength3` links +
+`equal_dof`). Top slot loads: the horizontal part goes on the exterior row by the lever rule, the vertical part
+stays on the top plate (a vertical force has the same line of action either way, so gravity hand values are
+unchanged). The equivalence to the old band model holds to 1e-8 (stacks 1e-6): the recorded references carry
+that model's own conditioning noise (its statics residual is 3e-8).
 
 **C3. Pattern-owned wall loads.** The wall keeps an internal list of load cases (each a prepared load vector);
 `ElementLoad` carries `wall: Option<(case, factor)>` (Copy, no cap) instead of `[f64; 8]`. Wire: an element load

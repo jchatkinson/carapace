@@ -668,28 +668,6 @@ pub struct WallStationSpec {
 #[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct FloorBandSpec {
-    pub bottom: Vec<u32>,
-    pub top: Vec<u32>,
-    pub layout: FloorBandLayoutSpec,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct FloorBandLayoutSpec {
-    pub length: f64,
-    pub depth: f64,
-    pub xs: Vec<f64>,
-    pub bays: Vec<Option<f64>>,
-    pub rim_ea: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "camelCase")]
 pub struct DiaphragmSpec {
     pub nodes: Vec<u32>,
     pub layout: DiaphragmLayoutSpec,
@@ -762,12 +740,11 @@ pub enum ElementKind {
     Shell4,
     EmbeddedBar,
     StudWall,
-    FloorBand,
     Diaphragm,
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 17] = [
+    pub const ALL: [ElementKind; 16] = [
         ElementKind::Truss,
         ElementKind::ElasticBeamColumn2d,
         ElementKind::ElasticBeamColumn3d,
@@ -783,7 +760,6 @@ impl ElementKind {
         ElementKind::Shell4,
         ElementKind::EmbeddedBar,
         ElementKind::StudWall,
-        ElementKind::FloorBand,
         ElementKind::Diaphragm,
     ];
 
@@ -805,7 +781,6 @@ impl ElementKind {
             ElementKind::Shell4 => "shell4s",
             ElementKind::EmbeddedBar => "embedded_bars",
             ElementKind::StudWall => "stud_walls",
-            ElementKind::FloorBand => "floor_bands",
             ElementKind::Diaphragm => "diaphragms",
         }
     }
@@ -826,7 +801,7 @@ impl ElementKind {
             | ElementKind::ForceBeamColumn3d
             | ElementKind::Shell3
             | ElementKind::Shell4 => Some(3),
-            ElementKind::StudWall | ElementKind::FloorBand => None,
+            ElementKind::StudWall => None,
             ElementKind::Diaphragm => Some(3),
         }
     }

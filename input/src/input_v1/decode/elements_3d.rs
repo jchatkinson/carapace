@@ -3,11 +3,10 @@
 
 use carapace_core::model::{
     Axis3, ChordDistribution, Diaphragm, DiaphragmLayout, DispBeamColumn3, Domain3,
-    ElasticBeamColumn3, Element3, Element3Id, ElementLoad3, Fiber3, FiberSection3, FloorBand,
-    FloorBandLayout, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3, Shell4,
-    ShellModifiers, ShellSection, StudWall, StudWallLayout, Truss3, WallChord, WallLoad,
-    WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3,
-    ZeroLengthSection3,
+    ElasticBeamColumn3, Element3, Element3Id, ElementLoad3, Fiber3, FiberSection3, FloorZone,
+    ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3, Shell4, ShellModifiers,
+    ShellSection, StudWall, StudWallLayout, Truss3, WallChord, WallLoad, WallOpening, WallShearLaw,
+    WallSheathing, WallStation, WallStud, ZeroLength3, ZeroLengthSection3,
 };
 
 use super::shared::{
@@ -77,7 +76,6 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
             ("shell3s", !input.shell3s.node_ids.is_empty()),
             ("shell4s", !input.shell4s.node_ids.is_empty()),
             ("studWalls", !input.stud_walls.is_empty()),
-            ("floorBands", !input.floor_bands.is_empty()),
             ("diaphragms", !input.diaphragms.is_empty()),
             ("equalDofs", !input.equal_dofs.retained.is_empty()),
             (
@@ -210,10 +208,6 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
                 .iter()
                 .flat_map(|level| level.values().map(|w| w.element))
                 .collect(),
-        );
-        elements.set(
-            ElementKind::FloorBand,
-            building.bands.iter().flatten().copied().collect(),
         );
         return finish(
             building.domain,
@@ -404,10 +398,6 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
         )?,
     );
     elements.set(
-        ElementKind::FloorBand,
-        decode_floor_bands3(&mut domain, &input.floor_bands, &node_at)?,
-    );
-    elements.set(
         ElementKind::Diaphragm,
         decode_diaphragms(&mut domain, &input.diaphragms, &node_at)?,
     );
@@ -479,6 +469,11 @@ fn layout3(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
             },
         }),
         foundation: l.foundation,
+        floor: l.floor.map(|z| FloorZone {
+            depth: z.depth,
+            ga: z.ga,
+            rim_ea: z.rim_ea,
+        }),
     }
 }
 fn load3(l: WallLoadSpec) -> WallLoad {
@@ -560,44 +555,6 @@ fn decode_stud_walls3(
             }
         })?;
         out.push(d.add_element(Element3::StudWall(w)));
-    }
-    Ok(out)
-}
-fn decode_floor_bands3(
-    d: &mut Domain3,
-    t: &[crate::input_v1::tables::FloorBandSpec],
-    node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
-) -> Result<Vec<Element3Id>, DecodeError> {
-    let mut out = Vec::with_capacity(t.len());
-    for (i, r) in t.iter().enumerate() {
-        let b = r
-            .bottom
-            .iter()
-            .map(|&x| node(x, "floor_bands"))
-            .collect::<Result<Vec<_>, _>>()?;
-        let top = r
-            .top
-            .iter()
-            .map(|&x| node(x, "floor_bands"))
-            .collect::<Result<Vec<_>, _>>()?;
-        let l = &r.layout;
-        let band = FloorBand::new3(
-            b,
-            top,
-            FloorBandLayout {
-                length: l.length,
-                depth: l.depth,
-                xs: l.xs.clone(),
-                bays: l.bays.clone(),
-                rim_ea: l.rim_ea,
-            },
-        )
-        .map_err(|e| DecodeError::InvalidMacroElement {
-            table: "floor_bands",
-            row: i as u32,
-            reason: e.to_string(),
-        })?;
-        out.push(d.add_element(Element3::FloorBand(band)));
     }
     Ok(out)
 }

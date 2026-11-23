@@ -48,6 +48,7 @@ fn layout(window: bool) -> WallLayoutSpec {
             law: WallShearLawSpec::Linear { ga: 1e7 },
         }),
         foundation: false,
+        floor: None,
     }
 }
 fn wall(name: &str, start: [f64; 2], direction: [f64; 2], window: bool) -> WallSpec {
@@ -167,7 +168,7 @@ fn two_storey_box_band_and_symmetric_shear() {
         at: [2000., 2000.],
     });
     let built = build(&spec(vec![a, b], DiaphragmKind::Rigid)).unwrap();
-    assert!(!built.bands[0].is_empty());
+    assert!(!built.links[0].is_empty());
     assert_eq!(built.walls[1].len(), 4);
     let front = built.walls[1]["front"].element;
     let back = built.walls[1]["back"].element;

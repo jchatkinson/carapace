@@ -43,12 +43,14 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
   condensed onto corner and station nodes) for gravity takedowns and segmented shear-wall design: per-pier
   sheathing law (linear, CSA O86 nail slip, or any uniaxial material), M/jd chord forces, internal
   foundation bearing. Core Rust API only for now; see [`docs/stud-wall.md`](docs/stud-wall.md)
-- [x] FloorBand — 2D and vertical-plane 3D floor-depth strip with bay shear fields and rim axial force; bearing and hold-down links
-- [x] Diaphragm — 3D horizontal semi-rigid floor diaphragm with independent shear-panel bays and axial grid members
-  are external `ZeroLength` elements. Core Rust API only; see [`docs/floors.md`](docs/floors.md)
+- [x] Floor zone of the stud wall — the floor or roof depth carried at the wall top (bay shear fields, rim axial
+  force, rigid posts), so walls span storey grid to storey grid; bearing and hold-down links between walls are
+  external `ZeroLength` elements; see [`docs/stud-wall.md`](docs/stud-wall.md#2a-floor-zone)
+- [x] Diaphragm — 3D horizontal semi-rigid floor diaphragm with independent shear-panel bays and axial grid members.
+  Core Rust API only; see [`docs/floors.md`](docs/floors.md)
 - [x] One-way floor gravity transfer — rectangular area, line and point loads to wall and beam supports by
   simple-span statics or continuous-beam reactions. Core Rust API only; see [`docs/floors.md`](docs/floors.md)
-- [x] Native 3D stacked stud-wall building builder — generated stations, anchorage, bands, diaphragms, floor
+- [x] Native 3D stacked stud-wall building builder — generated stations, anchorage, floor zones, diaphragms, floor
   transfer, and independent load-slot combinations; see [`docs/building.md`](docs/building.md)
 - [x] 2D co-rotational transform (large-displacement geometry)
 - [ ] 3D co-rotational transform — scoped, deliberately shelved: unlike planar

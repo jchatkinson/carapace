@@ -119,6 +119,20 @@ pub struct WallLayoutSpec {
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub foundation: bool,
+    /// Floor zone above the framing (stud-wall tables only; a building takes it from its storey).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub floor: Option<FloorZoneSpec>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FloorZoneSpec {
+    pub depth: f64,
+    pub ga: f64,
+    pub rim_ea: f64,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

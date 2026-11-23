@@ -53,6 +53,7 @@ fn guide_example_runs() {
             },
         }),
         foundation: true,
+        floor: None,
     };
 
     let mut d: Domain<2, 3, NodeId, Element> = Domain::new();

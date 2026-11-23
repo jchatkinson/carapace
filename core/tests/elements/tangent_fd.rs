@@ -122,6 +122,7 @@ fn o86_stud_wall_matches_central_difference() {
             },
         }),
         foundation: false,
+        floor: None,
     };
     let wall = StudWall::new(ids, vec![], layout, std::array::from_fn(|_| vec![])).unwrap();
     let mut element = Element::StudWall(wall);
@@ -190,6 +191,7 @@ fn nonlinear_door_wall_with_slot_load_matches_central_difference() {
             }],
             sheathing: Some(WallSheathing { law }),
             foundation: false,
+            floor: None,
         };
         let loads = std::array::from_fn(|slot| {
             if slot == 0 {

@@ -86,6 +86,7 @@ fn solve(v_total: f64, slack: f64) -> Out {
             law: WallShearLaw::Linear { ga: GA },
         }),
         foundation: false,
+        floor: None,
     };
     let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| Vec::new());
     let line = |wx: f64, wy: f64| WallLoad::TopLine {

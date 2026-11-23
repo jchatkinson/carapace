@@ -8,10 +8,10 @@ use carapace_core::model::continuum::{bond_polyline, embed_polyline_in, BondSpec
 use carapace_core::model::{
     ChordDistribution, CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain,
     ElasticBeamColumn, Element, ElementId, ElementLoad, EmbeddedBar, EmbeddedBarHost, Fiber,
-    FiberSection, FloorBand, FloorBandLayout, ForceBeamColumn, Friction, GeomTransf, Material,
-    NodeId, PlaneMaterial, Quad4, Quad4Formulation, StudWall, StudWallLayout, Tri3, Truss,
-    WallChord, WallLoad, WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud,
-    ZeroLength, ZeroLengthSection,
+    FiberSection, FloorZone, ForceBeamColumn, Friction, GeomTransf, Material, NodeId,
+    PlaneMaterial, Quad4, Quad4Formulation, StudWall, StudWallLayout, Tri3, Truss, WallChord,
+    WallLoad, WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength,
+    ZeroLengthSection,
 };
 
 use super::shared::{
@@ -187,10 +187,6 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
             &floor_wall_loads,
         )?,
     );
-    elements.set(
-        ElementKind::FloorBand,
-        decode_floor_bands(&mut domain, &input.floor_bands, &node_at)?,
-    );
 
     let mut bar_end_loads = Vec::new();
     let model_output = add_embedded_bars(
@@ -284,6 +280,11 @@ fn decode_layout(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
             },
         }),
         foundation: l.foundation,
+        floor: l.floor.map(|z| FloorZone {
+            depth: z.depth,
+            ga: z.ga,
+            rim_ea: z.rim_ea,
+        }),
     }
 }
 fn decode_wall_load(l: WallLoadSpec) -> WallLoad {
@@ -365,44 +366,6 @@ fn decode_stud_walls(
             }
         })?;
         out.push(domain.add_element(Element::StudWall(wall)));
-    }
-    Ok(out)
-}
-fn decode_floor_bands(
-    domain: &mut Domain,
-    t: &[crate::input_v1::tables::FloorBandSpec],
-    node: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
-) -> Result<Vec<ElementId>, DecodeError> {
-    let mut out = Vec::with_capacity(t.len());
-    for (i, r) in t.iter().enumerate() {
-        let b = r
-            .bottom
-            .iter()
-            .map(|&x| node(x, "floor_bands"))
-            .collect::<Result<Vec<_>, _>>()?;
-        let top = r
-            .top
-            .iter()
-            .map(|&x| node(x, "floor_bands"))
-            .collect::<Result<Vec<_>, _>>()?;
-        let l = &r.layout;
-        let band = FloorBand::new(
-            b,
-            top,
-            FloorBandLayout {
-                length: l.length,
-                depth: l.depth,
-                xs: l.xs.clone(),
-                bays: l.bays.clone(),
-                rim_ea: l.rim_ea,
-            },
-        )
-        .map_err(|e| DecodeError::InvalidMacroElement {
-            table: "floor_bands",
-            row: i as u32,
-            reason: e.to_string(),
-        })?;
-        out.push(domain.add_element(Element::FloorBand(band)));
     }
     Ok(out)
 }
