@@ -15,6 +15,7 @@ pub use ops::{
 mod disp_beam_column;
 mod elastic_beam_column;
 mod embedded_bar;
+mod floor_band;
 mod force_beam_column;
 mod plane_common;
 mod quad4;
@@ -29,6 +30,7 @@ mod zero_length;
 pub use disp_beam_column::{DispBeamColumn, DispBeamColumn3};
 pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use embedded_bar::{EmbeddedBar, EmbeddedBarHost};
+pub use floor_band::{FloorBand, FloorBandBay, FloorBandError, FloorBandLayout, FloorBandResponse};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
 pub use quad4::{Quad4, Quad4Formulation};
 pub use shell3::Shell3;
@@ -74,6 +76,7 @@ pub enum Element {
     Quad4(Quad4),
     EmbeddedBar(EmbeddedBar),
     StudWall(StudWall),
+    FloorBand(FloorBand),
 }
 
 const CONTINUUM: &str =
@@ -91,6 +94,7 @@ impl Element {
                 EmbeddedBarHost::Rod { nodes, .. } => nodes.iter().copied().collect(),
             },
             Element::StudWall(wall) => NodeList::Borrowed(wall.nodes()),
+            Element::FloorBand(band) => NodeList::Borrowed(band.nodes()),
             _ => self.pair().into_iter().collect(),
         }
     }
@@ -101,7 +105,8 @@ impl Element {
             Element::Tri3(_)
             | Element::Quad4(_)
             | Element::EmbeddedBar(_)
-            | Element::StudWall(_) => {
+            | Element::StudWall(_)
+            | Element::FloorBand(_) => {
                 unreachable!("{CONTINUUM}")
             }
             Element::Truss(t) => [t.node_i, t.node_j],
@@ -138,7 +143,8 @@ impl Element {
             Element::Tri3(_)
             | Element::Quad4(_)
             | Element::EmbeddedBar(_)
-            | Element::StudWall(_) => {
+            | Element::StudWall(_)
+            | Element::FloorBand(_) => {
                 unreachable!("{CONTINUUM}")
             }
         }
@@ -204,7 +210,8 @@ impl Element {
             Element::Tri3(_)
             | Element::Quad4(_)
             | Element::EmbeddedBar(_)
-            | Element::StudWall(_) => {
+            | Element::StudWall(_)
+            | Element::FloorBand(_) => {
                 unreachable!("{CONTINUUM}")
             }
         }
@@ -226,7 +233,8 @@ impl Element {
             Element::Tri3(_)
             | Element::Quad4(_)
             | Element::EmbeddedBar(_)
-            | Element::StudWall(_) => {
+            | Element::StudWall(_)
+            | Element::FloorBand(_) => {
                 unreachable!("{CONTINUUM}")
             }
         }
@@ -247,7 +255,8 @@ impl Element {
             Element::Tri3(_)
             | Element::Quad4(_)
             | Element::EmbeddedBar(_)
-            | Element::StudWall(_) => {
+            | Element::StudWall(_)
+            | Element::FloorBand(_) => {
                 unreachable!("{CONTINUUM}")
             }
         }
@@ -265,7 +274,8 @@ impl Element {
             | Element::Tri3(_)
             | Element::Quad4(_)
             | Element::EmbeddedBar(_)
-            | Element::StudWall(_) => None,
+            | Element::StudWall(_)
+            | Element::FloorBand(_) => None,
         }
     }
 }
@@ -291,6 +301,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Quad4(q) => q.dof_mask(),
             Element::EmbeddedBar(bar) => bar.dof_mask(),
             Element::StudWall(wall) => wall.dof_mask(),
+            Element::FloorBand(band) => band.dof_mask(),
         }
     }
 
@@ -299,6 +310,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Tri3(t) => t.validate(nodes),
             Element::Quad4(q) => q.validate(nodes),
             Element::StudWall(wall) => wall.validate(nodes),
+            Element::FloorBand(band) => band.validate(nodes),
             _ => Ok(()),
         }
     }
@@ -321,6 +333,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             // displacements; it carries no element load of its own.
             Element::EmbeddedBar(_) => false,
             Element::StudWall(wall) => wall.accepts_load(load),
+            Element::FloorBand(band) => band.accepts_load(load),
         }
     }
 
@@ -329,6 +342,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Tri3(t) => t.prepare(nodes),
             Element::Quad4(q) => q.prepare(nodes),
             Element::StudWall(wall) => wall.prepare(nodes),
+            Element::FloorBand(band) => band.prepare(nodes),
             _ => {}
         }
     }
@@ -411,6 +425,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Quad4(q) => return q.assemble_tangent(nodes, sink),
             Element::EmbeddedBar(bar) => return bar.assemble_tangent(nodes, sink),
             Element::StudWall(wall) => return wall.assemble_tangent(nodes, load, sink),
+            Element::FloorBand(band) => return band.assemble_tangent(nodes, sink),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -433,6 +448,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             }
             (Element::EmbeddedBar(_), _) => return,
             (Element::StudWall(wall), load) => return wall.assemble_load(nodes, load, sink),
+            (Element::FloorBand(band), load) => return band.assemble_load(nodes, load, sink),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -450,6 +466,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Quad4(q) => return q.assemble_mass(nodes, sink),
             Element::EmbeddedBar(_) => return,
             Element::StudWall(_) => return,
+            Element::FloorBand(_) => return,
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -467,6 +484,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Quad4(q) => return q.commit(nodes),
             Element::EmbeddedBar(bar) => return bar.commit(nodes),
             Element::StudWall(wall) => return wall.commit(nodes, load),
+            Element::FloorBand(band) => return band.commit(nodes, load),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -479,6 +497,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Quad4(_) => 8,
             Element::EmbeddedBar(bar) => bar.local_force_width(),
             Element::StudWall(wall) => wall.local_force_width(),
+            Element::FloorBand(band) => band.local_force_width(),
             _ => ELEMENT_DOF,
         }
     }
@@ -489,6 +508,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Quad4(q) => return q.local_force(nodes),
             Element::EmbeddedBar(bar) => return bar.local_force(nodes),
             Element::StudWall(wall) => return wall.local_force(nodes),
+            Element::FloorBand(band) => return band.local_force(nodes),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -518,6 +538,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
                 }
             }
             Element::StudWall(wall) => return wall.local_load_force(nodes, load),
+            Element::FloorBand(band) => return band.local_load_force(nodes, load),
             _ => {}
         }
         let [i, j] = Element::pair(self);
@@ -1118,7 +1139,7 @@ mod mask_conformance {
 
     #[test]
     fn planar_elements_declare_the_slots_they_stiffen() {
-        let (nodes, a, b) = nodes_2d();
+        let (mut nodes, a, b) = nodes_2d();
         let fibers = || {
             vec![
                 Fiber::new(10.0, 100.0, steel()),
@@ -1215,6 +1236,31 @@ mod mask_conformance {
                 fibers(),
                 BeamIntegration::Lobatto { points: 3 },
             )),
+            &nodes,
+            true,
+        );
+        let fb = [
+            nodes.insert(Node::new([0.0, 0.0])),
+            nodes.insert(Node::new([10.0, 0.0])),
+            nodes.insert(Node::new([10.0, 1.0])),
+            nodes.insert(Node::new([0.0, 1.0])),
+        ];
+        check(
+            "FloorBand",
+            &Element::FloorBand(
+                FloorBand::new(
+                    vec![fb[0], fb[1]],
+                    vec![fb[3], fb[2]],
+                    FloorBandLayout {
+                        length: 10.0,
+                        depth: 1.0,
+                        xs: vec![0.0, 10.0],
+                        bays: vec![Some(100.0)],
+                        rim_ea: 100.0,
+                    },
+                )
+                .unwrap(),
+            ),
             &nodes,
             true,
         );

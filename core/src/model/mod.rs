@@ -15,14 +15,15 @@ pub use domain::{Domain, Domain3};
 pub use elements::{
     two_node_dofs, ChordDistribution, DispBeamColumn, DispBeamColumn3, DofMask, DofRef,
     ElasticBeamColumn, ElasticBeamColumn3, Element, Element3, Element3Id, ElementForce, ElementId,
-    ElementOps, EmbeddedBar, EmbeddedBarHost, ForceBeamColumn, ForceBeamColumn3, Friction,
-    Friction3, GaussResponse, NodeList, NodeView, Orientation, OrientationError, Quad4,
-    Quad4Formulation, Shell3, Shell4, ShellResponse, SpatialElementMatrix, SpatialElementVector,
-    StudWall, StudWallError, StudWallLayout, StudWallResponse, TangentSink, Tri3, Truss, Truss3,
-    VectorSink, WallAxialResponse, WallBaseResponse, WallChord, WallChordResponse,
-    WallHeaderResponse, WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallShearLaw,
-    WallSheathing, WallStation, WallStud, ZeroLength, ZeroLength3, ZeroLengthSection,
-    ZeroLengthSection3, MAX_ELEMENT_NODES,
+    ElementOps, EmbeddedBar, EmbeddedBarHost, FloorBand, FloorBandBay, FloorBandError,
+    FloorBandLayout, FloorBandResponse, ForceBeamColumn, ForceBeamColumn3, Friction, Friction3,
+    GaussResponse, NodeList, NodeView, Orientation, OrientationError, Quad4, Quad4Formulation,
+    Shell3, Shell4, ShellResponse, SpatialElementMatrix, SpatialElementVector, StudWall,
+    StudWallError, StudWallLayout, StudWallResponse, TangentSink, Tri3, Truss, Truss3, VectorSink,
+    WallAxialResponse, WallBaseResponse, WallChord, WallChordResponse, WallHeaderResponse,
+    WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallShearLaw, WallSheathing,
+    WallStation, WallStud, ZeroLength, ZeroLength3, ZeroLengthSection, ZeroLengthSection3,
+    MAX_ELEMENT_NODES,
 };
 pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};

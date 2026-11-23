@@ -1,6 +1,9 @@
 # Floors for stud-wall buildings: plan
 
-Status: plan, nothing implemented. Companion to `stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
+Status: Phase 1 implemented in the core Rust API. `FloorBand` provides the floor depth, bay shear fields and rim
+axial stiffness. Per-position bearing and hold-down links are external `ZeroLength` elements (the initial plan's
+internal vertical links are deliberately not part of the band). Phases 2–4 remain planned. Companion to
+`stud-wall.md` (user guide) and `stud-wall-v1.md` (wall spec).
 
 ## 1. What a floor has to do
 
@@ -134,9 +137,10 @@ The band is the stud wall's own frame:
 - the rim plays the plates;
 - the shear field is the sheathing field.
 
-So `FloorBand` is a thin constructor over the `StudWall` frame builder (`FrameBuild`, `add_sheathing`,
-condensation) with simpler inputs: the depth, the rim, the bearing stiffness and the shear stiffness. It isn't a
-second implementation.
+The implemented `FloorBand` uses direct constant-shear bay stiffness and axial rim bars. There are no internal
+vertical springs or condensed DOFs: users add bearing and hold-down `ZeroLength` elements between corresponding
+bottom and top nodes. Omitting those links leaves a mechanism. This keeps anchorage laws available to evolve
+independently in Phase 3.
 
 ### Results
 

@@ -12,10 +12,10 @@ use super::load_pattern::{
     active_element_patterns, effective_element_load, ElementLoadComponents, LoadPattern,
 };
 use super::{
-    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, GaussResponse, LimitKind,
-    LimitStateConfig, LoadPatternId, LoadSeries, ModelError, Node, Node3Id, NodeId, NodeView,
-    ShellResponse, SparseMatrix, StudWallResponse, TangentSink, VectorSink, NDF, PLANAR_NDIM,
-    SPATIAL_NDF, SPATIAL_NDIM,
+    Axis3, DofRef, Element, Element3, ElementForce, ElementOps, FloorBandResponse, GaussResponse,
+    LimitKind, LimitStateConfig, LoadPatternId, LoadSeries, ModelError, Node, Node3Id, NodeId,
+    NodeView, ShellResponse, SparseMatrix, StudWallResponse, TangentSink, VectorSink, NDF,
+    PLANAR_NDIM, SPATIAL_NDF, SPATIAL_NDIM,
 };
 
 /// Every `(equation, coefficient)` term one node-dof contributes to the
@@ -1841,6 +1841,17 @@ impl Domain {
         let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
         let load = effective_element_load(&active, id);
         Some(wall.response(&self.node_view(), load.as_ref()))
+    }
+
+    /// Recovered floor-band shear and rim forces at the current state.
+    pub fn element_floor_band_response(
+        &self,
+        id: crate::model::ElementId,
+    ) -> Option<FloorBandResponse> {
+        let Element::FloorBand(band) = self.elements.get(id)? else {
+            return None;
+        };
+        Some(band.response(&self.node_view()))
     }
 
     pub fn rigid_diaphragm(&mut self, retained: NodeId, constrained: &[NodeId]) {

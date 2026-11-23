@@ -43,6 +43,8 @@ how to extend it are described in [`docs/architecture.md`](docs/architecture.md)
   condensed onto corner and station nodes) for gravity takedowns and segmented shear-wall design: per-pier
   sheathing law (linear, CSA O86 nail slip, or any uniaxial material), M/jd chord forces, internal
   foundation bearing. Core Rust API only for now; see [`docs/stud-wall.md`](docs/stud-wall.md)
+- [x] FloorBand — 2D floor-depth strip with bay shear fields and rim axial force; bearing and hold-down links
+  are external `ZeroLength` elements. Core Rust API only; see [`docs/stud-wall.md`](docs/stud-wall.md)
 - [x] 2D co-rotational transform (large-displacement geometry)
 - [ ] 3D co-rotational transform — scoped, deliberately shelved: unlike planar
   rotations (a single commuting scalar angle), 3D rotations don't commute, so

@@ -13,8 +13,9 @@ It is built for design:
   11.7.1.2 deflection terms for one storey, and the O86 Annex A.11.7.1 multi-storey method for stacked walls;
 - **design forces** per pier: shear flow `q` and the M/jd chord (hold-down) force.
 
-Status: core Rust API only (`carapace-core`, 2D `Domain`). It is not yet in the JSON wire format, the CLI, the
-Python package or PySees. Implementation details are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
+Status: core Rust API only (`carapace-core`, 2D `Domain`). `FloorBand` supports stacking storeys with floor depth.
+Neither element is yet in the JSON wire format, the CLI, the Python package or PySees. Implementation details
+are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
 design and its rationale in [`stud-wall-panel.md`](stud-wall-panel.md).
 
 Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [3 Sheathing laws](#3-sheathing-laws) ·
@@ -129,8 +130,8 @@ needs a hold-down (both directions).
 
 **On a floor or another wall**, leave `foundation: false` and connect the bottom plate with stations: a
 station at each stud and each opening edge, joined to the plate or wall below (shared nodes, or `ZeroLength`
-springs for bearing and slip), with hold-downs at the pier ends. Stack storeys by sharing or linking corner nodes. Put the hold-downs between the end posts
-of consecutive storeys, as in `core/tests/elements/stud_wall_multistorey.rs`.
+springs for bearing and slip), with hold-downs at the pier ends. For stacked storeys with floor depth, use a
+`FloorBand` between the walls ([floors.md](floors.md)); its bearing and hold-down links are external.
 
 **Anchor the bottom plate along its length**, not only at its corners. If it is anchored only at the corners,
 it acts as a drag strut, and the wall comes out 1–5% more flexible than the code equations. `foundation: true`
@@ -372,6 +373,8 @@ reports its M/jd chord forces for its two hold-downs.
 - Shear lag: the plates' and end posts' axial flexibility under the linearly varying edge forces is included
   in series with the law.
 - Interior studs inside a pier get equal and opposite sheathing traction, so they carry no lag force.
+- `FloorBand` has no vertical bearing or anchorage stiffness. Those connections must be modelled externally; omit
+  them and the stacked model has a mechanism.
 
 **Code alignment.**
 - With rigid plates, end posts `EA` and rigid anchorage, one pier reproduces the SDPWS/O86 bending and shear
@@ -390,6 +393,7 @@ Not modelled, or not yet available:
   (segmented design only).
 - Nonlinear or hysteretic framing members; staged sheathing installation.
 - Internal hold-downs, tension-only bearing and slip inside the element: use exterior `ZeroLength`s.
+- A built-in floor band is core Rust only; wire format and automatic storey builder are not implemented.
 - Unilateral interior-stud bearing (uplift of interior studs).
 - Automatic station generation.
 - O86 gypsum `e_n`, unblocked `J_us` and the no-hold-down `d_a` equation (11.7.1.2); SDPWS's nail-slip form.
@@ -427,6 +431,10 @@ Each check below is a test in `core/tests/elements/stud_wall*.rs`. The docs site
 | Consistent tangent vs finite differences (O86, hysteretic) | 1e-6 |
 | Cyclic `Steel01` sheathing vs the material driven directly | 1e-5 |
 | Window wall with king studs and hold-downs at every pier end vs separate pier walls + drag strut (`Direct` and rim-stiff `Beam` top plates) | 1e-10 |
+| FloorBand constant shear response, objectivity and rigid-body modes vs energy hand equations | 1e-12 |
+| One-storey wall on FloorBand: base moment versus `V(H+d)` | 1e-9 |
+| 2- and 5-storey walls with 254 mm floor bands vs an exact hand walk (A.11.7.1 terms, rigid band) | 1e-5 |
+| Window wall under a floor band: pier moments vs `V_p(H+d)` (rim and top-plate drag couple) | 1% |
 
 Realistic variants of the 2- and 5-storey walls, compared with O86 A.11.7.1:
 
