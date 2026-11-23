@@ -93,10 +93,8 @@ fn io_errors_and_schema() {
     assert!(output.status.success());
     assert!(json["properties"]["header"].is_object());
     for table in [
-        "studWalls2d",
-        "studWalls3d",
-        "floorBands2d",
-        "floorBands3d",
+        "studWalls",
+        "floorBands",
         "diaphragms",
         "floorLoads",
         "building",

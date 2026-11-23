@@ -1,94 +1,7 @@
 use arrayvec::ArrayVec;
 use nalgebra::DMatrix;
 
-/// Where a wall-type element's local in-plane axes sit in the model.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum WallPlane {
-    /// The model plane; its x axis follows the first two base nodes.
-    Planar,
-    /// A vertical plane with a unit plan direction and global Y up.
-    Vertical { ex: f64, ez: f64 },
-}
-
-impl WallPlane {
-    /// Creates a vertical plane after checking that its plan direction is unit length. A component below 1e-12
-    /// (e.g. `cos 90°`) is snapped to zero, so an axis-aligned wall does not activate a near-zero-stiffness slot.
-    pub fn vertical(ex: f64, ez: f64) -> Result<Self, String> {
-        if !ex.is_finite() || !ez.is_finite() || ((ex * ex + ez * ez).sqrt() - 1.0).abs() > 1e-9 {
-            return Err("wall plane direction must be finite and unit length".into());
-        }
-        let snap = |v: f64| if v.abs() < 1e-12 { 0. } else { v };
-        let (ex, ez) = (snap(ex), snap(ez));
-        let n = ex.hypot(ez);
-        Ok(Self::Vertical {
-            ex: ex / n,
-            ez: ez / n,
-        })
-    }
-
-    pub(crate) fn slots(&self) -> ArrayVec<u8, 3> {
-        let mut out = ArrayVec::new();
-        match *self {
-            Self::Planar => out.extend([0, 1]),
-            Self::Vertical { ex, ez } => {
-                if ex != 0. {
-                    out.push(0);
-                }
-                out.push(1);
-                if ez != 0. {
-                    out.push(2);
-                }
-            }
-        }
-        out
-    }
-
-    pub(crate) fn map<const NDIM: usize>(&self, p0: [f64; NDIM], p1: [f64; NDIM]) -> PlaneMap {
-        let mut origin = [0.; 3];
-        origin[..NDIM.min(3)].copy_from_slice(&p0[..NDIM.min(3)]);
-        match *self {
-            Self::Planar => {
-                let dx = p1[0] - p0[0];
-                let dy = p1[1] - p0[1];
-                let l = dx.hypot(dy);
-                let (c, s) = (dx / l, dy / l);
-                let mut slots = ArrayVec::new();
-                slots.extend([0, 1]);
-                let mut t = ArrayVec::new();
-                t.extend([[c, -s], [s, c]]);
-                PlaneMap {
-                    slots,
-                    t,
-                    origin,
-                    ex: [c, s, 0.],
-                    ey: [-s, c, 0.],
-                }
-            }
-            Self::Vertical { ex, ez } => {
-                let mut slots = ArrayVec::new();
-                let mut t = ArrayVec::new();
-                if ex != 0. {
-                    slots.push(0);
-                    t.push([ex, 0.]);
-                }
-                slots.push(1);
-                t.push([0., 1.]);
-                if ez != 0. {
-                    slots.push(2);
-                    t.push([ez, 0.]);
-                }
-                PlaneMap {
-                    slots,
-                    t,
-                    origin,
-                    ex: [ex, 0., ez],
-                    ey: [0., 1., 0.],
-                }
-            }
-        }
-    }
-}
-
+/// Geometry-derived map between a wall's two local translations and global translations.
 #[derive(Debug, Clone)]
 pub(crate) struct PlaneMap {
     pub slots: ArrayVec<u8, 3>,
@@ -99,6 +12,49 @@ pub(crate) struct PlaneMap {
 }
 
 impl PlaneMap {
+    /// Derives local x from `c0 -> c1` and local y from `c0 -> c3`.
+    pub fn from_corners<const NDIM: usize>(
+        p0: [f64; NDIM],
+        p1: [f64; NDIM],
+        p3: [f64; NDIM],
+    ) -> Result<Self, &'static str> {
+        let mut origin = [0.; 3];
+        let mut dx = [0.; 3];
+        let mut dy = [0.; 3];
+        for i in 0..NDIM.min(3) {
+            origin[i] = p0[i];
+            dx[i] = p1[i] - p0[i];
+            dy[i] = p3[i] - p0[i];
+        }
+        let lx = dx.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let ly = dy.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if !lx.is_finite() || !ly.is_finite() || lx <= f64::MIN_POSITIVE || ly <= f64::MIN_POSITIVE
+        {
+            return Err("wall axes are degenerate");
+        }
+        let ex = dx.map(|v| v / lx);
+        let ey = dy.map(|v| v / ly);
+        let dot = ex.iter().zip(ey).map(|(a, b)| a * b).sum::<f64>();
+        if !dot.is_finite() || dot.abs() > 1e-9 {
+            return Err("wall axes are not orthogonal");
+        }
+        let mut slots = ArrayVec::new();
+        let mut t = ArrayVec::new();
+        for i in 0..NDIM.min(3) {
+            if ex[i].abs() > 1e-12 || ey[i].abs() > 1e-12 {
+                slots.push(i as u8);
+                t.push([ex[i], ey[i]]);
+            }
+        }
+        Ok(Self {
+            slots,
+            t,
+            origin,
+            ex,
+            ey,
+        })
+    }
+
     pub fn local(&self, d: &[f64]) -> [f64; 2] {
         let mut out = [0.; 2];
         for (k, &slot) in self.slots.iter().enumerate() {
@@ -177,7 +133,6 @@ impl PlaneMap {
         }
         out
     }
-    // This maps local strain rows back to the global translation columns, so the map is required.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_global_rows(&self, local: &DMatrix<f64>, n_nodes: usize) -> Vec<f64> {
         let m = self.slots.len();

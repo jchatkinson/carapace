@@ -20,7 +20,7 @@ use crate::input_v1::session::{ModelSession, ResolvedBulk, ResolvedRecorder};
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, EqualDofTable, FiberTable, FrictionRow,
     IntegrationSpec, LinearConstraintTable, LoadPatternTable, NodeTable, OrientRow,
-    RigidDiaphragmTable, RigidLinkTable,
+    RigidDiaphragmTable, RigidLinkTable, StudWallSpec,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -35,6 +35,75 @@ pub(super) fn check_dof_within(
     } else {
         Err(DecodeError::InvalidDof { table, row, dof })
     }
+}
+
+pub(super) fn validate_stud_wall_geometry(
+    nodes: &NodeTable,
+    ndm: usize,
+    wall: &StudWallSpec,
+) -> Result<(), &'static str> {
+    let point = |index: u32| -> [f64; 3] {
+        let mut p = [0.; 3];
+        for (axis, coord) in p.iter_mut().enumerate().take(ndm) {
+            *coord = nodes.coords[index as usize * ndm + axis];
+        }
+        p
+    };
+    let p = wall.corners.map(point);
+    let mut dx = [0.; 3];
+    let mut dy = [0.; 3];
+    for axis in 0..3 {
+        dx[axis] = p[1][axis] - p[0][axis];
+        dy[axis] = p[3][axis] - p[0][axis];
+    }
+    let norm = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let (lx, ly) = (norm(dx), norm(dy));
+    if !lx.is_finite() || !ly.is_finite() || lx <= f64::MIN_POSITIVE || ly <= f64::MIN_POSITIVE {
+        return Err("wall axes are degenerate");
+    }
+    let dot = (0..3).map(|i| dx[i] * dy[i]).sum::<f64>();
+    if !dot.is_finite() || dot.abs() > 1e-9 * lx * ly {
+        return Err("wall axes are not orthogonal");
+    }
+    let ex = dx.map(|x| x / lx);
+    let ey = dy.map(|x| x / ly);
+    let cross = [
+        ex[1] * ey[2] - ex[2] * ey[1],
+        ex[2] * ey[0] - ex[0] * ey[2],
+        ex[0] * ey[1] - ex[1] * ey[0],
+    ];
+    let length = wall.layout.length;
+    let height = wall.layout.height;
+    let tol = 1e-9 * length.max(height).max(1.);
+    let expected = [(0., 0.), (length, 0.), (length, height), (0., height)];
+    let local = |q: [f64; 3]| {
+        let r = [q[0] - p[0][0], q[1] - p[0][1], q[2] - p[0][2]];
+        let x = (0..3).map(|i| r[i] * ex[i]).sum::<f64>();
+        let y = (0..3).map(|i| r[i] * ey[i]).sum::<f64>();
+        let off = (0..3).map(|i| r[i] * cross[i]).sum::<f64>().abs();
+        (x, y, off)
+    };
+    for (i, q) in p.iter().enumerate() {
+        let (x, y, off) = local(*q);
+        if off
+            .max((x - expected[i].0).abs())
+            .max((y - expected[i].1).abs())
+            > tol
+        {
+            return Err("corner geometry does not match the wall layout");
+        }
+    }
+    for station in &wall.stations {
+        let (x, y, off) = local(point(station.node));
+        let target = match station.chord {
+            crate::building::WallChordSpec::Top => height,
+            crate::building::WallChordSpec::Bottom => 0.,
+        };
+        if (x - station.x).abs().max((y - target).abs()).max(off) > tol {
+            return Err("station does not lie at its declared chord location");
+        }
+    }
+    Ok(())
 }
 
 fn invalid_row(table: &'static str, row: usize, reason: &'static str) -> DecodeError {
@@ -670,7 +739,7 @@ where
                 kind.is_shell()
             }
             ElementLoadSpec::WallSlots { .. } => {
-                matches!(kind, ElementKind::StudWall2d | ElementKind::StudWall3d)
+                matches!(kind, ElementKind::StudWall)
             }
         };
         if !carried {
@@ -761,10 +830,7 @@ where
                     element_index,
                     component,
                 } => {
-                    if !matches!(
-                        element_kind,
-                        ElementKind::StudWall2d | ElementKind::StudWall3d
-                    ) {
+                    if !matches!(element_kind, ElementKind::StudWall) {
                         return Err(DecodeError::RecorderNotApplicable {
                             recorder: index as u32,
                             reason: "studWallBase needs a stud-wall element",
@@ -780,12 +846,7 @@ where
                     bay,
                     quantity,
                 } => {
-                    let kind = if ndm == 2 {
-                        ElementKind::FloorBand2d
-                    } else {
-                        ElementKind::FloorBand3d
-                    };
-                    let element = elements.get(kind, element_index, ndm)?;
+                    let element = elements.get(ElementKind::FloorBand, element_index, ndm)?;
                     let count = domain
                         .element_floor_band_response(element)
                         .map_or(0, |r| r.bays.len());
@@ -830,10 +891,7 @@ where
                     pier,
                     quantity,
                 } => {
-                    if !matches!(
-                        element_kind,
-                        ElementKind::StudWall2d | ElementKind::StudWall3d
-                    ) {
+                    if !matches!(element_kind, ElementKind::StudWall) {
                         return Err(DecodeError::RecorderNotApplicable {
                             recorder: index as u32,
                             reason: "studWallPier needs a stud-wall element",

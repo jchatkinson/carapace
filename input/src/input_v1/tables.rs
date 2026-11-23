@@ -652,9 +652,6 @@ pub struct StudWallSpec {
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub loads: Vec<SlotWallLoad>,
-    #[serde(default)]
-    #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub plane: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -675,9 +672,6 @@ pub struct FloorBandSpec {
     pub bottom: Vec<u32>,
     pub top: Vec<u32>,
     pub layout: FloorBandLayoutSpec,
-    #[serde(default)]
-    #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub plane: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -706,12 +700,12 @@ pub struct DiaphragmSpec {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DiaphragmLayoutSpec {
-    pub xs: Vec<f64>,
-    pub zs: Vec<f64>,
-    pub y: f64,
+    pub u: Vec<f64>,
+    pub v: Vec<f64>,
+    pub level: f64,
     pub bays: Vec<Option<WallShearLawSpec>>,
-    pub ea_x: Vec<f64>,
-    pub ea_z: Vec<f64>,
+    pub ea_u: Vec<f64>,
+    pub ea_v: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -767,15 +761,13 @@ pub enum ElementKind {
     Shell3,
     Shell4,
     EmbeddedBar,
-    StudWall2d,
-    StudWall3d,
-    FloorBand2d,
-    FloorBand3d,
+    StudWall,
+    FloorBand,
     Diaphragm,
 }
 
 impl ElementKind {
-    pub const ALL: [ElementKind; 19] = [
+    pub const ALL: [ElementKind; 17] = [
         ElementKind::Truss,
         ElementKind::ElasticBeamColumn2d,
         ElementKind::ElasticBeamColumn3d,
@@ -790,10 +782,8 @@ impl ElementKind {
         ElementKind::Shell3,
         ElementKind::Shell4,
         ElementKind::EmbeddedBar,
-        ElementKind::StudWall2d,
-        ElementKind::StudWall3d,
-        ElementKind::FloorBand2d,
-        ElementKind::FloorBand3d,
+        ElementKind::StudWall,
+        ElementKind::FloorBand,
         ElementKind::Diaphragm,
     ];
 
@@ -814,10 +804,8 @@ impl ElementKind {
             ElementKind::Shell3 => "shell3s",
             ElementKind::Shell4 => "shell4s",
             ElementKind::EmbeddedBar => "embedded_bars",
-            ElementKind::StudWall2d => "stud_walls_2d",
-            ElementKind::StudWall3d => "stud_walls_3d",
-            ElementKind::FloorBand2d => "floor_bands_2d",
-            ElementKind::FloorBand3d => "floor_bands_3d",
+            ElementKind::StudWall => "stud_walls",
+            ElementKind::FloorBand => "floor_bands",
             ElementKind::Diaphragm => "diaphragms",
         }
     }
@@ -838,8 +826,8 @@ impl ElementKind {
             | ElementKind::ForceBeamColumn3d
             | ElementKind::Shell3
             | ElementKind::Shell4 => Some(3),
-            ElementKind::StudWall2d | ElementKind::FloorBand2d => Some(2),
-            ElementKind::StudWall3d | ElementKind::FloorBand3d | ElementKind::Diaphragm => Some(3),
+            ElementKind::StudWall | ElementKind::FloorBand => None,
+            ElementKind::Diaphragm => Some(3),
         }
     }
 

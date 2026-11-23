@@ -271,7 +271,7 @@ impl ElementOps<2, 3, NodeId> for TestElement {
         self.pair().into_iter().collect()
     }
 
-    fn dof_mask(&self) -> DofMask {
+    fn dof_mask(&self, _nodes: &NodeView<'_, 2, 3, NodeId>) -> DofMask {
         DofMask::all(3)
     }
 

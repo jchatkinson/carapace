@@ -1,4 +1,4 @@
-//! Horizontal diaphragm panel response and flexible load transfer against the shear law and hand statics.
+//! Axis-aligned 3D diaphragm response against shear-law patch tests and OpenSees/CSA O86 references.
 
 use carapace_core::analysis::{
     Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
@@ -6,17 +6,17 @@ use carapace_core::analysis::{
 use carapace_core::model::{
     flexible_diaphragm_loads, lump_line_reaction, ChordDistribution, Diaphragm, DiaphragmLayout,
     Domain3, Element3, FloorBounds, FloorLoad, FloorSupport, Node3, ReactionLine, StudWall,
-    StudWallLayout, WallPlane, WallShearLaw, WallSheathing, WallStud,
+    StudWallLayout, WallShearLaw, WallSheathing, WallStud,
 };
 
 fn layout() -> DiaphragmLayout {
     DiaphragmLayout {
-        xs: vec![0., 2.],
-        zs: vec![0., 1.],
-        y: 0.,
+        u: vec![0., 1.],
+        v: vec![0., 2.],
+        level: 0.,
         bays: vec![Some(WallShearLaw::Linear { ga: 100. })],
-        ea_x: vec![0., 0.],
-        ea_z: vec![0., 0.],
+        ea_u: vec![0., 0.],
+        ea_v: vec![0., 0.],
     }
 }
 
@@ -25,13 +25,13 @@ fn layout() -> DiaphragmLayout {
 fn single_bay_linear_shear() {
     let mut d = Domain3::new();
     let a = d.add_node(Node3::new([0., 0., 0.]).fix(0).fix(1).fix(2));
-    let b = d.add_node(Node3::new([2., 0., 0.]).fix(0).fix(1).fix(2));
-    let c = d.add_node(Node3::new([0., 0., 1.]).fix(1).fix(2));
+    let b = d.add_node(Node3::new([0., 0., 1.]).fix(1).fix(2));
+    let c = d.add_node(Node3::new([2., 0., 0.]).fix(0).fix(1).fix(2));
     let e = d.add_node(Node3::new([2., 0., 1.]).fix(0).fix(1).fix(2));
     let id = d.add_element(Element3::Diaphragm(
         Diaphragm::new(vec![a, b, c, e], layout()).unwrap(),
     ));
-    d.add_nodal_load(d.default_pattern(), c, 0, 20.);
+    d.add_nodal_load(d.default_pattern(), b, 0, 20.);
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1. })
@@ -52,8 +52,8 @@ fn single_bay_linear_shear() {
 fn single_bay_o86_shear_equilibrium_and_nail_slip_report() {
     let mut d = Domain3::new();
     let a = d.add_node(Node3::new([0., 0., 0.]).fix(0).fix(1).fix(2));
-    let b = d.add_node(Node3::new([2., 0., 0.]).fix(0).fix(1).fix(2));
-    let c = d.add_node(Node3::new([0., 0., 1.]).fix(1).fix(2));
+    let b = d.add_node(Node3::new([0., 0., 1.]).fix(1).fix(2));
+    let c = d.add_node(Node3::new([2., 0., 0.]).fix(0).fix(1).fix(2));
     let e = d.add_node(Node3::new([2., 0., 1.]).fix(0).fix(1).fix(2));
     let mut l = layout();
     l.bays[0] = Some(WallShearLaw::O86 {
@@ -64,7 +64,7 @@ fn single_bay_o86_shear_equilibrium_and_nail_slip_report() {
     let id = d.add_element(Element3::Diaphragm(
         Diaphragm::new(vec![a, b, c, e], l).unwrap(),
     ));
-    d.add_nodal_load(d.default_pattern(), c, 0, 20.);
+    d.add_nodal_load(d.default_pattern(), b, 0, 20.);
     let mut analysis = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
         .integrator(Integrator::LoadControl { increment: 1. })
@@ -94,6 +94,74 @@ fn single_bay_o86_shear_equilibrium_and_nail_slip_report() {
         0.00061 * en
     );
     assert!((nail_slip_strain - 0.0025 * en).abs() < 1e-14);
+}
+
+/// The same single-bay shear patch gives identical strain and flow when its normal changes from Y to Z.
+/// Reference: direct Y-up result versus the cyclic Z-up `(u, v)` plane; relative tolerance 1e-12.
+#[test]
+fn single_bay_shear_is_invariant_in_z_normal_plane() {
+    use carapace_core::model::Node3Id;
+    fn solve(z_up: bool, law: WallShearLaw) -> (f64, f64) {
+        let mut d = Domain3::new();
+        let points = if z_up {
+            [[0., 0., 0.], [1., 0., 0.], [0., 2., 0.], [1., 2., 0.]]
+        } else {
+            [[0., 0., 0.], [0., 0., 1.], [2., 0., 0.], [2., 0., 1.]]
+        };
+        let mut ids = Vec::<Node3Id>::new();
+        for (i, p) in points.into_iter().enumerate() {
+            let node = Node3::new(p);
+            let node = if i == 0 || i >= 2 {
+                node.fix(0).fix(1).fix(2)
+            } else if z_up {
+                node.fix(0).fix(2)
+            } else {
+                node.fix(1).fix(2)
+            };
+            ids.push(d.add_node(node));
+        }
+        let layout = DiaphragmLayout {
+            u: vec![0., 1.],
+            v: vec![0., 2.],
+            level: 0.,
+            bays: vec![Some(law)],
+            ea_u: vec![0., 0.],
+            ea_v: vec![0., 0.],
+        };
+        let e = d.add_element(Element3::Diaphragm(
+            Diaphragm::new(ids.clone(), layout).unwrap(),
+        ));
+        d.add_nodal_load(d.default_pattern(), ids[1], if z_up { 1 } else { 0 }, 20.);
+        let mut a = AnalysisBuilder::new()
+            .constraint_handler(ConstraintHandler::Plain)
+            .integrator(Integrator::LoadControl { increment: 1. })
+            .algorithm(Algorithm::Newton {
+                tangent: TangentStrategy::Current,
+                line_search: None,
+            })
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-10,
+                max_iter: 12,
+            })
+            .build(d);
+        a.step().unwrap();
+        let response = a.domain().element_diaphragm_response(e).unwrap().bays[0];
+        (response.gamma, response.q)
+    }
+    for law in [
+        WallShearLaw::Linear { ga: 100. },
+        WallShearLaw::O86 {
+            bv: 100.,
+            nail_spacing: 150.,
+            nail_diameter: 3.,
+        },
+    ] {
+        let y = solve(false, law.clone());
+        let z = solve(true, law);
+        for (a, b) in [(y.0, z.0), (y.1, z.1)] {
+            assert!((a - b).abs() <= 1e-12 * a.abs().max(b.abs()).max(1.));
+        }
+    }
 }
 
 /// Rigid in-plane translations and rotation have zero engineering shear in the bilinear field.
@@ -193,7 +261,6 @@ fn flexible_three_line_tributary_reactions_and_lumping() {
                 vec![],
                 layout,
                 std::array::from_fn(|_| vec![]),
-                WallPlane::vertical(1., 0.).unwrap(),
             )
             .unwrap(),
         ));
@@ -225,8 +292,8 @@ fn diaphragm_serial_and_parallel_are_bit_identical() {
     fn solve() -> [u64; 2] {
         let mut d = Domain3::new();
         let a = d.add_node(Node3::new([0., 0., 0.]).fix(0).fix(1).fix(2));
-        let b = d.add_node(Node3::new([2., 0., 0.]).fix(0).fix(1).fix(2));
-        let c = d.add_node(Node3::new([0., 0., 1.]).fix(1).fix(2));
+        let b = d.add_node(Node3::new([0., 0., 1.]).fix(0).fix(1).fix(2));
+        let c = d.add_node(Node3::new([2., 0., 0.]).fix(1).fix(2));
         let e = d.add_node(Node3::new([2., 0., 1.]).fix(0).fix(1).fix(2));
         let id = d.add_element(Element3::Diaphragm(
             Diaphragm::new(vec![a, b, c, e], layout()).unwrap(),
@@ -263,43 +330,45 @@ fn diaphragm_serial_and_parallel_are_bit_identical() {
 
 /// Simply supported blocked diaphragm under a uniform load, one bay deep, `n` bays along the span; returns the
 /// mid-span deflection (load direction) with the given bay law.
-fn simple_diaphragm(n: usize, law: WallShearLaw) -> f64 {
+fn simple_diaphragm(n: usize, law: WallShearLaw, z_up: bool) -> f64 {
     use carapace_core::model::Node3Id;
     let (span, depth, w) = (12_000., 6_000., 5.);
+    let load_axis = if z_up { 0 } else { 2 };
+    let base_axis = if z_up { 1 } else { 0 };
     let xs: Vec<f64> = (0..=n).map(|i| span * i as f64 / n as f64).collect();
     let mut d = Domain3::new();
     let mut nodes: Vec<Node3Id> = Vec::new();
-    for z in [0., depth] {
-        for (i, &x) in xs.iter().enumerate() {
-            let mut node = Node3::new([x, 0., z]);
-            if i == 0 || i == n {
-                node = node.fix(2); // end walls resist the load direction
+    for (j, &x) in xs.iter().enumerate() {
+        for z in [0., depth] {
+            let mut node = Node3::new(if z_up { [z, x, 0.] } else { [x, 0., z] });
+            if j == 0 || j == n {
+                node = node.fix(load_axis); // end walls resist the load direction
             }
-            if i == 0 && z == 0. {
-                node = node.fix(0);
+            if j == 0 && z == 0. {
+                node = node.fix(base_axis);
             }
             nodes.push(d.add_node(node));
         }
     }
     let layout = DiaphragmLayout {
-        xs: xs.clone(),
-        zs: vec![0., depth],
-        y: 0.,
+        u: vec![0., depth],
+        v: xs.clone(),
+        level: 0.,
         bays: vec![Some(law); n],
-        ea_x: vec![CHORD_EA; 2],
-        ea_z: vec![1e9; n + 1],
+        ea_u: vec![1e9; n + 1],
+        ea_v: vec![CHORD_EA; 2],
     };
     d.add_element(Element3::Diaphragm(
         Diaphragm::new(nodes.clone(), layout).unwrap(),
     ));
     let a = span / n as f64;
-    for row in 0..2 {
-        for i in 0..=n {
-            let trib = if i == 0 || i == n { a / 2. } else { a };
+    for row in 0..n + 1 {
+        for i in 0..2 {
+            let trib = if row == 0 || row == n { a / 2. } else { a };
             d.add_nodal_load(
                 d.default_pattern(),
-                nodes[row * (n + 1) + i],
-                2,
+                nodes[row * 2 + i],
+                load_axis,
                 w * trib / 2.,
             );
         }
@@ -318,8 +387,8 @@ fn simple_diaphragm(n: usize, law: WallShearLaw) -> f64 {
         .build(d);
     an.step().expect("diaphragm solve");
     let mid = n / 2;
-    (an.domain().node(nodes[mid]).displacement[2]
-        + an.domain().node(nodes[n + 1 + mid]).displacement[2])
+    (an.domain().node(nodes[2 * mid]).displacement[load_axis]
+        + an.domain().node(nodes[2 * mid + 1]).displacement[load_axis])
         / 2.
 }
 
@@ -337,7 +406,7 @@ fn simply_supported_diaphragm_converges_to_o86_11_7_2() {
     let code = 5. * v * span.powi(3) / (96. * CHORD_EA * depth) + v * span / (4. * bv);
     let errs: Vec<f64> = [8, 16, 32, 64]
         .iter()
-        .map(|&n| (simple_diaphragm(n, WallShearLaw::Linear { ga: bv }) - code).abs() / code)
+        .map(|&n| (simple_diaphragm(n, WallShearLaw::Linear { ga: bv }, false) - code).abs() / code)
         .collect();
     eprintln!("O86 11.7.2 linear: code {code:.6} mm, relative errors {errs:?}");
     for e in errs.windows(2) {
@@ -361,13 +430,28 @@ fn o86_law_diaphragm_nail_slip_vs_code_term() {
         nail_spacing: s,
         nail_diameter: df,
     };
-    let slip = simple_diaphragm(64, law) - simple_diaphragm(64, WallShearLaw::Linear { ga: bv });
+    let slip = simple_diaphragm(64, law.clone(), false)
+        - simple_diaphragm(64, WallShearLaw::Linear { ga: bv }, false);
     eprintln!(
         "O86 law nail slip {slip:.4} mm vs 0.00061 L e_n = {:.4} mm (ratio {:.3})",
         0.00061 * span * en,
         slip / (0.00061 * span * en)
     );
     assert!(slip > 0.);
+}
+
+/// Rotating the same simply supported diaphragm from a Y-normal plane to a Z-normal plane preserves the O86 response.
+/// Reference: identical cyclic `(u, v)` grid and material in both orientations; relative tolerance 1e-12.
+#[test]
+fn o86_simply_supported_response_is_invariant_in_z_up_plane() {
+    let law = WallShearLaw::O86 {
+        bv: 11_000.,
+        nail_spacing: 150.,
+        nail_diameter: 2.84,
+    };
+    let y_up = simple_diaphragm(16, law.clone(), false);
+    let z_up = simple_diaphragm(16, law, true);
+    assert!((y_up - z_up).abs() <= 1e-12 * y_up.abs().max(z_up.abs()).max(1.));
 }
 
 /// Rigid diaphragm (`Domain3::rigid_diaphragm`) over four linear 3D walls: two lines along X (z = 0, 4 m long;
@@ -416,14 +500,7 @@ fn rigid_diaphragm_matches_stiffness_and_torsion_split() {
             foundation: true,
         };
         let id = d.add_element(Element3::StudWall(
-            StudWall::new3(
-                c,
-                vec![],
-                layout,
-                std::array::from_fn(|_| vec![]),
-                WallPlane::vertical(ex, ez).unwrap(),
-            )
-            .unwrap(),
+            StudWall::new3(c, vec![], layout, std::array::from_fn(|_| vec![])).unwrap(),
         ));
         (id, [c[2], c[3]])
     };

@@ -91,7 +91,7 @@ impl ElementOps<2, 3, NodeId> for Mock {
         }
     }
 
-    fn dof_mask(&self) -> DofMask {
+    fn dof_mask(&self, _nodes: &NodeView<'_, 2, 3, NodeId>) -> DofMask {
         match self {
             Mock::DynChain { .. } => DofMask::none().with(0),
             _ => DofMask::all(3),

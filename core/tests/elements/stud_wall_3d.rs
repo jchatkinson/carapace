@@ -6,9 +6,55 @@ use carapace_core::analysis::{
 };
 use carapace_core::model::{
     ChordDistribution, Domain, Domain3, Element, Element3, ElementLoad, ElementLoad3, FloorBand,
-    FloorBandLayout, Node, Node3, StudWall, StudWallLayout, WallLoad, WallPlane, WallShearLaw,
-    WallSheathing, WallStud, WALL_SLOTS,
+    FloorBandLayout, Node, Node3, StudWall, StudWallLayout, WallLoad, WallShearLaw, WallSheathing,
+    WallStud, WALL_SLOTS,
 };
+
+/// Geometry-derived masks in a Z-up model activate exactly the translations in the wall plane.
+/// Reference: local-axis projections; exact active slots.
+#[test]
+fn z_up_wall_masks_follow_geometry() {
+    use carapace_core::model::Node3Id;
+    fn active(corners: [[f64; 3]; 4]) -> [bool; 3] {
+        let mut d = Domain3::new();
+        let ids: [Node3Id; 4] = corners.map(|p| d.add_node(Node3::new(p)));
+        d.add_element(Element3::StudWall(
+            StudWall::new3(ids, vec![], layout(), std::array::from_fn(|_| vec![])).unwrap(),
+        ));
+        d.validate().unwrap();
+        std::array::from_fn(|slot| d.is_active(ids[0], slot))
+    }
+    assert_eq!(
+        active([[0., 0., 0.], [4., 0., 0.], [4., 0., 3.], [0., 0., 3.]]),
+        [true, false, true]
+    );
+    assert_eq!(
+        active([[0., 0., 0.], [0., 4., 0.], [0., 4., 3.], [0., 0., 3.]]),
+        [false, true, true]
+    );
+    assert_eq!(
+        active([[0., 0., 0.], [3.2, 2.4, 0.], [3.2, 2.4, 3.], [0., 0., 3.]]),
+        [true, true, true]
+    );
+}
+
+/// A wall with non-orthogonal corner axes fails geometry validation with a named model error.
+/// Reference: `PlaneMap` relative dot-product check, threshold 1e-9.
+#[test]
+fn nonorthogonal_wall_corners_are_rejected() {
+    let mut d = Domain3::new();
+    let ids = [
+        d.add_node(Node3::new([0., 0., 0.])),
+        d.add_node(Node3::new([4., 0.1, 0.])),
+        d.add_node(Node3::new([4., 0.2, 3.])),
+        d.add_node(Node3::new([0., 0.1, 3.])),
+    ];
+    d.add_element(Element3::StudWall(
+        StudWall::new3(ids, vec![], layout(), std::array::from_fn(|_| vec![])).unwrap(),
+    ));
+    let error = d.validate().unwrap_err();
+    assert!(format!("{error:?}").contains("wall axes are not orthogonal"));
+}
 
 fn layout() -> StudWallLayout {
     StudWallLayout {
@@ -103,14 +149,7 @@ fn solve_3d(ex: f64, ez: f64) -> (f64, f64) {
         fx: 100.,
         fy: 0.,
     });
-    let wall = StudWall::new3(
-        c,
-        vec![],
-        layout(),
-        loads,
-        WallPlane::vertical(ex, ez).unwrap(),
-    )
-    .unwrap();
+    let wall = StudWall::new3(c, vec![], layout(), loads).unwrap();
     let id = d.add_element(Element3::StudWall(wall));
     d.add_element_load(
         d.default_pattern(),
@@ -171,14 +210,7 @@ fn x_wall_domain_numbering_excludes_global_uz() {
         d.add_node(Node3::new([4., 3., 0.])),
         d.add_node(Node3::new([0., 3., 0.])),
     ];
-    let wall = StudWall::new3(
-        c,
-        vec![],
-        layout(),
-        std::array::from_fn(|_| vec![]),
-        WallPlane::vertical(1., 0.).unwrap(),
-    )
-    .unwrap();
+    let wall = StudWall::new3(c, vec![], layout(), std::array::from_fn(|_| vec![])).unwrap();
     let wall_id = d.add_element(Element3::StudWall(wall));
     let a = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Plain)
@@ -333,26 +365,34 @@ fn solve_window_2d(o86: bool) -> WindowResult {
     }
 }
 
-fn solve_window_3d(ex: f64, ez: f64, o86: bool) -> WindowResult {
+fn solve_window_3d_axes(ex: f64, ez: f64, z_up: bool, o86: bool) -> WindowResult {
     use carapace_core::model::{Element3, LoadSeries, Material, Node3, ZeroLength3};
     let mut d = Domain3::new();
-    let point = |x: f64, y: f64| [x * ex, y, x * ez];
+    let up = if z_up { 2 } else { 1 };
+    let lateral = if z_up { 1 } else { 2 };
+    let point = |x: f64, h: f64| {
+        if z_up {
+            [x * ex, x * ez, h]
+        } else {
+            [x * ex, h, x * ez]
+        }
+    };
     let ground = d.add_node(Node3::new([0., 0., 0.]).fix(0).fix(1).fix(2));
-    let c0 = d.add_node(Node3::new(point(0., 0.)).fix(0).fix(2));
-    let c1 = d.add_node(Node3::new(point(3600., 0.)).fix(0).fix(2));
+    let c0 = d.add_node(Node3::new(point(0., 0.)).fix(0).fix(lateral));
+    let c1 = d.add_node(Node3::new(point(3600., 0.)).fix(0).fix(lateral));
     let c2 = d.add_node(Node3::new(point(3600., OPEN_H)));
     let c3 = d.add_node(Node3::new(point(0., OPEN_H)));
-    let s0 = d.add_node(Node3::new(point(OPEN_X0, 0.)).fix(0).fix(2));
-    let s1 = d.add_node(Node3::new(point(OPEN_X1, 0.)).fix(0).fix(2));
+    let s0 = d.add_node(Node3::new(point(OPEN_X0, 0.)).fix(0).fix(lateral));
+    let s1 = d.add_node(Node3::new(point(OPEN_X1, 0.)).fix(0).fix(lateral));
     for n in [c0, c1, s0, s1] {
         d.add_element(Element3::ZeroLength3(
-            ZeroLength3::new(ground, n).with_material(1, Material::Elastic { e: OPEN_KHD }),
+            ZeroLength3::new(ground, n).with_material(up, Material::Elastic { e: OPEN_KHD }),
         ));
     }
     if ex.abs() > 1e-9 && ez.abs() > 1e-9 {
         for n in [c2, c3] {
             // Plan-normal translation is zero: ez*ux - ex*uz = 0.
-            d.add_constraint((n, 2), &[(n, 0, ez / ex)]);
+            d.add_constraint((n, lateral), &[(n, 0, ez / ex)]);
         }
     }
     let stations = [(OPEN_X0, s0), (OPEN_X1, s1)]
@@ -379,27 +419,15 @@ fn solve_window_3d(ex: f64, ez: f64, o86: bool) -> WindowResult {
             stations,
             wall_layout,
             std::array::from_fn(|_| vec![]),
-            WallPlane::vertical(ex, ez).unwrap(),
         )
         .unwrap(),
     ));
     let pattern = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
-    d.add_nodal_load(
-        pattern,
-        c3,
-        if ex.abs() > 0.999 {
-            0
-        } else if ez.abs() > 0.999 {
-            2
-        } else {
-            0
-        },
-        OPEN_V * ex,
-    );
+    d.add_nodal_load(pattern, c3, 0, OPEN_V * ex);
     if ez.abs() > 1e-9 {
         // For a skew plane, apply the horizontal component along the wall direction.
         // `add_nodal_load` above supplies ux; add uz to complete its projection.
-        d.add_nodal_load(pattern, c3, 2, OPEN_V * ez);
+        d.add_nodal_load(pattern, c3, lateral, OPEN_V * ez);
     }
     let mut a = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Transformation)
@@ -426,14 +454,14 @@ fn solve_window_3d(ex: f64, ez: f64, o86: bool) -> WindowResult {
     let r = dom.element_stud_wall_response(wall, 1.).unwrap();
     let disp = dom.node(c3).displacement;
     WindowResult {
-        drift: disp[0] * ex + disp[2] * ez,
+        drift: disp[0] * ex + disp[lateral] * ez,
         piers: r
             .piers
             .iter()
             .map(|p| (p.q, p.chords[0], p.chords[1]))
             .collect(),
         uplift: [c0, s0, s1, c1]
-            .map(|n| dom.node(n).displacement[1])
+            .map(|n| dom.node(n).displacement[up])
             .to_vec(),
     }
 }
@@ -443,34 +471,35 @@ fn solve_window_3d(ex: f64, ez: f64, o86: bool) -> WindowResult {
 #[test]
 fn window_wall_matches_2d_in_three_vertical_planes() {
     let reference = solve_window_2d(false);
-    for (ex, ez) in [
-        (1., 0.),
-        (0., 1.),
-        (30f64.to_radians().cos(), 30f64.to_radians().sin()),
-    ] {
-        let actual = solve_window_3d(ex, ez, false);
-        assert_eq!(actual.piers.len(), reference.piers.len());
-        let values = [(actual.drift, reference.drift)]
-            .into_iter()
-            .chain(
-                actual
-                    .piers
-                    .iter()
-                    .zip(&reference.piers)
-                    .flat_map(|(a, b)| [(a.0, b.0), (a.1, b.1), (a.2, b.2)]),
-            )
-            .chain(
-                actual
-                    .uplift
-                    .iter()
-                    .zip(&reference.uplift)
-                    .map(|(a, b)| (*a, *b)),
-            );
-        for (a, b) in values {
-            assert!(
-                (a - b).abs() <= 1e-10 * a.abs().max(b.abs()).max(1.),
-                "dir=({ex},{ez}) {a} != {b}"
-            );
+    for z_up in [false, true] {
+        for (ex, ez) in [
+            (1., 0.),
+            (30f64.to_radians().cos(), 30f64.to_radians().sin()),
+        ] {
+            let actual = solve_window_3d_axes(ex, ez, z_up, false);
+            assert_eq!(actual.piers.len(), reference.piers.len());
+            let values = [(actual.drift, reference.drift)]
+                .into_iter()
+                .chain(
+                    actual
+                        .piers
+                        .iter()
+                        .zip(&reference.piers)
+                        .flat_map(|(a, b)| [(a.0, b.0), (a.1, b.1), (a.2, b.2)]),
+                )
+                .chain(
+                    actual
+                        .uplift
+                        .iter()
+                        .zip(&reference.uplift)
+                        .map(|(a, b)| (*a, *b)),
+                );
+            for (a, b) in values {
+                assert!(
+                    (a - b).abs() <= 1e-10 * a.abs().max(b.abs()).max(1.),
+                    "z_up={z_up} dir=({ex},{ez}) {a} != {b}"
+                );
+            }
         }
     }
 }
@@ -481,18 +510,20 @@ fn window_wall_matches_2d_in_three_vertical_planes() {
 fn o86_nonlinear_wall_matches_2d_at_thirty_degrees() {
     let reference = solve_window_2d(true);
     let angle = 30f64.to_radians();
-    let actual = solve_window_3d(angle.cos(), angle.sin(), true);
-    assert!(
-        (actual.drift - reference.drift).abs()
-            <= 1e-9 * actual.drift.abs().max(reference.drift.abs()).max(1.)
-    );
-    assert_eq!(actual.piers.len(), reference.piers.len());
-    for (a, b) in actual.piers.iter().zip(&reference.piers) {
-        for (a, b) in [(a.0, b.0), (a.1, b.1), (a.2, b.2)] {
-            assert!(
-                (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.),
-                "{a} != {b}"
-            );
+    for z_up in [false, true] {
+        let actual = solve_window_3d_axes(angle.cos(), angle.sin(), z_up, true);
+        assert!(
+            (actual.drift - reference.drift).abs()
+                <= 1e-9 * actual.drift.abs().max(reference.drift.abs()).max(1.)
+        );
+        assert_eq!(actual.piers.len(), reference.piers.len());
+        for (a, b) in actual.piers.iter().zip(&reference.piers) {
+            for (a, b) in [(a.0, b.0), (a.1, b.1), (a.2, b.2)] {
+                assert!(
+                    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.),
+                    "{a} != {b}"
+                );
+            }
         }
     }
 }
@@ -575,7 +606,7 @@ fn gravity_window_2d() -> GravityResult {
     }
 }
 
-fn gravity_window_3d() -> GravityResult {
+fn gravity_window_3d(z_up: bool) -> GravityResult {
     use carapace_core::model::{Element3, ElementLoad3, LoadSeries, Node3};
     let mut l = window_layout();
     l.top_ei = Some(1.2e10);
@@ -590,13 +621,14 @@ fn gravity_window_3d() -> GravityResult {
         wy1: -10.,
     });
     let mut d = Domain3::new();
+    let point = |x: f64, y: f64, z: f64| if z_up { [z, x, y] } else { [x, y, z] };
     let xs = [0., 400., 800., 1200., OPEN_X0, OPEN_X1, 2800., 3200., 3600.];
     let bottom: Vec<_> = xs
         .iter()
-        .map(|&x| d.add_node(Node3::new([0., 0., x]).fix(0).fix(1).fix(2)))
+        .map(|&x| d.add_node(Node3::new(point(0., 0., x)).fix(0).fix(1).fix(2)))
         .collect();
-    let c2 = d.add_node(Node3::new([0., OPEN_H, 3600.]));
-    let c3 = d.add_node(Node3::new([0., OPEN_H, 0.]));
+    let c2 = d.add_node(Node3::new(point(0., OPEN_H, 3600.)));
+    let c3 = d.add_node(Node3::new(point(0., OPEN_H, 0.)));
     let stations = xs
         .iter()
         .skip(1)
@@ -614,7 +646,6 @@ fn gravity_window_3d() -> GravityResult {
             stations,
             l,
             loads,
-            WallPlane::vertical(0., 1.).unwrap(),
         )
         .unwrap(),
     ));
@@ -652,24 +683,25 @@ fn gravity_window_3d() -> GravityResult {
 #[test]
 fn window_gravity_takedown_matches_2d() {
     let a = gravity_window_2d();
-    let b = gravity_window_3d();
-    assert_eq!(a.base.len(), b.base.len());
-    assert_eq!(a.jacks.len(), b.jacks.len());
-    assert_eq!(a.header.len(), b.header.len());
-    for (x, y) in a.base.iter().zip(&b.base) {
-        for (u, v) in [(x.0, y.0), (x.1, y.1), (x.2, y.2)] {
-            assert!(
-                (u - v).abs() <= 1e-10 * u.abs().max(v.abs()).max(1.),
-                "base {u} != {v}"
-            );
+    for b in [gravity_window_3d(false), gravity_window_3d(true)] {
+        assert_eq!(a.base.len(), b.base.len());
+        assert_eq!(a.jacks.len(), b.jacks.len());
+        assert_eq!(a.header.len(), b.header.len());
+        for (x, y) in a.base.iter().zip(&b.base) {
+            for (u, v) in [(x.0, y.0), (x.1, y.1), (x.2, y.2)] {
+                assert!(
+                    (u - v).abs() <= 1e-10 * u.abs().max(v.abs()).max(1.),
+                    "base {u} != {v}"
+                );
+            }
         }
-    }
-    for (u, v) in a.jacks.iter().zip(&b.jacks) {
-        assert!((u - v).abs() <= 1e-10 * u.abs().max(v.abs()).max(1.));
-    }
-    for (u, v) in a.header.iter().zip(&b.header) {
-        for (u, v) in [(u.0, v.0), (u.1, v.1)] {
+        for (u, v) in a.jacks.iter().zip(&b.jacks) {
             assert!((u - v).abs() <= 1e-10 * u.abs().max(v.abs()).max(1.));
+        }
+        for (u, v) in a.header.iter().zip(&b.header) {
+            for (u, v) in [(u.0, v.0), (u.1, v.1)] {
+                assert!((u - v).abs() <= 1e-10 * u.abs().max(v.abs()).max(1.));
+            }
         }
     }
 }
@@ -685,7 +717,7 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
     const L: f64 = 2400.;
     const H: f64 = 3000.;
     const D: f64 = 254.;
-    const R: f64 = 1e10;
+    const R: f64 = 1e8;
     let mut d: Domain<2, 3, NodeId, Element> = Domain::new();
     let ground = d.add_node(Node::new([0., 0.]).fix(0).fix(1).fix(2));
     let left = d.add_node(Node::new([0., 0.]));
@@ -799,20 +831,23 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
     )
 }
 
-fn rigid_stack_3d() -> (Vec<f64>, Vec<f64>) {
+fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
     use carapace_core::model::{Element3, LoadSeries, Material, Node3, ZeroLength3};
     const L: f64 = 2400.;
     const H: f64 = 3000.;
     const D: f64 = 254.;
-    const R: f64 = 1e10;
+    const R: f64 = 1e8;
+    let up = if z_up { 2 } else { 1 };
+    let wall_axis = if z_up { 1 } else { 2 };
+    let point = |x: f64, y: f64, z: f64| if z_up { [x, z, y] } else { [x, y, z] };
     let mut d = Domain3::new();
     let ground = d.add_node(Node3::new([0., 0., 0.]).fix(0).fix(1).fix(2));
     let left = d.add_node(Node3::new([0., 0., 0.]));
-    let right = d.add_node(Node3::new([0., 0., L]).fix(0).fix(1).fix(2));
+    let right = d.add_node(Node3::new(point(0., 0., L)).fix(0).fix(1).fix(2));
     d.add_element(Element3::ZeroLength3(
         ZeroLength3::new(ground, left)
-            .with_material(1, Material::Elastic { e: 20_000. })
-            .with_material(2, Material::Elastic { e: R }),
+            .with_material(up, Material::Elastic { e: 20_000. })
+            .with_material(wall_axis, Material::Elastic { e: R }),
     ));
     let pattern = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
     let mut bottom = [left, right];
@@ -820,8 +855,8 @@ fn rigid_stack_3d() -> (Vec<f64>, Vec<f64>) {
     let mut levels = vec![];
     for i in 0..2 {
         let y = i as f64 * (H + D);
-        let tl = d.add_node(Node3::new([0., y + H, 0.]));
-        let tr = d.add_node(Node3::new([0., y + H, L]));
+        let tl = d.add_node(Node3::new(point(0., y + H, 0.)));
+        let tr = d.add_node(Node3::new(point(0., y + H, L)));
         let ea = [3., 2.][i] * OPEN_PLY;
         let layout = StudWallLayout {
             length: L,
@@ -853,14 +888,7 @@ fn rigid_stack_3d() -> (Vec<f64>, Vec<f64>) {
             });
         }
         let wall = d.add_element(Element3::StudWall(
-            StudWall::new3(
-                [bottom[0], bottom[1], tr, tl],
-                vec![],
-                layout,
-                loads,
-                WallPlane::vertical(0., 1.).unwrap(),
-            )
-            .unwrap(),
+            StudWall::new3([bottom[0], bottom[1], tr, tl], vec![], layout, loads).unwrap(),
         ));
         walls.push(wall);
         if i == 1 {
@@ -876,8 +904,8 @@ fn rigid_stack_3d() -> (Vec<f64>, Vec<f64>) {
             );
             levels.push([tl, tr]);
         } else {
-            let bl = d.add_node(Node3::new([0., y + H + D, 0.]));
-            let br = d.add_node(Node3::new([0., y + H + D, L]));
+            let bl = d.add_node(Node3::new(point(0., y + H + D, 0.)));
+            let br = d.add_node(Node3::new(point(0., y + H + D, L)));
             d.add_element(Element3::FloorBand(
                 FloorBand::new3(
                     vec![tl, tr],
@@ -889,16 +917,15 @@ fn rigid_stack_3d() -> (Vec<f64>, Vec<f64>) {
                         bays: vec![Some(R)],
                         rim_ea: R,
                     },
-                    WallPlane::vertical(0., 1.).unwrap(),
                 )
                 .unwrap(),
             ));
             for (a, b, k) in [(tl, bl, 20_000.), (tr, br, R)] {
                 d.add_element(Element3::ZeroLength3(
-                    ZeroLength3::new(a, b).with_material(1, Material::Elastic { e: k }),
+                    ZeroLength3::new(a, b).with_material(up, Material::Elastic { e: k }),
                 ));
             }
-            d.add_nodal_load(pattern, bl, 2, 6000.);
+            d.add_nodal_load(pattern, bl, wall_axis, 6000.);
             levels.push([bl, bl]);
             bottom = [bl, br];
         }
@@ -917,7 +944,10 @@ fn rigid_stack_3d() -> (Vec<f64>, Vec<f64>) {
     (
         levels
             .iter()
-            .map(|n| (dom.node(n[0]).displacement[2] + dom.node(n[1]).displacement[2]) / 2.)
+            .map(|n| {
+                (dom.node(n[0]).displacement[wall_axis] + dom.node(n[1]).displacement[wall_axis])
+                    / 2.
+            })
             .collect(),
         walls
             .iter()
@@ -926,26 +956,26 @@ fn rigid_stack_3d() -> (Vec<f64>, Vec<f64>) {
     )
 }
 
-/// The rigid-band 2-storey stack has the same level drifts and wall chords in 3D along +Z as in 2D.
-/// Reference: the 2-storey rigid-band model and hand-walk case in `floor_band.rs`; displacements and chords, 1e-7
-/// (the model's 1e10 rigid stand-ins limit conditioning; observed 1.3e-8).
+/// The rigid-band 2-storey stack has the same level drifts and wall chords in Y-up and Z-up 3D models as in 2D.
+/// Reference: the 2-storey rigid-band model and hand-walk case in `floor_band.rs`; displacements and chords, 1e-10.
 #[test]
 fn rigid_floor_band_stack_matches_2d_in_z() {
     let a = rigid_stack_2d();
-    let b = rigid_stack_3d();
-    assert_eq!(a.0.len(), b.0.len());
-    assert_eq!(a.1.len(), b.1.len());
-    for (i, (x, y)) in a.0.iter().zip(&b.0).enumerate() {
-        assert!(
-            (x - y).abs() <= 1e-7 * x.abs().max(y.abs()).max(1.),
-            "level {i} displacement: {x} != {y}"
-        );
-    }
-    for (i, (x, y)) in a.1.iter().zip(&b.1).enumerate() {
-        assert!(
-            (x - y).abs() <= 1e-7 * x.abs().max(y.abs()).max(1.),
-            "wall {i} chord: {x} != {y}"
-        );
+    for b in [rigid_stack_3d(true)] {
+        assert_eq!(a.0.len(), b.0.len());
+        assert_eq!(a.1.len(), b.1.len());
+        for (i, (x, y)) in a.0.iter().zip(&b.0).enumerate() {
+            assert!(
+                (x - y).abs() <= 1e-10 * x.abs().max(y.abs()).max(1.),
+                "level {i} displacement: {x} != {y}"
+            );
+        }
+        for (i, (x, y)) in a.1.iter().zip(&b.1).enumerate() {
+            assert!(
+                (x - y).abs() <= 1e-10 * x.abs().max(y.abs()).max(1.),
+                "wall {i} chord: {x} != {y}"
+            );
+        }
     }
 }
 
@@ -968,7 +998,6 @@ fn z_directed_floor_band_uses_the_wall_plane_map() {
             bays: vec![Some(2e6)],
             rim_ea: 0.,
         },
-        WallPlane::vertical(0., 1.).unwrap(),
     )
     .unwrap();
     let id = d.add_element(Element3::FloorBand(band));
@@ -1025,7 +1054,7 @@ fn l_corner_shares_post_between_planes() {
             d.equal_dof(top, b3, &[1]);
             (b0, b3)
         };
-        let wall = |d: &mut Domain3, c: [Node3Id; 4], plane, w: f64| {
+        let wall = |d: &mut Domain3, c: [Node3Id; 4], w: f64| {
             let mut loads: [Vec<WallLoad>; WALL_SLOTS] = std::array::from_fn(|_| vec![]);
             loads[0].push(WallLoad::TopLine {
                 x0: 0.,
@@ -1038,7 +1067,7 @@ fn l_corner_shares_post_between_planes() {
             let mut l = layout();
             l.foundation = false;
             let id = d.add_element(Element3::StudWall(
-                StudWall::new3(c, vec![], l, loads, plane).unwrap(),
+                StudWall::new3(c, vec![], l, loads).unwrap(),
             ));
             d.add_element_load(
                 d.default_pattern(),
@@ -1050,18 +1079,8 @@ fn l_corner_shares_post_between_planes() {
             );
             id
         };
-        let wa = wall(
-            &mut d,
-            [a0, corner, top, a3],
-            WallPlane::vertical(1., 0.).unwrap(),
-            25.,
-        );
-        let wb = wall(
-            &mut d,
-            [b0, b1, b2, b3],
-            WallPlane::vertical(0., 1.).unwrap(),
-            -25.,
-        );
+        let wa = wall(&mut d, [a0, corner, top, a3], 25.);
+        let wb = wall(&mut d, [b0, b1, b2, b3], -25.);
         let mut an = AnalysisBuilder::new()
             .constraint_handler(ConstraintHandler::Transformation)
             .integrator(Integrator::LoadControl { increment: 1. })

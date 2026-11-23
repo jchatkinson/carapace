@@ -1,6 +1,6 @@
 # Floors
 
-Floor components for stud-wall models (core Rust API and `CarapaceInputV1` tables, 2D and vertical-plane `Domain3`). The plan and its rationale are in
+Floor components for stud-wall models (core Rust API and `CarapaceInputV1` tables, 2D and 3D). The plan and its rationale are in
 [floor-system-plan.md](floor-system-plan.md); the walls themselves are in [stud-wall.md](stud-wall.md).
 For automatic stacked building generation, see [building.md](building.md).
 
@@ -66,10 +66,11 @@ per segment (tension positive). The band is linear and stateless; it has no elem
 
 ### 3D wall planes
 
-For a vertical floor band in `Domain3`, use `FloorBand::new3(bottom, top, layout, plane)` with the same
-`WallPlane::vertical(ex, ez)` as the walls it joins. Global `Y` is up; the band maps its local wall direction
-onto the plan direction and leaves rotations unstiffened. Its plan-normal translation is unstiffened too, so the
-wall line needs support from a crossing wall, diaphragm or fixity.
+`FloorBand::new3(bottom, top, layout)` derives local `x` from the first to last node in the bottom row and
+local `y` from the first bottom node to the first top node. Those directions must be orthogonal within relative
+`1e-9`; every band node must lie at its declared station in that plane. No global up axis is assumed. Its DOF
+mask contains only translations with a component in either local axis; rotations and the plane-normal
+translation remain unstiffened.
 
 ## 2. Gravity: one-way joist transfer
 
@@ -142,9 +143,10 @@ pier walls (1e-10).
 
 ## 4. Diaphragms
 
-Global `Y` is up, so horizontal floor grids lie in the `X-Z` plane. Choose one of three idealizations and
-bracket wall-line forces when they matter: the FPInnovations guide reports differences up to 60% between
-idealizations.
+For the rigid and flexible approaches below, this guide uses the conventional Y-up building model with floors in
+the X-Z plane. The semi-rigid `Diaphragm` element can use any axis-aligned global plane. Choose one of three
+idealizations and bracket wall-line forces when they matter: the FPInnovations guide reports differences up to 60%
+between idealizations.
 
 ### Rigid
 
@@ -176,19 +178,21 @@ let nodal = lump_line_reaction(&top_node_coordinates, reaction_line)?;
 
 ### Semi-rigid
 
-`Diaphragm` is a 3D-only finite element on a rectangular, axis-aligned global X-Z grid at elevation `y`.
-Nodes are ordered `i + j * nx`; each node has active translations `ux, uz` only. Each bay has an independent
-`WallShearLaw` or `None` for an opening. Engineering shear is the symmetric bilinear average
-`gamma = du/dz + dw/dx`; the bay energy is `area * integral(q dgamma)`. Every grid segment has an axial
-bar with its line's `EA`: `ea_x` for constant-Z lines and `ea_z` for constant-X lines. Interior grid lines
-need positive axial stiffness. There are no element loads: lump floor-level lateral loads to grid nodes, or
-use the flexible transfer helper when a distribution by statics is wanted.
+`Diaphragm` is a 3D-only finite element on a rectangular grid whose nodes share one global coordinate (X, Y or Z).
+That shared coordinate defines the normal and `level`. The in-plane axes cycle after the normal:
+`(u, v) = ((normal + 1) % 3, (normal + 2) % 3)`, so a Y-normal grid uses `(Z, X)` and a Z-normal grid uses
+`(X, Y)`. Nodes are ordered `i + j * nu`, with `i` indexing `u` and `j` indexing `v`; each node activates only
+the two in-plane translations. Each bay has an independent `WallShearLaw` or `None` for an opening. Engineering
+shear is the symmetric bilinear average `gamma = du/dv + dv/du`; the bay energy is `area * integral(q dgamma)`.
+Every grid segment has an axial bar with its line's `EA`: `ea_u` for constant-`v` lines and `ea_v` for
+constant-`u` lines. Interior grid lines need positive axial stiffness. There are no element loads: lump floor-level
+lateral loads to grid nodes, or use the flexible transfer helper when a distribution by statics is wanted.
 
 ```rust,ignore
 let layout = DiaphragmLayout {
-    xs: vec![0., 3000., 6000.], zs: vec![0., 2400.], y: 3000.,
+    u: vec![0., 3000., 6000.], v: vec![0., 2400.], level: 3000.,
     bays: vec![Some(WallShearLaw::Linear { ga: 2.0e5 }); 2],
-    ea_x: vec![1.0e8; 2], ea_z: vec![1.0e8; 3],
+    ea_u: vec![1.0e8; 2], ea_v: vec![1.0e8; 3],
 };
 let id = domain.add_element(Element3::Diaphragm(Diaphragm::new(grid, layout)?));
 let response = domain.element_diaphragm_response(id).unwrap();

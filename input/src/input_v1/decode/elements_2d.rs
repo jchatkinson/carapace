@@ -17,7 +17,8 @@ use carapace_core::model::{
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
     build_fiber_section, check_fibers, finish, floor_wall_loads, friction_by_row, integration_of,
-    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables, ElementIds,
+    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables,
+    validate_stud_wall_geometry, ElementIds,
 };
 use crate::building::{ChordDistributionSpec, WallChordSpec, WallLoadSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
@@ -37,8 +38,6 @@ const NDM: u8 = 2;
 
 pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
     reject_tables(&[
-        ("stud_walls_3d", input.stud_walls_3d.is_empty()),
-        ("floor_bands_3d", input.floor_bands_3d.is_empty()),
         ("diaphragms", input.diaphragms.is_empty()),
         (
             "elastic_beam_columns_3d",
@@ -177,28 +176,20 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
         add_quads(&mut domain, &input.quads, &node_at, &plane_materials)?,
     );
 
-    if input.stud_walls_2d.iter().any(|w| w.plane.is_some())
-        || input.floor_bands_2d.iter().any(|b| b.plane.is_some())
-    {
-        return Err(DecodeError::InvalidRow {
-            table: "stud_walls_2d",
-            row: 0,
-            reason: "plane is only valid in a 3D model",
-        });
-    }
-    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls_2d.len())?;
+    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls.len())?;
     elements.set(
-        ElementKind::StudWall2d,
+        ElementKind::StudWall,
         decode_stud_walls(
             &mut domain,
-            &input.stud_walls_2d,
+            &input.stud_walls,
+            &input.nodes,
             &node_at,
             &floor_wall_loads,
         )?,
     );
     elements.set(
-        ElementKind::FloorBand2d,
-        decode_floor_bands(&mut domain, &input.floor_bands_2d, &node_at)?,
+        ElementKind::FloorBand,
+        decode_floor_bands(&mut domain, &input.floor_bands, &node_at)?,
     );
 
     let mut bar_end_loads = Vec::new();
@@ -318,6 +309,7 @@ fn decode_wall_load(l: WallLoadSpec) -> WallLoad {
 fn decode_stud_walls(
     domain: &mut Domain,
     t: &[crate::input_v1::tables::StudWallSpec],
+    node_table: &crate::input_v1::tables::NodeTable,
     node: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
     extra: &[[Vec<WallLoad>; 8]],
 ) -> Result<Vec<ElementId>, DecodeError> {
@@ -325,7 +317,7 @@ fn decode_stud_walls(
     for (i, r) in t.iter().enumerate() {
         let c = r
             .corners
-            .map(|x| node(x, "stud_walls_2d"))
+            .map(|x| node(x, "stud_walls"))
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
@@ -340,15 +332,22 @@ fn decode_stud_walls(
                         WallChordSpec::Bottom => WallChord::Bottom,
                     },
                     x: s.x,
-                    node: node(s.node, "stud_walls_2d")?,
+                    node: node(s.node, "stud_walls")?,
                 })
             })
             .collect::<Result<Vec<_>, DecodeError>>()?;
+        validate_stud_wall_geometry(node_table, 2, r).map_err(|reason| {
+            DecodeError::InvalidMacroElement {
+                table: "stud_walls",
+                row: i as u32,
+                reason: reason.into(),
+            }
+        })?;
         let mut loads: [Vec<WallLoad>; 8] = std::array::from_fn(|_| Vec::new());
         for x in &r.loads {
             if x.slot >= 8 {
                 return Err(DecodeError::InvalidWallSlot {
-                    table: "stud_walls_2d",
+                    table: "stud_walls",
                     row: i as u32,
                     slot: x.slot as u32,
                 });
@@ -360,7 +359,7 @@ fn decode_stud_walls(
         }
         let wall = StudWall::new(c, st, decode_layout(&r.layout), loads).map_err(|e| {
             DecodeError::InvalidMacroElement {
-                table: "stud_walls_2d",
+                table: "stud_walls",
                 row: i as u32,
                 reason: e.to_string(),
             }
@@ -379,12 +378,12 @@ fn decode_floor_bands(
         let b = r
             .bottom
             .iter()
-            .map(|&x| node(x, "floor_bands_2d"))
+            .map(|&x| node(x, "floor_bands"))
             .collect::<Result<Vec<_>, _>>()?;
         let top = r
             .top
             .iter()
-            .map(|&x| node(x, "floor_bands_2d"))
+            .map(|&x| node(x, "floor_bands"))
             .collect::<Result<Vec<_>, _>>()?;
         let l = &r.layout;
         let band = FloorBand::new(
@@ -399,7 +398,7 @@ fn decode_floor_bands(
             },
         )
         .map_err(|e| DecodeError::InvalidMacroElement {
-            table: "floor_bands_2d",
+            table: "floor_bands",
             row: i as u32,
             reason: e.to_string(),
         })?;

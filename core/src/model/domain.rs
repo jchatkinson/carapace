@@ -960,8 +960,9 @@ where
         // all), or it carries a nodal mass. Everything else is not an
         // equation.
         let mut active: HashSet<(NId, usize)> = HashSet::new();
+        let node_view = NodeView::new(&self.nodes);
         for (_, element) in self.elements.iter() {
-            let mask = element.dof_mask();
+            let mask = element.dof_mask(&node_view);
             for &node in element.nodes().as_slice() {
                 for dof in (0..NDOF).filter(|&dof| mask.contains(dof)) {
                     active.insert((node, dof));

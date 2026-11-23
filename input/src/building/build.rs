@@ -6,8 +6,7 @@ use carapace_core::model::{
     ChordDistribution, Domain3, Element3, Element3Id, ElementLoad3, FloorBand, FloorBandLayout,
     FloorBounds, FloorContinuity, FloorLoad, FloorReactions, FloorSupport, LoadPatternId,
     LoadSeries, Material, Node3, Node3Id, StudWall, StudWallLayout, WallChord, WallLoad,
-    WallOpening, WallPlane, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3,
-    WALL_SLOTS,
+    WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3, WALL_SLOTS,
 };
 use slotmap::Key;
 
@@ -389,7 +388,6 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
             let mut sorted: Vec<f64> = top.keys().map(|k| *k as f64 / 1e6).collect();
             sorted.sort_by(f64::total_cmp);
             sorted.dedup_by(|a, b| (*a - *b).abs() < 1e-9 * layout.length);
-            let plane = WallPlane::vertical(ws.direction[0], ws.direction[1]).map_err(err)?;
             let stations = sorted
                 .iter()
                 .filter(|&&x| x > 0. && x < layout.length)
@@ -422,7 +420,7 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                         .collect::<Vec<_>>()
                 })
                 .collect();
-            let wall = StudWall::new3(corners, stations, layout.clone(), load_slots, plane)
+            let wall = StudWall::new3(corners, stations, layout.clone(), load_slots)
                 .map_err(|e| err(format!("storey {si} wall {name}: {e}")))?;
             let eid = domain.add_element(Element3::StudWall(wall));
             for (slot, pattern) in patterns.iter().enumerate() {
@@ -526,17 +524,8 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let band = FloorBand::new3(
-                    bottom_row.clone(),
-                    top_row.clone(),
-                    layout.clone(),
-                    WallPlane::vertical(
-                        wall_nodes[si][name].0.direction[0],
-                        wall_nodes[si][name].0.direction[1],
-                    )
-                    .map_err(err)?,
-                )
-                .map_err(|e| err(e.to_string()))?;
+                let band = FloorBand::new3(bottom_row.clone(), top_row.clone(), layout.clone())
+                    .map_err(|e| err(e.to_string()))?;
                 bands[si - 1].push(domain.add_element(Element3::FloorBand(band)));
                 let pier: Vec<f64> = upper_layout.pier_ends();
                 for (i, x) in layout.xs.iter().enumerate() {
@@ -634,17 +623,8 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
         let band_layout =
             FloorBandLayout::between(layout, layout, s.floor_depth, s.band_ga, s.rim_ea)
                 .map_err(|e| err(e.to_string()))?;
-        let band = FloorBand::new3(
-            bottom_row.clone(),
-            top_row.clone(),
-            band_layout.clone(),
-            WallPlane::vertical(
-                wall_nodes[last][name].0.direction[0],
-                wall_nodes[last][name].0.direction[1],
-            )
-            .map_err(err)?,
-        )
-        .map_err(|e| err(e.to_string()))?;
+        let band = FloorBand::new3(bottom_row.clone(), top_row.clone(), band_layout.clone())
+            .map_err(|e| err(e.to_string()))?;
         bands[last].push(domain.add_element(Element3::FloorBand(band)));
         for i in 0..top_row.len() {
             let mat = Material::anchorage(s.bearing, 0., AnchorageBearing::Linear { k: s.bearing })

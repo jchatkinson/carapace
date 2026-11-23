@@ -12,7 +12,7 @@
 use arrayvec::ArrayVec;
 use nalgebra::{DMatrix, DVector};
 
-use super::wall_plane::{PlaneMap, WallPlane};
+use super::wall_plane::PlaneMap;
 use super::{DofMask, NodeView, TangentSink, VectorSink};
 use crate::model::{ElementForce, ElementLoad, Material, Node3Id, NodeId, NodeKey};
 
@@ -366,9 +366,7 @@ pub struct StudWall<K: NodeKey = NodeId> {
     corners: [K; 4],
     stations: Vec<WallStation<K>>,
     nodes: Vec<K>,
-    exterior_dofs: Vec<(K, u8)>,
     layout: StudWallLayout,
-    plane: WallPlane,
     stiffness: DMatrix<f64>,
     load_slots: Vec<DVector<f64>>,
     beam_load_slots: Vec<Vec<[f64; 6]>>,
@@ -404,7 +402,7 @@ impl StudWall<NodeId> {
         layout: StudWallLayout,
         loads: [Vec<WallLoad>; WALL_SLOTS],
     ) -> Result<Self, StudWallError> {
-        Self::build(corners, stations, layout, loads, WallPlane::Planar)
+        Self::build(corners, stations, layout, loads)
     }
 }
 
@@ -414,7 +412,6 @@ impl<K: NodeKey> StudWall<K> {
         stations: Vec<WallStation<K>>,
         layout: StudWallLayout,
         loads: [Vec<WallLoad>; WALL_SLOTS],
-        plane: WallPlane,
     ) -> Result<Self, StudWallError> {
         validate_layout(&layout, &stations)?;
         let is_nonlinear = layout
@@ -753,13 +750,8 @@ impl<K: NodeKey> StudWall<K> {
         Ok(Self {
             corners,
             stations,
-            exterior_dofs: nodes
-                .iter()
-                .flat_map(|&id| plane.slots().into_iter().map(move |s| (id, s)))
-                .collect(),
             nodes,
             layout,
-            plane,
             stiffness: kc,
             load_slots,
             beam_load_slots,
@@ -793,11 +785,18 @@ impl<K: NodeKey> StudWall<K> {
     pub fn stations(&self) -> &[WallStation<K>] {
         &self.stations
     }
-    pub fn dof_mask(&self) -> DofMask {
-        self.plane
-            .slots()
-            .into_iter()
-            .fold(DofMask::none(), |m, s| m.with(s as usize))
+    pub fn dof_mask<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> DofMask {
+        let p = self.corners.map(|id| nodes.get(id).coords);
+        match PlaneMap::from_corners(p[0], p[1], p[3]) {
+            Ok(map) => map
+                .slots
+                .iter()
+                .fold(DofMask::none(), |m, s| m.with(*s as usize)),
+            Err(_) => (0..NDIM.min(3)).fold(DofMask::none(), |m, s| m.with(s)),
+        }
     }
     pub fn accepts_load(&self, load: &ElementLoad) -> bool {
         !load.has_beam() && !load.has_body() && !load.has_edge()
@@ -807,7 +806,7 @@ impl<K: NodeKey> StudWall<K> {
         nodes: &NodeView<'_, NDIM, NDOF, K>,
     ) -> Result<(), &'static str> {
         let p = self.corners.map(|id| nodes.get(id).coords);
-        let map = self.plane.map(p[0], p[1]);
+        let map = PlaneMap::from_corners(p[0], p[1], p[3])?;
         let l = self.layout.length;
         let h = self.layout.height;
         let tol = 1e-9 * self.layout.length.max(self.layout.height).max(1.);
@@ -825,12 +824,6 @@ impl<K: NodeKey> StudWall<K> {
                 } else {
                     "corner geometry is not a counter-clockwise rectangle"
                 });
-            }
-        }
-        if NDIM == 3 {
-            let dx = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
-            if dx[1].abs() > tol || (dx[0] * map.ex[0] + dx[2] * map.ex[2] - l).abs() > tol {
-                return Err("corner lengths do not match layout L and H");
             }
         }
         for s in &self.stations {
@@ -854,6 +847,12 @@ impl<K: NodeKey> StudWall<K> {
         sink: &mut S,
     ) {
         let map = self.frame(nodes);
+        let mut exterior_dofs = ArrayVec::<(K, u8), MAX_EXTERIOR_DOFS>::new();
+        exterior_dofs.extend(
+            self.nodes
+                .iter()
+                .flat_map(|id| map.slots.iter().map(move |slot| (*id, *slot))),
+        );
         let mut u = ArrayVec::<f64, MAX_EXTERIOR_DOFS>::new();
         for &id in &self.nodes {
             u.extend(map.local(&nodes.get(id).displacement));
@@ -911,10 +910,10 @@ impl<K: NodeKey> StudWall<K> {
                         kg.push(v);
                     }
                 }
-                sink.add_dyn(&self.exterior_dofs, kg, &rg);
+                sink.add_dyn(&exterior_dofs, kg, &rg);
             });
         } else {
-            sink.add_dyn(&self.exterior_dofs, &prepared.stiffness, &rg);
+            sink.add_dyn(&exterior_dofs, &prepared.stiffness, &rg);
         }
     }
     pub fn assemble_load<const NDIM: usize, const NDOF: usize, S: VectorSink<K>>(
@@ -925,6 +924,12 @@ impl<K: NodeKey> StudWall<K> {
     ) {
         let Some(load) = load else { return };
         let map = self.frame(nodes);
+        let mut exterior_dofs = ArrayVec::<(K, u8), MAX_EXTERIOR_DOFS>::new();
+        exterior_dofs.extend(
+            self.nodes
+                .iter()
+                .flat_map(|id| map.slots.iter().map(move |slot| (*id, *slot))),
+        );
         let owned = self.prepared.is_none().then(|| self.prepared_for(&map));
         let prepared = self
             .prepared
@@ -937,7 +942,7 @@ impl<K: NodeKey> StudWall<K> {
                 *v += load.wall[k] * prepared.loads[k][i];
             }
         }
-        sink.add_dyn(&self.exterior_dofs, &f);
+        sink.add_dyn(&exterior_dofs, &f);
     }
     pub fn prepare<const NDIM: usize, const NDOF: usize>(
         &mut self,
@@ -1282,7 +1287,8 @@ impl<K: NodeKey> StudWall<K> {
     ) -> PlaneMap {
         let a = nodes.get(self.corners[0]).coords;
         let b = nodes.get(self.corners[1]).coords;
-        self.plane.map(a, b)
+        PlaneMap::from_corners(a, b, nodes.get(self.corners[3]).coords)
+            .expect("validated wall geometry")
     }
     fn local_displacement<const NDIM: usize, const NDOF: usize>(
         &self,
@@ -1408,23 +1414,14 @@ impl<K: NodeKey> StudWall<K> {
 }
 
 impl StudWall<Node3Id> {
-    /// Builds a 3D wall in a vertical plane with global Y up.
+    /// Builds a 3D wall; its local axes are derived from corner geometry.
     pub fn new3(
         corners: [Node3Id; 4],
         stations: Vec<WallStation<Node3Id>>,
         layout: StudWallLayout,
         loads: [Vec<WallLoad>; WALL_SLOTS],
-        plane: WallPlane,
     ) -> Result<Self, StudWallError> {
-        let plane = match plane {
-            WallPlane::Planar => {
-                return Err(StudWallError(
-                    "3D stud wall requires a vertical wall plane".into(),
-                ))
-            }
-            WallPlane::Vertical { ex, ez } => WallPlane::vertical(ex, ez).map_err(StudWallError)?,
-        };
-        Self::build(corners, stations, layout, loads, plane)
+        Self::build(corners, stations, layout, loads)
     }
 }
 

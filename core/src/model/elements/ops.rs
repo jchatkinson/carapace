@@ -277,7 +277,7 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
     /// other element, constraint or boundary condition uses is not an
     /// equation at all, so such a contribution would be silently dropped
     /// (debug builds assert against it).
-    fn dof_mask(&self) -> DofMask;
+    fn dof_mask(&self, nodes: &NodeView<'_, NDIM, NDOF, NId>) -> DofMask;
 
     /// Rejects an element whose geometry or parameters make it unusable
     /// (coincident nodes, inverted orientation, ...); called by

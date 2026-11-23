@@ -219,13 +219,8 @@ fn kinematic_wall(
 #[test]
 fn mask_and_rigid_body_modes() {
     let zero = [[0.; 2]; 4];
-    let (d, id) = kinematic_wall(0., false, &zero);
-    let Element::StudWall(w) = d.element(id) else {
-        panic!()
-    };
-    let mask = w.dof_mask();
-    assert!(mask.contains(0) && mask.contains(1));
-    assert!(!mask.contains(2));
+    let (mut d, _id) = kinematic_wall(0., false, &zero);
+    d.validate().unwrap();
     for u in [
         [[0.3, -0.2]; 4],
         [[0., 0.], [0., 0.01], [-0.08, 0.01], [-0.08, 0.]],

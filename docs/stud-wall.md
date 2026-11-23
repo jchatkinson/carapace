@@ -13,7 +13,7 @@ It is built for design:
   11.7.1.2 deflection terms for one storey, and the O86 Annex A.11.7.1 multi-storey method for stacked walls;
 - **design forces** per pier: shear flow `q` and the M/jd chord (hold-down) force.
 
-Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls2d`/`studWalls3d`, `floorBands2d`/`floorBands3d`,
+Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls`, `floorBands`,
 `diaphragms`, wall slot factors and `floorLoads`). The CLI consumes the same format. PySees does not compile these
 tables and has no stud-wall model API. Implementation details
 are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
@@ -42,15 +42,16 @@ Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [3 She
 
 ### 3D models
 
-Use `StudWall::new3(..., plane)` for a wall in a vertical plane of `Domain3`. `WallPlane::vertical(ex, ez)` takes
-the unit plan direction from `c0` to `c1`; global `Y` is up. Corners and stations must lie in that plane at the
-same local `(x, y)` positions as in a 2D model. For example, the point at local `(x, y)` is
-`p0 + x * (ex, 0, ez) + y * (0, 1, 0)`.
+Use `StudWall::new3(corners, stations, layout, loads)` in `Domain3`; its local axes come from the corners, just
+as in 2D. Local `x` follows `c0 → c1`; local `y` follows `c0 → c3`. Those directions must be orthogonal within
+relative `1e-9`. Corners and stations must lie in the resulting plane at the declared local `(x, y)` positions.
+No global up axis is assumed, so a wall may be vertical in a Y-up or Z-up model.
 
-The wall stiffens global `uy` and the plan translation components present in its direction (`ux` when `ex != 0`,
-`uz` when `ez != 0`). It never stiffens rotations. A node on one wall line has no stiffness normal to that wall;
-provide that support with a crossing wall, a diaphragm constraint, or a fixity. Wall response quantities and
-`local_force` remain in wall-local axes. `ElementLoad3::wall` carries the same eight top-plate slot factors as
+The wall stiffens exactly the global translation slots with a component larger than `1e-12` in either local
+axis. A wall in the global X-Z plane stiffens `ux` and `uz`; one in the X-Y plane stiffens `ux` and `uy`; a skew
+wall may stiffen all three translations. It never stiffens rotations or the translation normal to its plane.
+Provide that support with a crossing wall, diaphragm constraint, or fixity. Wall responses and `local_force`
+remain in wall-local axes. `ElementLoad3::wall` carries the same eight top-plate slot factors as
 `ElementLoad::wall`.
 
 ## 2. Layout

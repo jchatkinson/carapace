@@ -6,14 +6,15 @@ use carapace_core::model::{
     ElasticBeamColumn3, Element3, Element3Id, ElementLoad3, Fiber3, FiberSection3, FloorBand,
     FloorBandLayout, ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3, Shell4,
     ShellModifiers, ShellSection, StudWall, StudWallLayout, Truss3, WallChord, WallLoad,
-    WallOpening, WallPlane, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3,
+    WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength3,
     ZeroLengthSection3,
 };
 
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
     build_fiber_section, check_fibers, finish, floor_wall_loads, friction_by_row, integration_of,
-    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables, ElementIds,
+    material_lookup, materials_by_row, node_lookup, orientations_by_row, reject_tables,
+    validate_stud_wall_geometry, ElementIds,
 };
 use crate::building::{ChordDistributionSpec, WallChordSpec, WallLoadSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
@@ -75,8 +76,8 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
             ("shellSections", !input.shell_sections.is_empty()),
             ("shell3s", !input.shell3s.node_ids.is_empty()),
             ("shell4s", !input.shell4s.node_ids.is_empty()),
-            ("studWalls3d", !input.stud_walls_3d.is_empty()),
-            ("floorBands3d", !input.floor_bands_3d.is_empty()),
+            ("studWalls", !input.stud_walls.is_empty()),
+            ("floorBands", !input.floor_bands.is_empty()),
             ("diaphragms", !input.diaphragms.is_empty()),
             ("equalDofs", !input.equal_dofs.retained.is_empty()),
             (
@@ -139,7 +140,7 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
                         .map(|x| x.len())
                         .sum::<usize>()
                         + local;
-                    let element_kind = ElementKind::StudWall3d;
+                    let element_kind = ElementKind::StudWall;
                     let element_index = element_index as u32;
                     *recorder = match recorder.clone() {
                         RecorderSpec::BuildingWallPier { pier, quantity, .. } => {
@@ -203,7 +204,7 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
         }
         let mut elements = ElementIds::new();
         elements.set(
-            ElementKind::StudWall3d,
+            ElementKind::StudWall,
             building
                 .walls
                 .iter()
@@ -211,7 +212,7 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
                 .collect(),
         );
         elements.set(
-            ElementKind::FloorBand3d,
+            ElementKind::FloorBand,
             building.bands.iter().flatten().copied().collect(),
         );
         return finish(
@@ -238,8 +239,6 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
         );
     }
     reject_tables(&[
-        ("stud_walls_2d", input.stud_walls_2d.is_empty()),
-        ("floor_bands_2d", input.floor_bands_2d.is_empty()),
         (
             "elastic_beam_columns_2d",
             input.elastic_beam_columns_2d.node_i.is_empty(),
@@ -393,19 +392,20 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
         add_shell4s(&mut domain, &input.shell4s, &node_at, &shell_sections)?,
     );
 
-    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls_3d.len())?;
+    let floor_wall_loads = floor_wall_loads(&input.floor_loads, input.stud_walls.len())?;
     elements.set(
-        ElementKind::StudWall3d,
+        ElementKind::StudWall,
         decode_stud_walls3(
             &mut domain,
-            &input.stud_walls_3d,
+            &input.stud_walls,
+            &input.nodes,
             &node_at,
             &floor_wall_loads,
         )?,
     );
     elements.set(
-        ElementKind::FloorBand3d,
-        decode_floor_bands3(&mut domain, &input.floor_bands_3d, &node_at)?,
+        ElementKind::FloorBand,
+        decode_floor_bands3(&mut domain, &input.floor_bands, &node_at)?,
     );
     elements.set(
         ElementKind::Diaphragm,
@@ -501,16 +501,10 @@ fn load3(l: WallLoadSpec) -> WallLoad {
         },
     }
 }
-fn plane3(p: [f64; 2], table: &'static str, row: usize) -> Result<WallPlane, DecodeError> {
-    WallPlane::vertical(p[0], p[1]).map_err(|e| DecodeError::InvalidMacroElement {
-        table,
-        row: row as u32,
-        reason: e,
-    })
-}
 fn decode_stud_walls3(
     d: &mut Domain3,
     t: &[crate::input_v1::tables::StudWallSpec],
+    node_table: &crate::input_v1::tables::NodeTable,
     node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
     extra: &[[Vec<WallLoad>; 8]],
 ) -> Result<Vec<Element3Id>, DecodeError> {
@@ -518,7 +512,7 @@ fn decode_stud_walls3(
     for (i, r) in t.iter().enumerate() {
         let c = r
             .corners
-            .map(|x| node(x, "stud_walls_3d"))
+            .map(|x| node(x, "stud_walls"))
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
@@ -533,15 +527,22 @@ fn decode_stud_walls3(
                         WallChordSpec::Bottom => WallChord::Bottom,
                     },
                     x: s.x,
-                    node: node(s.node, "stud_walls_3d")?,
+                    node: node(s.node, "stud_walls")?,
                 })
             })
             .collect::<Result<Vec<_>, DecodeError>>()?;
+        validate_stud_wall_geometry(node_table, 3, r).map_err(|reason| {
+            DecodeError::InvalidMacroElement {
+                table: "stud_walls",
+                row: i as u32,
+                reason: reason.into(),
+            }
+        })?;
         let mut loads: [Vec<WallLoad>; 8] = std::array::from_fn(|_| Vec::new());
         for x in &r.loads {
             if x.slot >= 8 {
                 return Err(DecodeError::InvalidWallSlot {
-                    table: "stud_walls_3d",
+                    table: "stud_walls",
                     row: i as u32,
                     slot: x.slot as u32,
                 });
@@ -551,22 +552,12 @@ fn decode_stud_walls3(
         for k in 0..8 {
             loads[k].extend(extra[i][k].iter().copied());
         }
-        let plane = r.plane.ok_or(DecodeError::InvalidRow {
-            table: "stud_walls_3d",
-            row: i as u32,
-            reason: "plane is required in a 3D model",
-        })?;
-        let w = StudWall::new3(
-            c,
-            st,
-            layout3(&r.layout),
-            loads,
-            plane3(plane, "stud_walls_3d", i)?,
-        )
-        .map_err(|e| DecodeError::InvalidMacroElement {
-            table: "stud_walls_3d",
-            row: i as u32,
-            reason: e.to_string(),
+        let w = StudWall::new3(c, st, layout3(&r.layout), loads).map_err(|e| {
+            DecodeError::InvalidMacroElement {
+                table: "stud_walls",
+                row: i as u32,
+                reason: e.to_string(),
+            }
         })?;
         out.push(d.add_element(Element3::StudWall(w)));
     }
@@ -582,19 +573,14 @@ fn decode_floor_bands3(
         let b = r
             .bottom
             .iter()
-            .map(|&x| node(x, "floor_bands_3d"))
+            .map(|&x| node(x, "floor_bands"))
             .collect::<Result<Vec<_>, _>>()?;
         let top = r
             .top
             .iter()
-            .map(|&x| node(x, "floor_bands_3d"))
+            .map(|&x| node(x, "floor_bands"))
             .collect::<Result<Vec<_>, _>>()?;
         let l = &r.layout;
-        let p = r.plane.ok_or(DecodeError::InvalidRow {
-            table: "floor_bands_3d",
-            row: i as u32,
-            reason: "plane is required in a 3D model",
-        })?;
         let band = FloorBand::new3(
             b,
             top,
@@ -605,10 +591,9 @@ fn decode_floor_bands3(
                 bays: l.bays.clone(),
                 rim_ea: l.rim_ea,
             },
-            plane3(p, "floor_bands_3d", i)?,
         )
         .map_err(|e| DecodeError::InvalidMacroElement {
-            table: "floor_bands_3d",
+            table: "floor_bands",
             row: i as u32,
             reason: e.to_string(),
         })?;
@@ -652,12 +637,12 @@ fn decode_diaphragms(
         let e = Diaphragm::new(
             nodes,
             DiaphragmLayout {
-                xs: l.xs.clone(),
-                zs: l.zs.clone(),
-                y: l.y,
+                u: l.u.clone(),
+                v: l.v.clone(),
+                level: l.level,
                 bays: laws,
-                ea_x: l.ea_x.clone(),
-                ea_z: l.ea_z.clone(),
+                ea_u: l.ea_u.clone(),
+                ea_v: l.ea_v.clone(),
             },
         )
         .map_err(|reason| DecodeError::InvalidMacroElement {

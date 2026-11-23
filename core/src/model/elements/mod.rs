@@ -46,7 +46,6 @@ pub use stud_wall::{
 };
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
-pub use wall_plane::WallPlane;
 pub use zero_length::{
     Friction, Friction3, Orientation, OrientationError, ZeroLength, ZeroLength3, ZeroLengthSection,
     ZeroLengthSection3,
@@ -313,7 +312,7 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         }
     }
 
-    fn dof_mask(&self) -> DofMask {
+    fn dof_mask(&self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> DofMask {
         match self {
             // A truss carries no moment: translations only.
             Element::Truss(_) => DofMask::none().with(0).with(1),
@@ -325,8 +324,8 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
             Element::Tri3(t) => t.dof_mask(),
             Element::Quad4(q) => q.dof_mask(),
             Element::EmbeddedBar(bar) => bar.dof_mask(),
-            Element::StudWall(wall) => wall.dof_mask(),
-            Element::FloorBand(band) => band.dof_mask(),
+            Element::StudWall(wall) => wall.dof_mask(nodes),
+            Element::FloorBand(band) => band.dof_mask(nodes),
         }
     }
 
@@ -839,7 +838,7 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         }
     }
 
-    fn dof_mask(&self) -> DofMask {
+    fn dof_mask(&self, nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>) -> DofMask {
         match self {
             Element3::Truss3(_) => DofMask::none().with(0).with(1).with(2),
             Element3::ZeroLength3(z) => z.dof_mask(),
@@ -849,9 +848,9 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             | Element3::ForceBeamColumn3(_) => DofMask::all(SPATIAL_NDF),
             Element3::Shell3(s) => s.dof_mask(),
             Element3::Shell4(s) => s.dof_mask(),
-            Element3::StudWall(w) => w.dof_mask(),
-            Element3::FloorBand(b) => b.dof_mask(),
-            Element3::Diaphragm(d) => d.dof_mask(),
+            Element3::StudWall(w) => w.dof_mask(nodes),
+            Element3::FloorBand(b) => b.dof_mask(nodes),
+            Element3::Diaphragm(d) => d.dof_mask(nodes),
         }
     }
 
@@ -1187,7 +1186,7 @@ mod mask_conformance {
         exact: bool,
     ) {
         let touched = touched::<NDIM, NDOF, NId, E>(element, nodes);
-        let mask = mask_slots::<NDOF>(element.dof_mask());
+        let mask = mask_slots::<NDOF>(element.dof_mask(&NodeView::new(nodes)));
         assert!(
             touched.is_subset(&mask),
             "{name}: stiffens slots {touched:?} but declares only {mask:?}"

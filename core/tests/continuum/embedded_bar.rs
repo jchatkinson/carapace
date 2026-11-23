@@ -7,8 +7,8 @@
 //! `CsfmConcrete` host and its embedded `CsfmRebar`.
 
 use carapace_core::model::{
-    CsfmConcreteLaw, Domain, Element, ElementOps, EmbeddedBar, LimitKind, LimitStateConfig,
-    Material, Node, NodeId, PlaneMaterial, Tri3, Truss,
+    CsfmConcreteLaw, Domain, Element, EmbeddedBar, LimitKind, LimitStateConfig, Material, Node,
+    NodeId, PlaneMaterial, Tri3, Truss,
 };
 use carapace_core::testkit::{assert_element_tangent_matches_fd, FdConfig};
 use slotmap::SlotMap;
@@ -264,10 +264,11 @@ fn dof_mask_is_translations_only() {
         1.0,
         material,
     ));
-    let mask = element.dof_mask();
-    assert!(mask.contains(0));
-    assert!(mask.contains(1));
-    assert!(!mask.contains(2));
+    domain.add_element(element);
+    domain.validate().unwrap();
+    assert!(domain.is_active(ids[0], 0));
+    assert!(domain.is_active(ids[0], 1));
+    assert!(!domain.is_active(ids[0], 2));
 }
 
 /// A plain (non-CSFM) `Tri3`/`EmbeddedBar` pair reports no limit state at

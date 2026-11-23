@@ -1,4 +1,4 @@
-//! Floor band: element response and the floor-depth lever in stacked shear walls.
+//! Floor band: local panel response and floor-depth lever in 2D and 3D stacked shear walls.
 //!
 //! Element checks (constant-shear energy, axial rim bar, rigid-body modes, rotation, inactive bays): 1e-12.
 //! One storey on a band: base moment `V(H + d)`, O86:19 Fig. 11.7 statics, 1e-9. Window wall: pier shears sum
@@ -65,8 +65,8 @@ fn near(a: f64, b: f64, tol: f64) {
 }
 
 /// Constant shear field reports `q = GA gamma`, with the horizontal edge forces split over both rows and the
-/// vertical couple on the bottom row; the same force state rotated 30 degrees gives globally rotated
-/// nodal forces. Reference: direct differentiation of `0.5 GA a d gamma^2`; tolerance 1e-12.
+/// vertical couple on the bottom row. A 30 degree rotation preserves the force components in the band's local
+/// axes. Reference: direct differentiation of `0.5 GA a d gamma^2`; tolerance 1e-12.
 #[test]
 fn shear_and_rotation() {
     let gamma = 0.01;
@@ -88,17 +88,8 @@ fn shear_and_rotation() {
     let angle = 30f64.to_radians();
     let (rot, rid) = band(vec![0., 1000.], vec![Some(2e6)], 0., angle, input);
     let fr = rot.element_end_force(rid, 1.).as_slice().to_vec();
-    for i in 0..4 {
-        near(
-            fr[2 * i],
-            f[2 * i] * angle.cos() - f[2 * i + 1] * angle.sin(),
-            1e-12,
-        );
-        near(
-            fr[2 * i + 1],
-            f[2 * i] * angle.sin() + f[2 * i + 1] * angle.cos(),
-            1e-12,
-        );
+    for (rotated, reference) in fr.iter().zip(&f) {
+        near(*rotated, *reference, 1e-12);
     }
 }
 

@@ -57,7 +57,7 @@ fn input_wall() -> carapace_input::input_v1::CarapaceInputV1 {
         mass_node_index: vec![],
         mass: vec![],
     };
-    i.stud_walls_2d = vec![StudWallSpec {
+    i.stud_walls = vec![StudWallSpec {
         corners: [0, 1, 2, 3],
         stations: vec![],
         layout: layout(),
@@ -69,7 +69,6 @@ fn input_wall() -> carapace_input::input_v1::CarapaceInputV1 {
                 fy: 0.,
             },
         }],
-        plane: None,
     }];
     i.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1. }],
@@ -77,7 +76,7 @@ fn input_wall() -> carapace_input::input_v1::CarapaceInputV1 {
     };
     i.element_loads = ElementLoadTable {
         pattern: vec![0],
-        element_kind: vec![ElementKind::StudWall2d],
+        element_kind: vec![ElementKind::StudWall],
         element_index: vec![0],
         load: vec![ElementLoadSpec::WallSlots {
             factors: [1., 0., 0., 0., 0., 0., 0., 0.],
@@ -175,7 +174,7 @@ fn stud_wall_wire_solves_like_direct_core_constructor_and_roundtrips() {
 fn stud_wall_pier_recorder_matches_core_and_validates_pier_index() {
     let mut input = input_wall();
     input.sequence.recorders = vec![RecorderSpec::StudWallPier {
-        element_kind: ElementKind::StudWall2d,
+        element_kind: ElementKind::StudWall,
         element_index: 0,
         pier: 0,
         quantity: carapace_input::input_v1::sequence::StudWallQuantity::Q,
@@ -186,7 +185,7 @@ fn stud_wall_pier_recorder_matches_core_and_validates_pier_index() {
     let value = outcome.recorder_batches[0].samples[0].1;
     assert!((value - core_wall_values().1).abs() < 1e-12);
     input.sequence.recorders = vec![RecorderSpec::StudWallPier {
-        element_kind: ElementKind::StudWall2d,
+        element_kind: ElementKind::StudWall,
         element_index: 0,
         pier: 1,
         quantity: carapace_input::input_v1::sequence::StudWallQuantity::Q,
@@ -204,29 +203,29 @@ fn stud_wall_pier_recorder_matches_core_and_validates_pier_index() {
 #[test]
 fn macro_table_errors_are_reported() {
     let mut bad = input_wall();
-    bad.stud_walls_2d[0].corners[0] = 99;
+    bad.stud_walls[0].corners[0] = 99;
     assert!(matches!(
         decode(bad),
         Err(carapace_input::input_v1::DecodeError::UnknownNodeIndex { .. })
     ));
     let mut bad = input_wall();
-    bad.stud_walls_2d[0].loads[0].slot = 8;
+    bad.stud_walls[0].loads[0].slot = 8;
     assert!(matches!(
         decode(bad),
         Err(carapace_input::input_v1::DecodeError::InvalidWallSlot { .. })
     ));
     let mut bad = input_wall();
-    bad.stud_walls_3d = vec![StudWallSpec {
+    bad.stud_walls = vec![StudWallSpec {
         corners: [0; 4],
         stations: vec![],
         layout: layout(),
         loads: vec![],
-        plane: Some([1., 0.]),
     }];
     assert!(matches!(
         decode(bad),
-        Err(carapace_input::input_v1::DecodeError::TableNotInProfile {
-            table: "stud_walls_3d"
+        Err(carapace_input::input_v1::DecodeError::InvalidMacroElement {
+            table: "stud_walls",
+            ..
         })
     ));
 }
@@ -283,13 +282,12 @@ fn floor_loads_window_wall_matches_direct_core() {
         mass_node_index: vec![],
         mass: vec![],
     };
-    input.stud_walls_2d = [0, 1]
+    input.stud_walls = [0, 1]
         .map(|wall| StudWallSpec {
             corners: [wall * 4, wall * 4 + 1, wall * 4 + 2, wall * 4 + 3],
             stations: vec![],
             layout: window_layout(wall == 0),
             loads: vec![],
-            plane: None,
         })
         .to_vec();
     input.floor_loads = vec![FloorTransferSpec {
@@ -329,7 +327,7 @@ fn floor_loads_window_wall_matches_direct_core() {
     };
     input.element_loads = ElementLoadTable {
         pattern: vec![0, 1],
-        element_kind: vec![ElementKind::StudWall2d; 2],
+        element_kind: vec![ElementKind::StudWall; 2],
         element_index: vec![0, 0],
         load: vec![
             ElementLoadSpec::WallSlots {
@@ -355,54 +353,54 @@ fn floor_loads_window_wall_matches_direct_core() {
         }],
         recorders: vec![
             RecorderSpec::StudWallPier {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 pier: 0,
                 quantity: carapace_input::input_v1::sequence::StudWallQuantity::Q,
             },
             RecorderSpec::StudWallPier {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 pier: 0,
                 quantity: carapace_input::input_v1::sequence::StudWallQuantity::MomentBase,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 0,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 1,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 2,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 3,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 4,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 5,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 6,
             },
             RecorderSpec::ElementForce {
-                element_kind: ElementKind::StudWall2d,
+                element_kind: ElementKind::StudWall,
                 element_index: 0,
                 component: 7,
             },
@@ -588,7 +586,7 @@ fn anchorage_wire_drift_matches_direct_core() {
         materials: vec![(0, 0, 0), (0, 1, 1), (1, 0, 0), (1, 1, 1)],
         ..Default::default()
     };
-    input.stud_walls_2d = vec![StudWallSpec {
+    input.stud_walls = vec![StudWallSpec {
         corners: [1, 2, 3, 4],
         stations: vec![],
         layout: WallLayoutSpec {
@@ -636,7 +634,6 @@ fn anchorage_wire_drift_matches_direct_core() {
                 },
             },
         ],
-        plane: None,
     }];
     input.load_patterns = LoadPatternTable {
         series: vec![TimeSeriesSpec::Linear { slope: 1. }],
@@ -644,7 +641,7 @@ fn anchorage_wire_drift_matches_direct_core() {
     };
     input.element_loads = ElementLoadTable {
         pattern: vec![0],
-        element_kind: vec![ElementKind::StudWall2d],
+        element_kind: vec![ElementKind::StudWall],
         element_index: vec![0],
         load: vec![ElementLoadSpec::WallSlots {
             factors: [1., 1., 0., 0., 0., 0., 0., 0.],
@@ -972,7 +969,7 @@ fn building_wall_base_axial_is_the_takedown() {
 }
 
 #[test]
-fn spatial_stud_wall_requires_unit_plane_and_decodes() {
+fn shared_stud_wall_table_decodes_in_3d_and_rejects_nonorthogonal_geometry() {
     let mut i = empty_input(3);
     i.nodes = NodeTable {
         coords: vec![0., 0., 0., 1000., 0., 0., 1000., 1000., 0., 0., 1000., 0.],
@@ -980,23 +977,22 @@ fn spatial_stud_wall_requires_unit_plane_and_decodes() {
         mass_node_index: vec![],
         mass: vec![],
     };
-    i.stud_walls_3d = vec![StudWallSpec {
+    i.stud_walls = vec![StudWallSpec {
         corners: [0, 1, 2, 3],
         stations: vec![],
         layout: layout(),
         loads: vec![],
-        plane: Some([1., 0.]),
     }];
     let json = serde_json::to_value(&i).unwrap();
     let back: carapace_input::input_v1::CarapaceInputV1 =
         serde_json::from_value(json.clone()).unwrap();
     assert_eq!(serde_json::to_value(back.clone()).unwrap(), json);
     assert!(decode(back).is_ok());
-    i.stud_walls_3d[0].plane = Some([2., 0.]);
+    i.nodes.coords[4] = 100.;
     assert!(matches!(
         decode(i),
         Err(carapace_input::input_v1::DecodeError::InvalidMacroElement {
-            table: "stud_walls_3d",
+            table: "stud_walls",
             ..
         })
     ));
@@ -1036,11 +1032,11 @@ fn wall_slot_load_is_rejected_on_a_non_wall_and_wall_constructor_errors_surface(
     ));
 
     let mut bad = input_wall();
-    bad.stud_walls_2d[0].layout.length = -1.;
+    bad.stud_walls[0].layout.length = -1.;
     assert!(matches!(
         decode(bad),
         Err(carapace_input::input_v1::DecodeError::InvalidMacroElement {
-            table: "stud_walls_2d",
+            table: "stud_walls",
             ..
         })
     ));
@@ -1090,7 +1086,7 @@ fn floor_transfer_errors_are_not_dropped() {
 #[test]
 fn floor_transfer_loads_are_appended_to_wall_slots() {
     let mut i = input_wall();
-    i.stud_walls_2d[0].loads.clear();
+    i.stud_walls[0].loads.clear();
     i.floor_loads = vec![FloorTransferSpec {
         bounds: [0., 1000., 0., 1000.],
         continuity: FloorContinuitySpec::Simple,
@@ -1163,7 +1159,7 @@ fn floor_band_and_diaphragm_tables_decode_and_roundtrip() {
         mass_node_index: vec![],
         mass: vec![],
     };
-    band.floor_bands_2d = vec![FloorBandSpec {
+    band.floor_bands = vec![FloorBandSpec {
         bottom: vec![0, 1],
         top: vec![2, 3],
         layout: FloorBandLayoutSpec {
@@ -1173,7 +1169,6 @@ fn floor_band_and_diaphragm_tables_decode_and_roundtrip() {
             bays: vec![Some(1e3)],
             rim_ea: 1e4,
         },
-        plane: None,
     }];
     let json = serde_json::to_value(&band).unwrap();
     let back: carapace_input::input_v1::CarapaceInputV1 =
@@ -1221,14 +1216,14 @@ fn floor_band_and_diaphragm_tables_decode_and_roundtrip() {
         mass: vec![],
     };
     dia.diaphragms = vec![DiaphragmSpec {
-        nodes: vec![0, 1, 2, 3],
+        nodes: vec![0, 2, 1, 3],
         layout: DiaphragmLayoutSpec {
-            xs: vec![0., 100.],
-            zs: vec![0., 100.],
-            y: 0.,
+            u: vec![0., 100.],
+            v: vec![0., 100.],
+            level: 0.,
             bays: vec![Some(WallShearLawSpec::Linear { ga: 1000. })],
-            ea_x: vec![1000., 1000.],
-            ea_z: vec![1000., 1000.],
+            ea_u: vec![1000., 1000.],
+            ea_v: vec![1000., 1000.],
         },
     }];
     let json = serde_json::to_value(&dia).unwrap();

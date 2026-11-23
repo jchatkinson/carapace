@@ -148,16 +148,10 @@ pub struct CarapaceInputV1 {
     pub shell4s: Shell4Table,
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub stud_walls_2d: Vec<StudWallSpec>,
+    pub stud_walls: Vec<StudWallSpec>,
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub stud_walls_3d: Vec<StudWallSpec>,
-    #[serde(default)]
-    #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub floor_bands_2d: Vec<FloorBandSpec>,
-    #[serde(default)]
-    #[cfg_attr(feature = "tsify", tsify(optional))]
-    pub floor_bands_3d: Vec<FloorBandSpec>,
+    pub floor_bands: Vec<FloorBandSpec>,
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub diaphragms: Vec<DiaphragmSpec>,

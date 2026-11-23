@@ -95,10 +95,10 @@ friction/orientation in `ZeroLength`.
 generic, so a dimension-generic `Truss` would need a redundant const parameter to size its matrices. That
 costs more than the roughly 100 duplicated lines it saves, so `Truss`/`Truss3` stay as two types.
 
-**Share a wall plane map when the local model is unchanged.** `StudWall<K>` and `FloorBand<K>` keep their
-two-translation local kinematics and use `WallPlane` to map those translations into the active global slots for
-a 2D model or a vertical plane in `Domain3`. The closed `Element` and `Element3` catalogs dispatch to the same
-element implementation.
+**Share a geometry-derived wall map when the local model is unchanged.** `StudWall<K>` and `FloorBand<K>` keep
+their two-translation local kinematics and derive a `PlaneMap` from their connected nodes. `dof_mask` receives
+the node view so it can activate exactly the global translation slots present in the local axes. The closed
+`Element` and `Element3` catalogs dispatch to the same element implementation.
 
 ## Adding an element
 

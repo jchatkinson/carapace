@@ -5,7 +5,7 @@
 
 use nalgebra::{SMatrix, SVector};
 
-use super::wall_plane::WallPlane;
+use super::wall_plane::PlaneMap;
 use super::{DofMask, NodeView, TangentSink, VectorSink};
 use crate::model::{ElementForce, Node3Id, NodeId, NodeKey};
 
@@ -110,7 +110,6 @@ pub struct FloorBand<K: NodeKey = NodeId> {
     top: Vec<K>,
     nodes: Vec<K>,
     layout: FloorBandLayout,
-    plane: WallPlane,
     prepared_tangents: Option<Vec<Vec<f64>>>,
 }
 
@@ -121,17 +120,12 @@ impl FloorBand<NodeId> {
         top: Vec<NodeId>,
         layout: FloorBandLayout,
     ) -> Result<Self, FloorBandError> {
-        Self::build(bottom, top, layout, WallPlane::Planar)
+        Self::build(bottom, top, layout)
     }
 }
 
 impl<K: NodeKey> FloorBand<K> {
-    fn build(
-        bottom: Vec<K>,
-        top: Vec<K>,
-        layout: FloorBandLayout,
-        plane: WallPlane,
-    ) -> Result<Self, FloorBandError> {
+    fn build(bottom: Vec<K>, top: Vec<K>, layout: FloorBandLayout) -> Result<Self, FloorBandError> {
         validate_layout(&layout)?;
         let n = layout.xs.len();
         if bottom.len() != n {
@@ -157,7 +151,6 @@ impl<K: NodeKey> FloorBand<K> {
             top,
             nodes,
             layout,
-            plane,
             prepared_tangents: None,
         })
     }
@@ -169,11 +162,22 @@ impl<K: NodeKey> FloorBand<K> {
     pub fn layout(&self) -> &FloorBandLayout {
         &self.layout
     }
-    pub fn dof_mask(&self) -> DofMask {
-        self.plane
-            .slots()
-            .into_iter()
-            .fold(DofMask::none(), |m, s| m.with(s as usize))
+    pub fn dof_mask<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> DofMask {
+        let map = PlaneMap::from_corners(
+            nodes.get(self.bottom[0]).coords,
+            nodes.get(*self.bottom.last().unwrap()).coords,
+            nodes.get(self.top[0]).coords,
+        );
+        match map {
+            Ok(map) => map
+                .slots
+                .iter()
+                .fold(DofMask::none(), |m, s| m.with(*s as usize)),
+            Err(_) => (0..NDIM.min(3)).fold(DofMask::none(), |m, s| m.with(s)),
+        }
     }
     pub fn validate<const NDIM: usize, const NDOF: usize>(
         &self,
@@ -181,7 +185,7 @@ impl<K: NodeKey> FloorBand<K> {
     ) -> Result<(), &'static str> {
         let p0 = nodes.get(self.bottom[0]).coords;
         let pn = nodes.get(*self.bottom.last().unwrap()).coords;
-        let map = self.plane.map(p0, pn);
+        let map = PlaneMap::from_corners(p0, pn, nodes.get(self.top[0]).coords)?;
         let (lx, ly, off) = map.point(&pn);
         let tol = 1e-9 * self.layout.length.max(self.layout.depth).max(1.);
         if !lx.is_finite() || (lx - self.layout.length).abs().max(ly.abs()).max(off.abs()) > tol {
@@ -261,7 +265,7 @@ impl<K: NodeKey> FloorBand<K> {
     ) {
     }
     pub fn local_force_width(&self) -> usize {
-        self.nodes.len() * self.plane.slots().len()
+        self.nodes.len() * 2
     }
     pub fn local_force<const NDIM: usize, const NDOF: usize>(
         &self,
@@ -269,15 +273,12 @@ impl<K: NodeKey> FloorBand<K> {
     ) -> ElementForce {
         let n = self.layout.xs.len();
         let map = self.basis(nodes);
-        let m = map.slots.len();
         let mut out = vec![0.; self.local_force_width()];
         for i in 0..n - 1 {
             let r = self.bay(nodes, &map, i).r;
             for (j, station) in [i, i + 1, n + i, n + i + 1].into_iter().enumerate() {
-                let f = map.global([r[2 * j], r[2 * j + 1]]);
-                for (k, value) in f.iter().enumerate() {
-                    out[m * station + k] += value;
-                }
+                out[2 * station] += r[2 * j];
+                out[2 * station + 1] += r[2 * j + 1];
             }
         }
         ElementForce::from_vec(out)
@@ -337,7 +338,8 @@ impl<K: NodeKey> FloorBand<K> {
     ) -> super::wall_plane::PlaneMap {
         let a = nodes.get(self.bottom[0]).coords;
         let b = nodes.get(*self.bottom.last().unwrap()).coords;
-        self.plane.map(a, b)
+        PlaneMap::from_corners(a, b, nodes.get(self.top[0]).coords)
+            .expect("validated floor band geometry")
     }
     /// Shear strain operator over `[bottom i, bottom j, top i, top j]`:
     /// `gamma = (u_Ti + u_Tj - u_Bi - u_Bj)/(2d) + (v_Bj - v_Bi)/a`. The rotation term uses the bottom row only,
@@ -386,24 +388,13 @@ impl<K: NodeKey> FloorBand<K> {
 }
 
 impl FloorBand<Node3Id> {
-    /// Creates a floor band in a vertical plane with global Y up.
+    /// Creates a floor band whose axes are derived from node geometry.
     pub fn new3(
         bottom: Vec<Node3Id>,
         top: Vec<Node3Id>,
         layout: FloorBandLayout,
-        plane: WallPlane,
     ) -> Result<Self, FloorBandError> {
-        let plane = match plane {
-            WallPlane::Planar => {
-                return Err(FloorBandError(
-                    "3D floor band requires a vertical wall plane".into(),
-                ))
-            }
-            WallPlane::Vertical { ex, ez } => {
-                WallPlane::vertical(ex, ez).map_err(FloorBandError)?
-            }
-        };
-        Self::build(bottom, top, layout, plane)
+        Self::build(bottom, top, layout)
     }
 }
 
