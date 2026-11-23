@@ -587,6 +587,18 @@ pub enum RecorderSpec {
         pier: u32,
         quantity: StudWallQuantity,
     },
+    /// A stud wall's total base reaction in wall-local axes (`StudWallResponse::base`).
+    StudWallBase {
+        element_kind: ElementKind,
+        element_index: u32,
+        component: StudWallBaseComponent,
+    },
+    /// A named wall's total base reaction in a builder-generated 3D building.
+    BuildingWallBase {
+        storey: u32,
+        wall: String,
+        component: StudWallBaseComponent,
+    },
     FloorBandBay {
         element_index: u32,
         bay: u32,
@@ -725,6 +737,18 @@ pub enum StudWallQuantity {
     MomentTop,
     ChordLeft,
     ChordRight,
+}
+
+/// Components of a stud wall's base reaction, the sums over its base nodes: `shear` (local x), `axial`
+/// (local y, up positive: the gravity takedown is positive) and `moment` (`Σ (x − L/2) f_y`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum StudWallBaseComponent {
+    Shear,
+    Axial,
+    Moment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

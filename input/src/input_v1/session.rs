@@ -486,6 +486,10 @@ pub enum ResolvedRecorder<NId, EId> {
         pier: u32,
         quantity: super::sequence::StudWallQuantity,
     },
+    StudWallBase {
+        element: EId,
+        component: super::sequence::StudWallBaseComponent,
+    },
     FloorBandBay {
         element: EId,
         bay: u32,
@@ -1481,6 +1485,10 @@ where
                             pier,
                             quantity,
                         } => wall_pier_value(analysis.domain(), element, pier, quantity, progress),
+                        ResolvedRecorder::StudWallBase { element, component } => analysis
+                            .domain()
+                            .element_stud_wall_response(element, progress)
+                            .map(|r| r.base[component as usize]),
                         ResolvedRecorder::FloorBandBay {
                             element,
                             bay,
@@ -1577,6 +1585,10 @@ where
                             pier,
                             quantity,
                         } => wall_pier_value(analysis.domain(), element, pier, quantity, progress),
+                        ResolvedRecorder::StudWallBase { element, component } => analysis
+                            .domain()
+                            .element_stud_wall_response(element, progress)
+                            .map(|r| r.base[component as usize]),
                         ResolvedRecorder::FloorBandBay {
                             element,
                             bay,

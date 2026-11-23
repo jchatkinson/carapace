@@ -593,7 +593,8 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
             }
         }
     }
-    // A roof band is a final load/diaphragm level with bearing-only links at every station.
+    // A roof band is a final load/diaphragm level. Nothing bears on it, so its links are elastic in tension and
+    // compression (the rim is fastened to the plate): a tension-free link would leave the band's top row free to lift.
     let last = spec.storeys.len() - 1;
     let mut roof_nodes: BTreeMap<String, Vec<Node3Id>> = BTreeMap::new();
     for (name, (_, layout, _, _, _)) in &wall_nodes[last] {
@@ -646,7 +647,7 @@ pub fn build(spec: &BuildingSpec) -> Result<Building, BuildError> {
         .map_err(|e| err(e.to_string()))?;
         bands[last].push(domain.add_element(Element3::FloorBand(band)));
         for i in 0..top_row.len() {
-            let mat = Material::anchorage(0., 0., AnchorageBearing::Linear { k: s.bearing })
+            let mat = Material::anchorage(s.bearing, 0., AnchorageBearing::Linear { k: s.bearing })
                 .map_err(|e| err(e.to_string()))?;
             bands[last].push(domain.add_element(Element3::ZeroLength3(
                 ZeroLength3::new(bottom_row[i], top_row[i]).with_material(1, mat),
@@ -958,11 +959,21 @@ fn floor_transfer_for(
     f: &FloorSpec,
     walls: &[WallSpec],
 ) -> Result<(FloorReactions, Vec<FloorSupport>), BuildError> {
-    let b = FloorBounds {
-        s0: f.bounds[0],
-        s1: f.bounds[1],
-        t0: f.bounds[2],
-        t1: f.bounds[3],
+    // `bounds` is the plan rectangle `[x0, x1, z0, z1]`; `s` runs along the span, `t` across it.
+    let [x0, x1, z0, z1] = f.bounds;
+    let b = match f.span_axis {
+        SpanAxis::X => FloorBounds {
+            s0: x0,
+            s1: x1,
+            t0: z0,
+            t1: z1,
+        },
+        SpanAxis::Z => FloorBounds {
+            s0: z0,
+            s1: z1,
+            t0: x0,
+            t1: x1,
+        },
     };
     let supports: Vec<_> = f
         .supports

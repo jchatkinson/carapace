@@ -120,37 +120,44 @@ pub(super) fn decode(mut input: CarapaceInputV1) -> Result<Session3, DecodeError
         for (ri, recorder) in input.sequence.recorders.iter_mut().enumerate() {
             match recorder.clone() {
                 RecorderSpec::BuildingWallPier {
-                    storey,
-                    wall,
-                    pier,
-                    quantity,
+                    storey, ref wall, ..
+                }
+                | RecorderSpec::BuildingWallBase {
+                    storey, ref wall, ..
                 } => {
-                    let level = building.walls.get(storey as usize).ok_or_else(|| {
-                        DecodeError::UnknownBuildingWall {
-                            recorder: ri as u32,
-                            storey,
-                            wall: wall.clone(),
-                        }
-                    })?;
-                    let local = level.keys().position(|name| name == &wall).ok_or_else(|| {
-                        DecodeError::UnknownBuildingWall {
-                            recorder: ri as u32,
-                            storey,
-                            wall: wall.clone(),
-                        }
-                    })?;
-                    let element_index = building
-                        .walls
-                        .iter()
-                        .take(storey as usize)
+                    let unknown = || DecodeError::UnknownBuildingWall {
+                        recorder: ri as u32,
+                        storey,
+                        wall: wall.clone(),
+                    };
+                    let level = building.walls.get(storey as usize).ok_or_else(unknown)?;
+                    let local = level
+                        .keys()
+                        .position(|name| name == wall)
+                        .ok_or_else(unknown)?;
+                    let element_index = (building.walls.iter().take(storey as usize))
                         .map(|x| x.len())
                         .sum::<usize>()
                         + local;
-                    *recorder = RecorderSpec::StudWallPier {
-                        element_kind: ElementKind::StudWall3d,
-                        element_index: element_index as u32,
-                        pier,
-                        quantity,
+                    let element_kind = ElementKind::StudWall3d;
+                    let element_index = element_index as u32;
+                    *recorder = match recorder.clone() {
+                        RecorderSpec::BuildingWallPier { pier, quantity, .. } => {
+                            RecorderSpec::StudWallPier {
+                                element_kind,
+                                element_index,
+                                pier,
+                                quantity,
+                            }
+                        }
+                        RecorderSpec::BuildingWallBase { component, .. } => {
+                            RecorderSpec::StudWallBase {
+                                element_kind,
+                                element_index,
+                                component,
+                            }
+                        }
+                        _ => unreachable!(),
                     };
                 }
                 RecorderSpec::BuildingStoreyDrift { storey, component } => {

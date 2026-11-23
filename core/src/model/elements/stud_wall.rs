@@ -24,9 +24,11 @@ const MAX_EXTERIOR_DOFS: usize = MAX_EXTERIOR_NODES * 3;
 /// Maximum number of piers in a wall with a nonlinear sheathing law (`O86` or `Material`): the local pier
 /// solve uses fixed-size stack buffers.
 pub const MAX_WALL_PIERS: usize = 16;
-/// Nonlinear walls support at most 32 exterior nodes (64 translational DOFs).
-const MAX_NONLINEAR_EXTERIOR_NODES: usize = 32;
-const MAX_NONLINEAR_EXTERIOR_DOFS: usize = MAX_NONLINEAR_EXTERIOR_NODES * 3;
+thread_local! {
+    /// Dense tangent of a nonlinear wall (`(m n)²`, up to `MAX_EXTERIOR_DOFS²`): too large for the stack, so each
+    /// thread reuses one buffer, which allocates only when it first grows.
+    static NONLINEAR_TANGENT: std::cell::RefCell<Vec<f64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 
 /// Which plate a [`WallStation`] sits on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,12 +447,6 @@ impl<K: NodeKey> StudWall<K> {
         if nodes.len() > MAX_EXTERIOR_NODES {
             return Err(StudWallError(format!(
                 "exterior node count {} exceeds stud-wall limit of {MAX_EXTERIOR_NODES}",
-                nodes.len()
-            )));
-        }
-        if is_nonlinear && nodes.len() > MAX_NONLINEAR_EXTERIOR_NODES {
-            return Err(StudWallError(format!(
-                "nonlinear exterior node count {} exceeds nonlinear stud-wall limit of {MAX_NONLINEAR_EXTERIOR_NODES} (64 DOFs)",
                 nodes.len()
             )));
         }
@@ -902,22 +898,21 @@ impl<K: NodeKey> StudWall<K> {
         }
         if self.nonlinear.is_some() {
             let c = prepared_nonlinear.expect("prepared nonlinear wall data");
-            let mut kg = ArrayVec::<
-                f64,
-                { MAX_NONLINEAR_EXTERIOR_DOFS * MAX_NONLINEAR_EXTERIOR_DOFS },
-            >::new();
-            for i in 0..n {
-                for j in 0..n {
-                    let mut v = prepared.stiffness[i * n + j];
-                    for a in 0..p {
-                        for b in 0..p {
-                            v += c.coupling[i * p + a] * m[a * p + b] * c.strain_map[b * n + j];
+            NONLINEAR_TANGENT.with_borrow_mut(|kg| {
+                kg.clear();
+                for i in 0..n {
+                    for j in 0..n {
+                        let mut v = prepared.stiffness[i * n + j];
+                        for a in 0..p {
+                            for b in 0..p {
+                                v += c.coupling[i * p + a] * m[a * p + b] * c.strain_map[b * n + j];
+                            }
                         }
+                        kg.push(v);
                     }
-                    kg.push(v);
                 }
-            }
-            sink.add_dyn(&self.exterior_dofs, &kg, &rg);
+                sink.add_dyn(&self.exterior_dofs, kg, &rg);
+            });
         } else {
             sink.add_dyn(&self.exterior_dofs, &prepared.stiffness, &rg);
         }

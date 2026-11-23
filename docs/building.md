@@ -16,7 +16,7 @@ Stations are generated at stud rows and pier ends. Storey zero has `foundation: 
 connected to fixed ground nodes with the selected anchorage law. At an upper storey, matching named walls must
 have identical plan start, direction and length. A positive `floorDepth` creates a `FloorBand` with external
 vertical links; zero depth connects adjacent walls with vertical anchorage/bearing links. A final positive depth
-creates a roof band with bearing-only links.
+creates a roof band whose links are linear in tension and compression (stiffness `bearing`): nothing bears on it, so a tension-free link would let its top row lift.
 
 Rigid diaphragms retain one node at the centroid of the level nodes. A lateral load's force is applied at that
 node, and its plan offset becomes the moment about `+Y`, `M_y = f_x (z - z_m) - f_z (x - x_m)` (`r × F`), the
@@ -27,7 +27,7 @@ node and DOF before they are added to the domain (`add_nodal_load` replaces an e
 and DOF). Unsupported plan-normal motion is restrained at the level nodes. Semi-rigid diaphragms are not
 selected through this builder; add a core `Diaphragm` explicitly.
 
-`FloorSpec` supports rectangular bounds, X or Z span, named bearing walls perpendicular to the span (joists bear
+`FloorSpec` supports rectangular plan bounds `[x0, x1, z0, z1]`, X or Z span (load coordinates `s` run along the span and `t` across it, so for a Z span `s` is z and `t` is x), named bearing walls perpendicular to the span (joists bear
 on the top plate of this storey's walls: platform framing), area,
 line and point loads, and simple or continuous transfer. Reactions remain available as `Building::floor_reactions`
 and are also mapped into the supporting wall's load slots. One constant load pattern is made per wall slot.
@@ -41,8 +41,8 @@ combinations independently.
 - Floor bounds are rectangles, supports are full wall lines, and a floor has one axis-aligned span direction.
 - A storey has one diaphragm idealization, shared by all its levels in this phase. Flexible distribution is a
   tributary statics model; use a core semi-rigid diaphragm element when floor stiffness matters.
-- Pier ends receive anchorage links. Other band stations receive linear bearing. Roof-band connections are
-  bearing-only.
+- Pier ends receive anchorage links. Other band stations receive linear bearing. Roof-band links are linear
+  both ways with the `bearing` stiffness.
 - Plan-normal translation at flexible diaphragm stations is restrained. Crossing wall lines are not merged into
   common nodes by this builder.
 - Loads and material parameters must be finite; invalid names, slots, wall alignment and support geometry return
@@ -61,7 +61,7 @@ combinations independently.
 | Floor D + L at 1.25D + 1.5L to a window wall: base 32e6 N, header 4.8e6 N per end from the cripple tributaries | hand takedown | 1e-9 |
 | Misaligned stacking, unknown/non-perpendicular supports, bad direction | named `BuildError` | exact |
 
-The wire decoder builds this same model, applies `combination`, and maps `buildingWallPier` and rigid-level
+The wire decoder builds this same model, applies `combination`, and maps `buildingWallPier`, `buildingWallBase` and rigid-level
 `buildingStoreyDrift` recorders. `buildingStoreyDrift` is rejected for flexible levels because they have no master
 node. PySees mirrors only the tables its compiler emits; it has no stud-wall API and needs no change for these
 tables.

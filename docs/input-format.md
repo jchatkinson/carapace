@@ -158,14 +158,14 @@ to other arena entries; cycles are rejected (`cyclicMaterialReference`).
 ### Stud walls, floor bands and diaphragms
 
 `studWalls2d` and `studWalls3d` are arrays of rows: `{ corners: [u32, u32, u32, u32], stations: { chord: "top" | "bottom", x, node }[], layout: WallLayoutSpec, loads: { slot, load: WallLoadSpec }[], plane?: [ex, ez] }`.
-Node indices address `nodes`; `layout.foundation` defaults to false. The 3D plane is required and must be a finite unit plan direction. Slot indices are 0 through 7. Invalid node indices, invalid planes, bad slots, and constructor failures produce decode errors.
+Node indices address `nodes`; `layout.foundation` defaults to false. The sheathing law is `{ kind: "linear", ga }` or `{ kind: "o86", bv, nailSpacing, nailDiameter }`; every field of these tagged specs (shear laws, wall loads, floor loads, anchorage bearing) is camelCase. The 3D plane is required and must be a finite unit plan direction. Slot indices are 0 through 7. Invalid node indices, invalid planes, bad slots, and constructor failures produce decode errors.
 
 `floorBands2d`/`floorBands3d` rows contain `bottom`, `top`, `layout: { length, depth, xs, bays: (number | null)[], rimEa }`, and an optional `plane` required in 3D. `diaphragms` is 3D only and contains `{ nodes, layout: { xs, zs, y, bays: (WallShearLawSpec | null)[], eaX, eaZ } }`.
 Constructor failures are reported as `invalidMacroElement`; profile mismatches are `tableNotInProfile`.
 
 `floorLoads` rows contain `{ bounds: [s0, s1, t0, t1], continuity: "simple" | "continuous", supports: [{ s, t0, t1, wall: { kind: "studWall", index }, xAtT0, reversed }], loads: FloorLoadSpec[] }`. The decoder runs the statics transfer and appends the reactions to the referenced wall's slot loads before constructing it. Invalid geometry or loads produce `invalidFloorTransfer`; a missing wall index is `unknownElementIndex`.
 
-`building` (3D only) accepts a `BuildingSpec` with an optional `combination: [f64; 8]` (defaults to all ones). It runs the native building builder and applies those slot factors. It is exclusive with explicit node, element, constraint and load tables; the first conflict is `buildingWithTables` naming that table. `sequence` and `header` still apply. `buildingWallPier` addresses a named wall and pier at a storey. `buildingStoreyDrift` reports master-node differences for rigid diaphragm levels; it is a decode error for flexible levels, including a flexible level below the requested storey. Generic element-force recorders can address generated `studWall3d` and `floorBand3d` rows.
+`building` (3D only) accepts a `BuildingSpec` with an optional `combination: [f64; 8]` (defaults to all ones). It runs the native building builder and applies those slot factors. It is exclusive with explicit node, element, constraint and load tables; the first conflict is `buildingWithTables` naming that table. `sequence` and `header` still apply. `buildingWallPier` addresses a named wall and pier at a storey, and `buildingWallBase` a named wall's base reaction. `buildingStoreyDrift` reports master-node differences for rigid diaphragm levels; it is a decode error for flexible levels, including a flexible level below the requested storey. Generic element-force recorders can address generated `studWall3d` and `floorBand3d` rows.
 
 `ElementLoadSpec` also accepts `{ kind: "wallSlots", factors: [f64, f64, f64, f64, f64, f64, f64, f64] }`, only for stud-wall kinds. Element force recorders use the element's local-force vector; for a stud wall, components follow its condensed exterior-node ordering.
 
@@ -536,6 +536,8 @@ the load (3D: `wx, wy, wz, bx, by, bz, pressure, wall0..wall7`; 2D: 26 component
 | `studWallPier` | `elementKind: "studWall2d" \| "studWall3d"`, `elementIndex`, `pier`, `quantity: "q" \| "gamma" \| "momentBase" \| "momentTop" \| "chordLeft" \| "chordRight"`; a missing pier is `invalidRecorderPier`. |
 | `floorBandBay`, `diaphragmBay` | `elementIndex`, `bay`, `quantity: "q" \| "gamma"`; an out-of-range bay is `invalidRecorderBay`. |
 | `buildingWallPier` | `storey`, `wall` name, `pier`, `quantity` (the `studWallPier` quantities); requires `building`, and unknown names are `unknownBuildingWall`. |
+| `studWallBase` | `elementKind: "studWall2d" \| "studWall3d"`, `elementIndex`, `component: "shear" \| "axial" \| "moment"`: the wall's total base reaction in its local axes (`StudWallResponse::base`; axial is up positive, so a gravity takedown is positive; moment is `Σ (x − L/2) f_y`). |
+| `buildingWallBase` | `storey`, `wall` name, `component` (as `studWallBase`); requires `building`. |
 | `buildingStoreyDrift` | `storey`, `component: "x" \| "z" \| "rotation"`; rigid levels record master-node displacement difference from the level below (the base is zero). Flexible levels are rejected with `recorderNotApplicable`. |
 | `modeShape` | `mode`, `node`, `dof` |
 | `fiber` | `elementKind`, `elementIndex`, `point`, `fiber`, `quantity: "strain" \| "stress"` |

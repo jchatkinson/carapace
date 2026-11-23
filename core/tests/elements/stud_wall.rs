@@ -130,16 +130,14 @@ fn layout_errors_are_named_and_wall_slots_add_and_scale() {
             node: d.add_node(Node::new([i as f64 / 3., 8.])),
         })
         .collect();
-    let error = StudWall::new(
+    // 33 exterior nodes: nonlinear walls share the 256-node limit (the old 32-node cap is gone).
+    assert!(StudWall::new(
         c,
         stations,
         nonlinear_layout,
         std::array::from_fn(|_| vec![]),
     )
-    .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("exceeds nonlinear stud-wall limit of 32 (64 DOFs)"));
+    .is_ok());
 
     let a = ElementLoad {
         wall: [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],

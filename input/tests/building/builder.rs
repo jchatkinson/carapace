@@ -368,3 +368,144 @@ fn invalid_geometry_errors() {
         .to_string()
         .contains("direction"));
 }
+
+/// Regression for two limits the PySees template hit. (1) O86 nonlinear walls with more than 32 exterior nodes:
+/// 8 m walls with studs at 400 mm get a band station at every stud, 40+ exterior nodes in the upper storey.
+/// (2) A roof band: its links must hold the band's top row vertically. A symmetric two-storey box with 10 kN per
+/// level in X, solved by Newton: each X wall takes half of each storey shear, and the upper front wall's base moment
+/// is `5000 (H + d)` (statics, 1e-8).
+#[test]
+fn nonlinear_long_walls_with_roof_band() {
+    let long = |name: &str, start: [f64; 2], direction: [f64; 2], length: f64| {
+        let mut w = wall(name, start, direction, false);
+        w.layout.length = length;
+        w.layout.studs = (0..=(length / 400.) as usize)
+            .map(|i| WallStudSpec {
+                x: 400. * i as f64,
+                ea: 1e8,
+            })
+            .collect();
+        w.layout.sheathing = Some(WallSheathingSpec {
+            law: WallShearLawSpec::O86 {
+                bv: 11000.,
+                nail_spacing: 150.,
+                nail_diameter: 3.25,
+            },
+        });
+        w
+    };
+    let walls = || {
+        vec![
+            long("front", [0., 0.], [1., 0.], 8000.),
+            long("back", [0., 4000.], [1., 0.], 8000.),
+            long("left", [0., 0.], [0., 1.], 4000.),
+            long("right", [8000., 0.], [0., 1.], 4000.),
+        ]
+    };
+    let level = |depth| {
+        let mut s = storey(walls(), depth);
+        s.lateral.push(LateralLoad {
+            slot: 0,
+            fx: 10000.,
+            fz: 0.,
+            at: [4000., 2000.],
+        });
+        s
+    };
+    let mut built = build(&spec(vec![level(254.), level(254.)], DiaphragmKind::Rigid)).unwrap();
+    built.apply_combination([1.; WALL_SLOTS]).unwrap();
+    let ids = [0, 1].map(|s| {
+        [
+            built.walls[s]["front"].element,
+            built.walls[s]["back"].element,
+        ]
+    });
+    let mut a = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Transformation)
+        .integrator(Integrator::LoadControl { increment: 0.25 })
+        .algorithm(Algorithm::Newton {
+            tangent: carapace_core::analysis::TangentStrategy::Current,
+            line_search: None,
+        })
+        .test(ConvergenceTest::NormDispIncr {
+            tol: 1e-7,
+            max_iter: 100,
+        })
+        .build(built.domain);
+    for _ in 0..4 {
+        a.step().expect("nonlinear building step");
+    }
+    let d = a.into_domain();
+    for (s, v) in [(0, 10000.), (1, 5000.)] {
+        for id in ids[s] {
+            let shear = d.element_stud_wall_response(id, 1.).unwrap().base[0].abs();
+            assert!((shear - v).abs() <= v * 1e-8, "storey {s}: {shear} vs {v}");
+        }
+    }
+    let m = d.element_stud_wall_response(ids[1][0], 1.).unwrap().piers[0]
+        .moment_base
+        .abs();
+    let statics = 5000. * (2440. + 254.);
+    assert!(
+        (m - statics).abs() <= statics * 1e-8,
+        "upper base moment {m} vs {statics}"
+    );
+}
+
+/// A floor spanning Z on a non-square plan (8 m in X, 5 m in Z; bounds `[x0, x1, z0, z1]`): each X wall gets
+/// `w L_z / 2` per unit length over its full 8 m, and the base of each carries `w L_x L_z / 2` (statics, 1e-9).
+/// Regression: Z spans once read the X bounds as the span.
+#[test]
+fn z_span_floor_on_rectangular_plan() {
+    let long = |name: &str, start: [f64; 2], direction: [f64; 2], length: f64| {
+        let mut w = wall(name, start, direction, false);
+        w.layout.length = length;
+        w.layout.studs = vec![
+            WallStudSpec { x: 0., ea: 1e8 },
+            WallStudSpec {
+                x: length / 2.,
+                ea: 1e8,
+            },
+            WallStudSpec { x: length, ea: 1e8 },
+        ];
+        w
+    };
+    let mut s = storey(
+        vec![
+            long("front", [0., 0.], [1., 0.], 8000.),
+            long("back", [0., 5000.], [1., 0.], 8000.),
+            long("left", [0., 0.], [0., 1.], 5000.),
+            long("right", [8000., 0.], [0., 1.], 5000.),
+        ],
+        0.,
+    );
+    s.floors.push(FloorSpec {
+        bounds: [0., 8000., 0., 5000.],
+        supports: vec!["front".into(), "back".into()],
+        span_axis: SpanAxis::Z,
+        loads: vec![FloorLoadSpec::Area {
+            slot: 0,
+            w: 0.002,
+            region: None,
+        }],
+        continuity: FloorContinuitySpec::Simple,
+    });
+    let mut b = build(&spec(vec![s], DiaphragmKind::Rigid)).unwrap();
+    for support in &b.floor_reactions[0].per_support {
+        let (w, len): (f64, f64) = (
+            support.lines[0].w,
+            support.lines.iter().map(|l| l.t1 - l.t0).sum(),
+        );
+        assert!(
+            (w - 5.).abs() <= 5e-9 && (len - 8000.).abs() <= 8e-6,
+            "line {w} over {len}"
+        );
+    }
+    b.apply_combination([1.; WALL_SLOTS]).unwrap();
+    let ids = ["front", "back"].map(|n| b.walls[0][n].element);
+    let d = solve(b);
+    for id in ids {
+        let v = d.element_stud_wall_response(id, 1.).unwrap().base[1];
+        assert!((v - 40_000.).abs() <= 40_000. * 1e-9, "base {v}");
+    }
+}

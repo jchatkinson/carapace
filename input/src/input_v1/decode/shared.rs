@@ -750,11 +750,30 @@ where
                         reason: "buildingStoreyDrift needs a rigid building input",
                     })
                 }
-                RecorderSpec::BuildingWallPier { .. } => {
+                RecorderSpec::BuildingWallPier { .. } | RecorderSpec::BuildingWallBase { .. } => {
                     return Err(DecodeError::RecorderNotApplicable {
                         recorder: index as u32,
-                        reason: "buildingWallPier needs a building input",
+                        reason: "buildingWallPier and buildingWallBase need a building input",
                     });
+                }
+                RecorderSpec::StudWallBase {
+                    element_kind,
+                    element_index,
+                    component,
+                } => {
+                    if !matches!(
+                        element_kind,
+                        ElementKind::StudWall2d | ElementKind::StudWall3d
+                    ) {
+                        return Err(DecodeError::RecorderNotApplicable {
+                            recorder: index as u32,
+                            reason: "studWallBase needs a stud-wall element",
+                        });
+                    }
+                    ResolvedRecorder::StudWallBase {
+                        element: elements.get(element_kind, element_index, ndm)?,
+                        component,
+                    }
                 }
                 RecorderSpec::FloorBandBay {
                     element_index,

@@ -442,7 +442,7 @@ very soft or descending `Material` branches.
   stud between them;
 - with `Direct`, a top station not at a stud or cripple; a bottom station inside a door;
 - corners or stations reusing a node; a singular internal stiffness (a layout bug, never regularized);
-- too many exterior nodes: 256 for linear walls; for `O86`/`Material` walls, 32 exterior nodes and 16 piers.
+- too many exterior nodes (256) or, for `O86`/`Material` walls, more than 16 piers.
 
 At analysis build, `validate` checks the corner rectangle and that each station node lies at its plate point.
 

@@ -13,7 +13,7 @@ use carapace_core::model::{
 };
 use carapace_input::building::{
     AnchorageBearingSpec, AnchorageSpec, BuildingSpec, DiaphragmKind, FloorContinuitySpec,
-    FloorLoadSpec, LateralLoad, SlotWallLoad, StoreySpec, WallSpec,
+    FloorLoadSpec, FloorSpec, LateralLoad, SlotWallLoad, SpanAxis, StoreySpec, WallSpec,
 };
 use carapace_input::building::{
     ChordDistributionSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec, WallSheathingSpec,
@@ -861,6 +861,16 @@ fn building_wire_recorders_match_direct_builder() {
                 storey: 0,
                 component: carapace_input::input_v1::sequence::BuildingDriftComponent::X,
             },
+            RecorderSpec::BuildingWallBase {
+                storey: 0,
+                wall: "front".into(),
+                component: carapace_input::input_v1::sequence::StudWallBaseComponent::Shear,
+            },
+            RecorderSpec::BuildingWallBase {
+                storey: 0,
+                wall: "front".into(),
+                component: carapace_input::input_v1::sequence::StudWallBaseComponent::Moment,
+            },
         ],
     };
     let mut session = decode(input).unwrap();
@@ -899,6 +909,66 @@ fn building_wire_recorders_match_direct_builder() {
         1e-12,
         "first-storey drift",
     );
+    for (i, k) in [(3, 0), (4, 2)] {
+        near_relative(
+            output.recorder_batches[i].samples[0].1,
+            response.base[k],
+            1e-12,
+            "building wall base",
+        );
+    }
+}
+
+/// `buildingWallBase` axial is the gravity takedown: a Z-span floor (2 kPa) on a 4 m × 4 m box puts
+/// `w L_x L_z / 2 = 16 kN` on each of the front and back walls (statics, 1e-9), and none on the side walls.
+#[test]
+fn building_wall_base_axial_is_the_takedown() {
+    let mut storey = box_storey(0.);
+    storey.lateral.clear();
+    storey.floors.push(FloorSpec {
+        bounds: [0., 4000., 0., 4000.],
+        supports: vec!["front".into(), "back".into()],
+        span_axis: SpanAxis::Z,
+        loads: vec![FloorLoadSpec::Area {
+            slot: 0,
+            w: 0.002,
+            region: None,
+        }],
+        continuity: FloorContinuitySpec::Simple,
+    });
+    let mut input = empty_input(3);
+    input.building = Some(BuildingSpec {
+        storeys: vec![storey],
+        foundation_anchorage: AnchorageSpec {
+            tension: 15000.,
+            slack: 0.,
+            bearing: AnchorageBearingSpec::Linear { k: 1e9 },
+        },
+        diaphragm: DiaphragmKind::Rigid,
+        combination: [1.; 8],
+    });
+    let base = |wall: &str| RecorderSpec::BuildingWallBase {
+        storey: 0,
+        wall: wall.into(),
+        component: carapace_input::input_v1::sequence::StudWallBaseComponent::Axial,
+    };
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Static {
+            id: "gravity".into(),
+            steps: 1,
+            integrator: IntegratorSpec::LoadControl { increment: 1. },
+            algorithm: AlgorithmSpec::Linear,
+            convergence: None,
+            hold_patterns_after: vec![],
+        }],
+        recorders: ["front", "back", "left"].map(base).to_vec(),
+    };
+    let output = decode(input).unwrap().advance(10);
+    assert!(output.done && output.error.is_none(), "{output:?}");
+    let v = |i: usize| output.recorder_batches[i].samples[0].1;
+    near_relative(v(0), 16_000., 1e-9, "front takedown");
+    near_relative(v(1), 16_000., 1e-9, "back takedown");
+    assert!(v(2).abs() < 1e-6, "side wall takedown {}", v(2));
 }
 
 #[test]

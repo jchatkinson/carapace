@@ -164,11 +164,11 @@ only) and `A = diag(A_p)`. Eliminating the internal DOFs leaves a P×P system in
   is not symmetric, so the order matters).
 - Internal recovery: `u_i = Σ_k λ_k w_k − R u_e − K_ii⁻¹ B_i A q`.
 
-Nonlinear walls are capped at 16 piers and 32 exterior nodes (64 translational DOFs). They need an iterative
+Nonlinear walls are capped at 16 piers and, like linear walls, 256 exterior nodes. They need an iterative
 algorithm such as Newton; `Algorithm::Linear` performs one tangent solve and does not iterate to equilibrium.
-The nonlinear tangent assembly uses a 64×64 `f64` stack buffer (32 KiB), plus fixed local solve buffers for a
-16×16 Jacobian (2 KiB) and its vectors. `prepare` caches rotated frame and pier maps, so prepared assembly does
-not allocate. Preparation and unprepared calls may allocate, as in the linear path.
+The dense nonlinear tangent is built in a per-thread buffer that is reused between calls (it allocates only
+when it first grows), plus fixed local solve buffers for a 16×16 Jacobian (2 KiB) and its vectors. `prepare`
+caches rotated frame and pier maps, so prepared assembly does not otherwise allocate. Preparation and unprepared calls may allocate, as in the linear path.
 
 **Member force recovery.** Each member's mean force comes from its own stiffness, and the field adds a linear
 part. Tension is positive; `q_L`, `q_R` are the fields left and right of a stud, with 0 where there is none:
