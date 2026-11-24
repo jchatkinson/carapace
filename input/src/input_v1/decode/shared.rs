@@ -18,7 +18,7 @@ use crate::building::convert_wall_load;
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::model_output::ModelOutput;
 use crate::input_v1::sequence::{BulkQuantity, BulkTable, GaussQuantity, RecorderSpec};
-use crate::input_v1::session::{ModelSession, ResolvedBulk, ResolvedRecorder};
+use crate::input_v1::session::{BulkSource, ModelSession, ResolvedBulk, ResolvedRecorder};
 use crate::input_v1::tables::{
     Axis3Spec, ElementKind, ElementLoadSpec, EqualDofTable, FiberTable, FrictionRow,
     IntegrationSpec, LinearConstraintTable, LoadPatternTable, NodeTable, OrientRow,
@@ -723,6 +723,17 @@ where
 type StagedLoads<I, L> = Vec<Vec<(LoadPatternId, I, L)>>;
 
 #[allow(clippy::too_many_arguments)]
+/// The rows `rows` names of `all`, in that order (every row without it); `None` when one is past the end.
+fn pick_rows<T: Copy>(all: &[T], rows: &Option<Vec<u32>>) -> Option<Vec<T>> {
+    match rows {
+        None => Some(all.to_vec()),
+        Some(rows) => rows
+            .iter()
+            .map(|&row| all.get(row as usize).copied())
+            .collect(),
+    }
+}
+
 pub(super) fn finish<const NDIM: usize, const NDOF: usize, NId, E>(
     mut domain: Domain<NDIM, NDOF, NId, E>,
     input: &CarapaceInputV1,
@@ -1078,45 +1089,52 @@ where
                         component,
                     }
                 }
-                RecorderSpec::Bulk { table, quantity } => {
+                RecorderSpec::Bulk {
+                    table,
+                    quantity,
+                    element_kind,
+                    ref rows,
+                } => {
                     let not_applicable = |reason| DecodeError::RecorderNotApplicable {
                         recorder: index as u32,
                         reason,
                     };
+                    if (table == BulkTable::Elements) != element_kind.is_some() {
+                        return Err(not_applicable(
+                            "elementKind names the table of table: elements, and only of it",
+                        ));
+                    }
+                    let node_quantity = matches!(
+                        quantity,
+                        BulkQuantity::Displacement
+                            | BulkQuantity::Reaction
+                            | BulkQuantity::Velocity
+                            | BulkQuantity::Acceleration
+                    );
+                    if (table == BulkTable::Nodes) != node_quantity {
+                        return Err(not_applicable(
+                            "displacement, reaction, velocity and acceleration belong to the nodes table, and only they",
+                        ));
+                    }
                     if table == BulkTable::Nodes {
-                        if !matches!(
-                            quantity,
-                            BulkQuantity::Displacement | BulkQuantity::Reaction
-                        ) {
-                            return Err(not_applicable(
-                                "the nodes table records displacement or reaction",
-                            ));
-                        }
-                        if node_ids.is_empty() {
+                        let nodes = pick_rows(&node_ids, rows)
+                            .ok_or(not_applicable("a row is past the end of the table"))?;
+                        if nodes.is_empty() {
                             return Err(not_applicable("the table is empty"));
                         }
                         bulks.push(ResolvedBulk {
                             recorder_index: index,
                             elements: Vec::new(),
-                            nodes: node_ids.to_vec(),
+                            nodes,
                             points: 1,
                             components: ndof as u32,
                             quantity,
-                            bars: false,
-                            zero_lengths: false,
+                            source: BulkSource::Nodes,
                             emitted: 0,
                         });
                         return Ok(ResolvedRecorder::Bulk {
                             bulk: bulks.len() as u32 - 1,
                         });
-                    }
-                    if matches!(
-                        quantity,
-                        BulkQuantity::Displacement | BulkQuantity::Reaction
-                    ) {
-                        return Err(not_applicable(
-                            "displacement and reaction belong to the nodes table",
-                        ));
                     }
                     let zero_lengths = table == BulkTable::ZeroLengths;
                     if zero_lengths
@@ -1126,7 +1144,19 @@ where
                             "deformation and force belong to the zeroLengths table, and only they",
                         ));
                     }
+                    let fits_elements = matches!(
+                        quantity,
+                        BulkQuantity::EndForce | BulkQuantity::Load | BulkQuantity::Strain | BulkQuantity::Stress
+                    );
+                    if matches!(quantity, BulkQuantity::EndForce | BulkQuantity::Load) && table != BulkTable::Elements
+                        || table == BulkTable::Elements && !fits_elements
+                    {
+                        return Err(not_applicable(
+                            "the elements table records endForce, load, strain or stress; endForce and load only it",
+                        ));
+                    }
                     let kind = match table {
+                        BulkTable::Elements => element_kind.expect("checked above"),
                         BulkTable::ZeroLengths => ElementKind::ZeroLength,
                         BulkTable::Triangles => ElementKind::Tri3,
                         BulkTable::Quads => ElementKind::Quad4,
@@ -1150,14 +1180,31 @@ where
                         }
                         _ => {}
                     }
-                    let ids = elements.all(kind, ndm)?.to_vec();
+                    let ids = pick_rows(elements.all(kind, ndm)?, rows)
+                        .ok_or(not_applicable("a row is past the end of the table"))?;
                     let Some(&first) = ids.first() else {
                         return Err(not_applicable("the table is empty"));
                     };
-                    let points = if zero_lengths {
-                        1
-                    } else {
-                        domain.element_gauss_point_count(first) as u32
+                    let shell = domain.element_shell_responses(first);
+                    let gauss = domain.element_gauss_point_count(first) as u32;
+                    let (source, points, components) = match quantity {
+                        BulkQuantity::EndForce => {
+                            let width = domain.element(first).local_force_width();
+                            if width == 0 || ids.iter().any(|&id| domain.element(id).local_force_width() != width) {
+                                return Err(not_applicable("the table's elements report no end forces"));
+                            }
+                            (BulkSource::EndForce, 1, width as u32)
+                        }
+                        BulkQuantity::Load => (BulkSource::Load, 1, ndm as u32),
+                        _ if table == BulkTable::Elements => match &shell {
+                            Some(points) => (BulkSource::Shell, points.len() as u32, domain.element_gauss_component_count(first) as u32),
+                            None if gauss > 0 && !matches!(quantity, BulkQuantity::Kc2) => (BulkSource::Gauss, gauss, 3),
+                            None => return Err(not_applicable("strain and stress need a shell or continuum table")),
+                        },
+                        _ if zero_lengths => (BulkSource::ZeroLengths, 1, 1),
+                        _ if bars => (BulkSource::Bars, gauss, 1),
+                        BulkQuantity::Kc2 => (BulkSource::Gauss, gauss, 1),
+                        _ => (BulkSource::Gauss, gauss, 3),
                     };
                     if quantity == BulkQuantity::Kc2 {
                         let csfm = ids.iter().all(|&id| {
@@ -1167,11 +1214,6 @@ where
                             return Err(not_applicable("kc2 needs a csfmConcrete element"));
                         }
                     }
-                    let components = if bars || zero_lengths || quantity == BulkQuantity::Kc2 {
-                        1
-                    } else {
-                        3
-                    };
                     bulks.push(ResolvedBulk {
                         recorder_index: index,
                         elements: ids,
@@ -1179,8 +1221,7 @@ where
                         points,
                         components,
                         quantity,
-                        bars,
-                        zero_lengths,
+                        source,
                         emitted: 0,
                     });
                     ResolvedRecorder::Bulk {

@@ -519,6 +519,9 @@ pub enum BulkTable {
     /// Every `zeroLength` element, in table order and then the bond and anchorage springs of bonded
     /// bars (`modelOutput` lists those rows); one value per element, along its first material direction.
     ZeroLengths,
+    /// The element table `elementKind` names, in table order: `endForce` and `load` on any frame,
+    /// truss or shell table, `strain`/`stress` on a shell or continuum table.
+    Elements,
 }
 
 /// What a [`RecorderSpec::Bulk`] reads. `strain`/`stress`/`principalStrain`/`principalStress`/`kc2`
@@ -547,6 +550,16 @@ pub enum BulkQuantity {
     Deformation,
     /// `zeroLengths` only: the force the material returns for that deformation (N).
     Force,
+    /// `nodes` only: the node's velocity, `ndf` components (`0` outside a `Transient` stage).
+    Velocity,
+    /// `nodes` only: the node's acceleration, `ndf` components (`0` outside a `Transient` stage).
+    Acceleration,
+    /// `elements` only: the element's end forces, what `RecorderSpec::ElementForce` records, all
+    /// `ElementOps::local_force_width` components.
+    EndForce,
+    /// `elements` only: the uniform beam load the element carries (`wx`, `wy` and in 3D `wz`, local
+    /// axes), `RecorderSpec::ElementLoad`'s first `ndm` components.
+    Load,
 }
 
 /// What a [`RecorderSpec::EmbeddedBar`] reads.
@@ -698,9 +711,19 @@ pub enum RecorderSpec {
     /// table, principal values or `kc2` on `embeddedBars`), or `kc2` where a point is not
     /// `csfmConcrete` is `DecodeError::RecorderNotApplicable`; a table of the other profile is
     /// `ElementKindNotInProfile`.
+    ///
+    /// `rows` (optional) records only those rows of the table, in the order given (an OpenSees
+    /// `-node`/`-ele` list); without it every row is recorded. `elementKind` names the table of
+    /// `table: elements` and is not allowed with any other table.
     Bulk {
         table: BulkTable,
         quantity: BulkQuantity,
+        #[serde(default)]
+        #[cfg_attr(feature = "tsify", tsify(optional))]
+        element_kind: Option<ElementKind>,
+        #[serde(default)]
+        #[cfg_attr(feature = "tsify", tsify(optional))]
+        rows: Option<Vec<u32>>,
     },
 }
 

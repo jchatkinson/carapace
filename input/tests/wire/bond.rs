@@ -59,10 +59,14 @@ fn tie_model(bond: serde_json::Value) -> CarapaceInputV1 {
                 have_springs
                     .then_some([
                         RecorderSpec::Bulk {
+                            element_kind: None,
+                            rows: None,
                             table: BulkTable::ZeroLengths,
                             quantity: BulkQuantity::Deformation,
                         },
                         RecorderSpec::Bulk {
+                            element_kind: None,
+                            rows: None,
                             table: BulkTable::ZeroLengths,
                             quantity: BulkQuantity::Force,
                         },

@@ -1,5 +1,6 @@
 mod arclength;
 mod bond;
+mod bulk;
 mod common;
 mod constraints;
 mod continuum;

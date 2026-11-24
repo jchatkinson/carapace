@@ -914,7 +914,12 @@ use carapace_input::input_v1::sequence::{BulkQuantity, BulkTable};
 use carapace_input::input_v1::StepOutcome;
 
 fn bulk(table: BulkTable, quantity: BulkQuantity) -> RecorderSpec {
-    RecorderSpec::Bulk { table, quantity }
+    RecorderSpec::Bulk {
+        element_kind: None,
+        rows: None,
+        table,
+        quantity,
+    }
 }
 
 fn loaded_tie() -> CarapaceInputV1 {
@@ -1184,14 +1189,34 @@ fn bulk_recorder_decode_errors() {
     );
     assert_eq!(
         with(loaded_tie(), bulk(BulkTable::Nodes, BulkQuantity::Stress)),
-        not_applicable("the nodes table records displacement or reaction")
+        not_applicable("displacement, reaction, velocity and acceleration belong to the nodes table, and only they")
     );
     assert_eq!(
         with(
             loaded_tie(),
             bulk(BulkTable::Quads, BulkQuantity::Displacement)
         ),
-        not_applicable("displacement and reaction belong to the nodes table")
+        not_applicable("displacement, reaction, velocity and acceleration belong to the nodes table, and only they")
+    );
+    let mut stray = bulk(BulkTable::Quads, BulkQuantity::Strain);
+    if let RecorderSpec::Bulk { element_kind, .. } = &mut stray {
+        *element_kind = Some(ElementKind::Quad4);
+    }
+    assert_eq!(
+        with(loaded_tie(), stray),
+        not_applicable("elementKind names the table of table: elements, and only of it")
+    );
+    assert_eq!(
+        with(loaded_tie(), bulk(BulkTable::Quads, BulkQuantity::EndForce)),
+        not_applicable("the elements table records endForce, load, strain or stress; endForce and load only it")
+    );
+    let mut past = bulk(BulkTable::Nodes, BulkQuantity::Displacement);
+    if let RecorderSpec::Bulk { rows, .. } = &mut past {
+        *rows = Some(vec![0, 100_000]);
+    }
+    assert_eq!(
+        with(loaded_tie(), past),
+        not_applicable("a row is past the end of the table")
     );
     // No quads exist in a 3D model.
     let mut input3 = serde_json::to_value(empty_input(3)).unwrap();

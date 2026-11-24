@@ -237,30 +237,44 @@ fn wire_input(fx: &Value) -> CarapaceInputV1 {
         recorders: {
             let mut recorders = vec![
                 RecorderSpec::Bulk {
+                    element_kind: None,
+                    rows: None,
                     table: BulkTable::Quads,
                     quantity: BulkQuantity::Strain,
                 },
                 RecorderSpec::Bulk {
+                    element_kind: None,
+                    rows: None,
                     table: BulkTable::Quads,
                     quantity: BulkQuantity::Stress,
                 },
                 RecorderSpec::Bulk {
+                    element_kind: None,
+                    rows: None,
                     table: BulkTable::Quads,
                     quantity: BulkQuantity::Kc2,
                 },
                 RecorderSpec::Bulk {
+                    element_kind: None,
+                    rows: None,
                     table: BulkTable::EmbeddedBars,
                     quantity: BulkQuantity::AxialForce,
                 },
                 RecorderSpec::Bulk {
+                    element_kind: None,
+                    rows: None,
                     table: BulkTable::EmbeddedBars,
                     quantity: BulkQuantity::Strain,
                 },
                 RecorderSpec::Bulk {
+                    element_kind: None,
+                    rows: None,
                     table: BulkTable::EmbeddedBars,
                     quantity: BulkQuantity::Stress,
                 },
                 RecorderSpec::Bulk {
+                    element_kind: None,
+                    rows: None,
                     table: BulkTable::EmbeddedBars,
                     quantity: BulkQuantity::Ruptured,
                 },

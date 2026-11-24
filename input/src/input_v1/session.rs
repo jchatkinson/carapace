@@ -156,12 +156,14 @@ where
     values.get(component as usize).copied()
 }
 
-/// Appends one frame of `bulk`'s values (element, then point, then component order). A value the
+/// Appends one frame of `bulk`'s values (row, then point, then component order). A value the
 /// model cannot produce (it never happens for a decoded recorder) is `NaN`, so frames keep their
-/// width.
+/// width. `dynamic` is false outside a `Transient` stage, where velocity and acceleration read `0`.
 fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
     domain: &Domain<NDIM, NDOF, NId, E>,
     bulk: &ResolvedBulk<NId, E::Id>,
+    progress: f64,
+    dynamic: bool,
     reactions: &dyn Fn(&[NId]) -> Vec<f64>,
     out: &mut Vec<f64>,
 ) where
@@ -169,54 +171,116 @@ fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
     E: ElementOps<NDIM, NDOF, NId>,
 {
     use super::sequence::BulkQuantity;
-    if !bulk.nodes.is_empty() {
-        if bulk.quantity == BulkQuantity::Reaction {
-            out.extend(reactions(&bulk.nodes));
-        } else {
-            for &node in &bulk.nodes {
-                out.extend_from_slice(&domain.node(node).displacement);
+    let nan_frame = |out: &mut Vec<f64>| {
+        out.extend(std::iter::repeat_n(
+            f64::NAN,
+            (bulk.points * bulk.components) as usize,
+        ))
+    };
+    match bulk.source {
+        BulkSource::Nodes => match bulk.quantity {
+            BulkQuantity::Reaction => out.extend(reactions(&bulk.nodes)),
+            BulkQuantity::Velocity | BulkQuantity::Acceleration if !dynamic => {
+                out.extend(std::iter::repeat_n(0.0, bulk.nodes.len() * NDOF))
+            }
+            quantity => {
+                for &node in &bulk.nodes {
+                    let node = domain.node(node);
+                    out.extend_from_slice(match quantity {
+                        BulkQuantity::Velocity => &node.velocity,
+                        BulkQuantity::Acceleration => &node.acceleration,
+                        _ => &node.displacement,
+                    });
+                }
+            }
+        },
+        BulkSource::EndForce => {
+            for &element in &bulk.elements {
+                let force = domain.element_end_force(element, progress);
+                let force = force.as_slice();
+                if force.len() == bulk.components as usize {
+                    out.extend_from_slice(force);
+                } else {
+                    nan_frame(out);
+                }
             }
         }
-        return;
-    }
-    for &element in &bulk.elements {
-        if bulk.zero_lengths {
-            let value = domain
-                .element_zero_length_response(element)
-                .map(|(deformation, force)| {
-                    if bulk.quantity == BulkQuantity::Deformation {
-                        deformation
-                    } else {
-                        force
+        BulkSource::Load => {
+            for &element in &bulk.elements {
+                for component in 0..bulk.components as usize {
+                    out.push(domain.element_load_component(element, progress, component));
+                }
+            }
+        }
+        BulkSource::Shell => {
+            for &element in &bulk.elements {
+                let Some(responses) = domain.element_shell_responses(element) else {
+                    nan_frame(out);
+                    continue;
+                };
+                for point in 0..bulk.points as usize {
+                    match responses.get(point) {
+                        Some(r) => {
+                            out.extend_from_slice(if bulk.quantity == BulkQuantity::Stress {
+                                &r.resultant
+                            } else {
+                                &r.strain
+                            })
+                        }
+                        None => out.extend(std::iter::repeat_n(f64::NAN, bulk.components as usize)),
                     }
-                });
-            out.push(value.unwrap_or(f64::NAN));
-        } else if bulk.bars {
+                }
+            }
+        }
+        BulkSource::ZeroLengths => {
+            for &element in &bulk.elements {
+                let value =
+                    domain
+                        .element_zero_length_response(element)
+                        .map(|(deformation, force)| {
+                            if bulk.quantity == BulkQuantity::Deformation {
+                                deformation
+                            } else {
+                                force
+                            }
+                        });
+                out.push(value.unwrap_or(f64::NAN));
+            }
+        }
+        BulkSource::Bars => {
             let quantity = match bulk.quantity {
                 BulkQuantity::AxialForce => EmbeddedBarQuantity::AxialForce,
                 BulkQuantity::Strain => EmbeddedBarQuantity::Strain,
                 BulkQuantity::Stress => EmbeddedBarQuantity::Stress,
                 _ => EmbeddedBarQuantity::Ruptured,
             };
-            out.push(embedded_bar_value(domain, element, quantity).unwrap_or(f64::NAN));
-        } else if bulk.quantity == BulkQuantity::Kc2 {
-            for point in 0..bulk.points as usize {
-                out.push(domain.element_gauss_kc2(element, point).unwrap_or(f64::NAN));
+            for &element in &bulk.elements {
+                out.push(embedded_bar_value(domain, element, quantity).unwrap_or(f64::NAN));
             }
-        } else {
-            let responses = domain.element_gauss_responses(element);
-            for point in 0..bulk.points as usize {
-                let frame = responses
-                    .as_ref()
-                    .and_then(|r| r.get(point))
-                    .map(|response| match bulk.quantity {
-                        BulkQuantity::Stress => response.stress,
-                        BulkQuantity::PrincipalStrain => principal(response.strain, true),
-                        BulkQuantity::PrincipalStress => principal(response.stress, false),
-                        _ => response.strain,
-                    })
-                    .unwrap_or([f64::NAN; 3]);
-                out.extend_from_slice(&frame);
+        }
+        BulkSource::Gauss if bulk.quantity == BulkQuantity::Kc2 => {
+            for &element in &bulk.elements {
+                for point in 0..bulk.points as usize {
+                    out.push(domain.element_gauss_kc2(element, point).unwrap_or(f64::NAN));
+                }
+            }
+        }
+        BulkSource::Gauss => {
+            for &element in &bulk.elements {
+                let responses = domain.element_gauss_responses(element);
+                for point in 0..bulk.points as usize {
+                    let frame = responses
+                        .as_ref()
+                        .and_then(|r| r.get(point))
+                        .map(|response| match bulk.quantity {
+                            BulkQuantity::Stress => response.stress,
+                            BulkQuantity::PrincipalStrain => principal(response.strain, true),
+                            BulkQuantity::PrincipalStress => principal(response.stress, false),
+                            _ => response.strain,
+                        })
+                        .unwrap_or([f64::NAN; 3]);
+                    out.extend_from_slice(&frame);
+                }
             }
         }
     }
@@ -568,10 +632,22 @@ pub(super) struct ResolvedBulk<NId, EId> {
     pub points: u32,
     pub components: u32,
     pub quantity: super::sequence::BulkQuantity,
-    pub bars: bool,
-    /// A `zeroLengths` table.
-    pub zero_lengths: bool,
+    pub source: BulkSource,
     pub emitted: u32,
+}
+
+/// Where a bulk recorder reads each row's values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BulkSource {
+    Nodes,
+    /// Continuum Gauss points (`element_gauss_responses`, or `kc2`).
+    Gauss,
+    /// Shell Gauss points (`element_shell_responses`).
+    Shell,
+    Bars,
+    ZeroLengths,
+    EndForce,
+    Load,
 }
 
 impl<NId, EId> ResolvedBulk<NId, EId> {
@@ -1550,7 +1626,7 @@ where
                         let all = domain.reactions_all(progress);
                         nodes.iter().flat_map(|&node| all[node]).collect()
                     };
-                    append_bulk_values(domain, bulk, &reactions, values);
+                    append_bulk_values(domain, bulk, progress, false, &reactions, values);
                 }
                 if let Some((element, utilization, kind)) = analysis
                     .domain()
@@ -1642,14 +1718,8 @@ where
                 for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
                 {
                     frames.push(progress);
-                    let reactions = |nodes: &[NId]| {
-                        nodes
-                            .iter()
-                            .flat_map(|&node| (0..NDOF).map(move |dof| (node, dof)))
-                            .map(|(node, dof)| analysis.reaction(node, dof))
-                            .collect()
-                    };
-                    append_bulk_values(analysis.domain(), bulk, &reactions, values);
+                    let reactions = |nodes: &[NId]| analysis.reactions_at(nodes);
+                    append_bulk_values(analysis.domain(), bulk, progress, true, &reactions, values);
                 }
             }
             StageRunner::Reset { .. } => {}

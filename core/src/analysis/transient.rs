@@ -231,6 +231,28 @@ where
             + self.domain.lumped_mass_at(node, dof) * acceleration
     }
 
+    /// `reaction` at every DOF of `nodes`, node-major: one pass over the elements
+    /// (`Domain::reactions_all`) instead of one per DOF.
+    pub fn reactions_at(&self, nodes: &[NId]) -> Vec<f64> {
+        let all = self.domain.reactions_all(self.time);
+        let mut acceleration = [0.0; NDOF];
+        for (motion, _) in &self.ground_motions {
+            acceleration[motion.direction] += motion.acceleration(self.time);
+        }
+        let mut out = Vec::with_capacity(nodes.len() * NDOF);
+        for &node in nodes {
+            for dof in 0..NDOF {
+                let inertia = if acceleration[dof] == 0.0 {
+                    0.0
+                } else {
+                    self.domain.lumped_mass_at(node, dof) * acceleration[dof]
+                };
+                out.push(all[node][dof] + inertia);
+            }
+        }
+        out
+    }
+
     /// Ends this (dynamic) phase and hands back the `Domain` — symmetric
     /// with `Analysis::into_domain`, so a dynamic phase can itself be
     /// followed by another phase (static or dynamic).
