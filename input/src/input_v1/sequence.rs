@@ -560,6 +560,11 @@ pub enum BulkQuantity {
     /// `elements` only: the uniform beam load the element carries (`wx`, `wy` and in 3D `wz`, local
     /// axes), `RecorderSpec::ElementLoad`'s first `ndm` components.
     Load,
+    /// `elements` with `elementKind: studWall` only: every framing member's axial force (tension positive,
+    /// `StudWallResponse`). Per wall: the counts `[studs, jacks, cripples]`, then one `[x, bottom, top]` triple per
+    /// full-height stud, jack and cripple in that order (a jack's or cripple's `bottom` and `top` are its one force).
+    /// `3 + 3 · members` components; every row must have as many members (record one wall per recorder otherwise).
+    MemberForce,
 }
 
 /// What a [`RecorderSpec::EmbeddedBar`] reads.

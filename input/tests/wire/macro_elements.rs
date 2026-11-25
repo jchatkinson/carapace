@@ -1314,3 +1314,78 @@ fn wall_load_and_floor_pattern_round_trip() {
     )
     .is_err());
 }
+
+/// `memberForce` bulk recorder on the window wall under a top line load: counts and positions follow the layout
+/// (8 full-height studs, the 2 jacks at the opening edges, 3 cripples inside it), and the members reaching the
+/// bottom plate (full-height studs at their bottom end, jacks) carry the base reaction (statics, 1e-9 relative).
+#[test]
+fn stud_wall_member_force_bulk_recorder() {
+    use carapace_input::input_v1::sequence::{BulkQuantity, BulkTable};
+    let mut input = empty_input(2);
+    input.nodes = NodeTable {
+        coords: vec![0., 0., 4000., 0., 4000., 2440., 0., 2440.],
+        // Top corners free vertically (rotation only), so the whole top load runs down the framing.
+        fixed: vec![7, 7, 4, 4],
+        mass_node_index: vec![],
+        mass: vec![],
+    };
+    input.stud_walls = vec![StudWallSpec { corners: [0, 1, 2, 3], stations: vec![], layout: window_layout(false) }];
+    input.load_patterns = LoadPatternTable { series: vec![TimeSeriesSpec::Linear { slope: 1. }], scale_factor: vec![1.] };
+    input.element_loads = ElementLoadTable {
+        pattern: vec![0],
+        element_kind: vec![ElementKind::StudWall],
+        element_index: vec![0],
+        load: vec![ElementLoadSpec::WallLoad { load: WallLoadSpec::TopLine { x0: 0., x1: 4000., wx0: 0., wx1: 0., wy0: -3., wy1: -3. } }],
+        stage: vec![0],
+    };
+    input.sequence = SequenceSpec {
+        stages: vec![StageSpec::Static {
+            id: "g".into(),
+            steps: 1,
+            integrator: IntegratorSpec::LoadControl { increment: 1. },
+            algorithm: AlgorithmSpec::Linear,
+            convergence: Some(ConvergenceSpec::NormUnbalance { tol: 1e-8, max_iter: 8 }),
+            hold_patterns_after: vec![],
+        }],
+        recorders: vec![
+            RecorderSpec::Bulk { table: BulkTable::Elements, quantity: BulkQuantity::MemberForce, element_kind: Some(ElementKind::StudWall), rows: Some(vec![0]) },
+            RecorderSpec::StudWallBase {
+                element_kind: ElementKind::StudWall,
+                element_index: 0,
+                component: carapace_input::input_v1::sequence::StudWallBaseComponent::Axial,
+            },
+        ],
+    };
+    let mut session = decode(input.clone()).unwrap();
+    let output = session.advance(10);
+    assert!(output.done && output.error.is_none(), "{output:?}");
+    let batch = &output.bulk_batches[0];
+    let v = &batch.values;
+    assert_eq!((batch.points, batch.components), (1, 3 + 3 * 13));
+    assert_eq!([v[0], v[1], v[2]], [8., 2., 3.]);
+    let members: Vec<[f64; 3]> = v[3..].chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let sorted = |r: std::ops::Range<usize>| {
+        let mut x: Vec<f64> = members[r].iter().map(|m| m[0]).collect();
+        x.sort_by(f64::total_cmp);
+        x
+    };
+    assert_eq!(sorted(0..8), [0., 400., 800., 1200., 2800., 3200., 3600., 4000.]);
+    assert_eq!(sorted(8..10), [1200., 2800.]);
+    assert_eq!(sorted(10..13), [1600., 2000., 2400.]);
+    for m in &members[8..] {
+        assert_eq!(m[1], m[2]);
+    }
+    // Direct distribution: each stud's top force is its tributary share of the 3 N/mm (end studs half); the opening's
+    // share goes to the cripples. Bottoms differ by the sheathing's shear lag, but with the jacks they carry the base.
+    for m in &members[..8] {
+        let tributary = if m[0] == 0. || m[0] == 4000. { 600. } else { 1200. };
+        assert!((m[2] + tributary).abs() <= 1e-9 * tributary, "stud top at {}: {}", m[0], m[2]);
+    }
+    let into_base: f64 = members[..10].iter().map(|m| m[1]).sum::<f64>();
+    let base = output.recorder_batches.iter().find(|b| b.recorder_index == 1).unwrap().samples[0].1;
+    assert!((into_base + base).abs() <= 1e-9 * base.abs(), "{into_base} vs base {base}");
+    assert!((base - 12000.).abs() <= 1e-9 * 12000., "base {base}");
+    // Anything but a stud-wall elements table is not applicable.
+    input.sequence.recorders = vec![RecorderSpec::Bulk { table: BulkTable::Nodes, quantity: BulkQuantity::MemberForce, element_kind: None, rows: None }];
+    assert!(decode(input).is_err());
+}

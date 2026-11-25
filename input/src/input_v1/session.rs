@@ -205,6 +205,22 @@ fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
                 }
             }
         }
+        BulkSource::WallMembers => {
+            for &element in &bulk.elements {
+                match domain.element_stud_wall_response(element, progress) {
+                    Some(r) if 3 + 3 * (r.studs.len() + r.jacks.len() + r.cripples.len()) == bulk.components as usize => {
+                        out.extend([r.studs.len() as f64, r.jacks.len() as f64, r.cripples.len() as f64]);
+                        for s in &r.studs {
+                            out.extend([s.x, s.bottom, s.top]);
+                        }
+                        for m in r.jacks.iter().chain(&r.cripples) {
+                            out.extend([m.x, m.axial, m.axial]);
+                        }
+                    }
+                    _ => nan_frame(out),
+                }
+            }
+        }
         BulkSource::Load => {
             for &element in &bulk.elements {
                 for component in 0..bulk.components as usize {
@@ -648,6 +664,8 @@ pub(super) enum BulkSource {
     ZeroLengths,
     EndForce,
     Load,
+    /// Stud-wall framing members (`BulkQuantity::MemberForce`).
+    WallMembers,
 }
 
 impl<NId, EId> ResolvedBulk<NId, EId> {

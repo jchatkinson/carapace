@@ -1104,6 +1104,43 @@ where
                             "elementKind names the table of table: elements, and only of it",
                         ));
                     }
+                    if quantity == BulkQuantity::MemberForce {
+                        if table != BulkTable::Elements || element_kind != Some(ElementKind::StudWall) {
+                            return Err(not_applicable(
+                                "memberForce belongs to the elements table of stud walls, and only to it",
+                            ));
+                        }
+                        let ids = pick_rows(elements.all(ElementKind::StudWall, ndm)?, rows)
+                            .ok_or(not_applicable("a row is past the end of the table"))?;
+                        let width = |id| {
+                            domain.element_stud_wall_response(id, 0.).map(|r| {
+                                3 + 3 * (r.studs.len() + r.jacks.len() + r.cripples.len())
+                            })
+                        };
+                        let Some(&first) = ids.first() else {
+                            return Err(not_applicable("the table is empty"));
+                        };
+                        let components = width(first)
+                            .ok_or(not_applicable("memberForce needs a stud-wall element"))?;
+                        if ids.iter().any(|&id| width(id) != Some(components)) {
+                            return Err(not_applicable(
+                                "memberForce rows must have as many members (record one wall per recorder)",
+                            ));
+                        }
+                        bulks.push(ResolvedBulk {
+                            recorder_index: index,
+                            elements: ids,
+                            nodes: Vec::new(),
+                            points: 1,
+                            components: components as u32,
+                            quantity,
+                            source: BulkSource::WallMembers,
+                            emitted: 0,
+                        });
+                        return Ok(ResolvedRecorder::Bulk {
+                            bulk: bulks.len() as u32 - 1,
+                        });
+                    }
                     let node_quantity = matches!(
                         quantity,
                         BulkQuantity::Displacement

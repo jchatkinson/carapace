@@ -270,7 +270,7 @@ analysis time). All quantities are in local axes, with **axial tension positive*
 
 | Field | Contents |
 |---|---|
-| `studs` | Full-height studs: `x`, axial force at the `bottom` and `top`. They differ inside a sheathed pier by the shear lag `(q_L − q_R) · H`. |
+| `studs` | Full-height studs: `x`, axial force at the `bottom` and `top`. They differ inside a sheathed pier by the shear lag `(q_L − q_R) · H`.  On the wire, the `memberForce` bulk recorder records `studs`, `jacks` and `cripples` per wall and step ([input-format.md](input-format.md)). |
 | `jacks`, `cripples` | Axial force per member. |
 | `header_reactions`, `header` | Header end reactions (the jack forces), and moment and shear at each header node. |
 | `top_chord`, `bottom_chord` | Plate axial force, moment and shear at each plate node. Moments are positive sagging (as for the header). |
