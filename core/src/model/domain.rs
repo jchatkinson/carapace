@@ -93,6 +93,9 @@ pub struct Domain<
     /// The first structural problem `number_dofs` found in `constraints`
     /// (duplicate slave, cycle, fixed slave); reported by `validate`.
     constraint_error: Option<ModelError>,
+    /// Conditional element slots (`ElementOps::conditional_dof_mask`) that nothing else made equations: held at zero, and an
+    /// element's contribution there is dropped on purpose (the debug guard allows it).
+    held_at_zero: HashSet<(NId, usize)>,
     load_patterns: SlotMap<LoadPatternId, LoadPattern<NDOF, NId, E::Id, E::Load>>,
     default_pattern: LoadPatternId,
     num_free_dofs: usize,
@@ -190,6 +193,7 @@ where
             elements: self.elements.clone(),
             constraints: self.constraints.clone(),
             constraint_error: self.constraint_error,
+            held_at_zero: self.held_at_zero.clone(),
             load_patterns: self.load_patterns.clone(),
             default_pattern: self.default_pattern,
             num_free_dofs: self.num_free_dofs,
@@ -230,6 +234,7 @@ where
             elements: SlotMap::default(),
             constraints: Vec::new(),
             constraint_error: None,
+            held_at_zero: HashSet::new(),
             load_patterns,
             default_pattern,
             num_free_dofs: 0,
@@ -963,8 +968,8 @@ where
         let mut active: HashSet<(NId, usize)> = HashSet::new();
         let node_view = NodeView::new(&self.nodes);
         for (_, element) in self.elements.iter() {
-            let mask = element.dof_mask(&node_view);
-            for &node in element.nodes().as_slice() {
+            for (k, &node) in element.nodes().as_slice().iter().enumerate() {
+                let mask = element.node_dof_mask(k, &node_view);
                 for dof in (0..NDOF).filter(|&dof| mask.contains(dof)) {
                     active.insert((node, dof));
                 }
@@ -980,6 +985,18 @@ where
         for constraint in &self.constraints {
             for &(node, dof, _) in &constraint.terms {
                 active.insert((node, dof));
+            }
+        }
+        // Conditional slots join an equation something else made; otherwise they stay at zero.
+        self.held_at_zero.clear();
+        for (_, element) in self.elements.iter() {
+            for (k, &node) in element.nodes().as_slice().iter().enumerate() {
+                let mask = element.conditional_dof_mask(k, &node_view);
+                for dof in (0..NDOF).filter(|&dof| mask.contains(dof)) {
+                    if !active.contains(&(node, dof)) && !slaves.contains(&(node, dof)) {
+                        self.held_at_zero.insert((node, dof));
+                    }
+                }
             }
         }
 
@@ -1079,7 +1096,9 @@ where
         let vector_scale = scale(&mut values.iter().copied());
         let diagonal_scale = k.map_or(0.0, |k| scale(&mut (0..n).map(|i| k[i * n + i])));
         for (a, &(node, slot)) in dofs.iter().enumerate() {
-            if self.dofs.entry(node, slot as usize) != DofEntry::Inactive {
+            if self.dofs.entry(node, slot as usize) != DofEntry::Inactive
+                || self.held_at_zero.contains(&(node, slot as usize))
+            {
                 continue;
             }
             let stray_value = values[a].abs() > 1e-10 * vector_scale;

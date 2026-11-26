@@ -482,7 +482,7 @@ reports its M/jd chord forces for its two hold-downs.
 
 Not modelled, or not yet available:
 - Python and PySees authoring APIs (the engine wire format is available, but PySees has no stud walls).
-- Out-of-plane loading and per-stud out-of-plane output (a 3D wall has only its in-plane translations).
+- Out-of-plane loading and per-stud out-of-plane output (a 3D wall has only its in-plane translations; a bearing wall also ties its bottom nodes to its base along its normal, `stud-wall-bearing.md` D9).
 - Mass and self-weight (no dynamics; add wall weight as a load).
 - Sills and cripples below windows; force transfer around openings and the perforated shear-wall method
   (segmented design only).

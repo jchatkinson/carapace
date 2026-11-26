@@ -69,9 +69,9 @@ At each position, between the plate node and the interpolated base point:
 - **vertical** `kv` (force/length, per position): the series crushing stiffness of the sandwich under one stud
   (plates, subfloor, rim or blocking, top plate below, perpendicular to grain). Bilateral, as the element already
   assumes for interior studs.
-- **horizontal** `kh` (force/length, per position): sill nailing and friction. This replaces both the
-  foundation's internal `u` fix and the `equal_dof` plan tie between storeys. It is a penalty: give it a large
-  value for the conventional rigid tie.
+- **horizontal** `kh` (force/length, per position): sill nailing and friction, along the wall. This replaces
+  the foundation's internal `u` fix and the in-plane half of the `equal_dof` plan tie between storeys (the
+  out-of-plane half is D9). It is a penalty: give it a large value for the conventional rigid tie.
 
 Bottom stations stay exterior nodes for other connections; with `bearing` they get the springs too, unlike
 `foundation`, where a station replaces the internal support. The bottom plate under a window has no bearing
@@ -113,6 +113,29 @@ are exclusive. Bearing on two fixed ground nodes at `x = 0` and `x = L` is rigid
 hold-downs: it reproduces `foundation: true` plus pier-end anchorage links (verified, see below), so a
 preprocessor can use `bearing` for every storey.
 
+### D9. Bottom nodes are tied out of plane (3D)
+
+Added after the first implementation, when the BC Rowhouse second storey came apart under lateral load: the
+element stiffens only its own plane, so with D4's springs alone nothing held a bearing wall's bottom corners out
+of plane. Carapace makes a DOF that nothing stiffens no equation at all, so their out-of-plane displacement
+stayed exactly zero while the floor under them moved 10 mm (`equal_dof` ties had held both plan directions).
+
+In 3D, every bottom exterior node (the corners `c0`, `c1` and any bottom stations) is tied by `kh` along the
+wall's normal to its interpolated base point (the same weights as D3), between the global translations along the
+normal. The tie is assembled with the condensed in-plane stiffness (one `add_dyn`). Its DOFs are declared per
+node: the normal slots are equations of the element at the tied bottom nodes (`ElementOps::node_dof_mask`), and
+only *conditional* at the base nodes (`ElementOps::conditional_dof_mask`): the tie joins a base node's
+out-of-plane equation when something else makes it (a diaphragm, a beam, a support); otherwise the base stays at
+zero that way and the bottom node follows it there. A tie never makes a mechanism: a stack of walls that nothing
+holds out of plane solves as before (and PySees warns about the unheld nodes). The out-of-plane forces are not in the wall's responses (`base_nodes` is in-plane); they reach the base
+nodes and the reactions through the assembly.
+
+Rejected: generated `equal_dof` ties at compile time (PySees). They need a base node directly under each corner,
+and they make the base node's own out-of-plane slot an equation, singular when nothing else stiffens it (a wall
+on a wall with no diaphragm). Also rejected: a floor-line beam joining the walls above and below at every stud.
+It would need a station at every stud of both walls, make the pier ends rigid (no hold-down stretch or uplift)
+unless links came back, and count the rim twice (the floor zone already models it).
+
 ### D8. Wire format
 
 `WallLayoutSpec.bearing: Option<WallBearingSpec { kv, kh, holdDown: Option<AnchorageSpec> }>` (the building's
@@ -125,7 +148,10 @@ rejects its own `floor`; it keeps generating links.
   ground nodes, `zeroLength` links or `equalDOF`s.
 - `compileInputV1` finds each wall's base nodes when it compiles: the nodes at the wall's bottom elevation on its
   line (other walls' top rows, beam-column nodes), keeping those within `0..L` and the nearest one beyond each
-  end. A wall at the lowest stud-wall elevation stands on two generated fixed nodes. A wall end with no base
+  end. A wall at the lowest stud-wall elevation stands on two generated fixed nodes. Where several nodes meet at one
+  point (the top corners of two walls at a building corner), it keeps only those of walls in its own plane when
+  there are any: walls are designed as independent planes, so a wall does not bear on (and is not held down to) a
+  perpendicular wall's corner. Coincident wall corners stay separate nodes, joined only by the diaphragm in plan. A wall end with no base
   node beyond it is a compile error naming the wall. A gap between base positions longer than three of the wall's
   stud spaces is a warning (the interpolation treats the sandwich as rigid across it).
 - Walls saved with explicit links (older projects) keep compiling as before; bearing applies to walls whose
@@ -141,6 +167,8 @@ rejects its own `floor`; it keeps generating links.
 | Coincident base nodes share equally | 1e-12 |
 | Equilibrium: base reactions sum to the applied top loads | 1e-9 |
 | Hold-down in tension: force `tension·uplift` | 1e-9 |
+| 3D: bottom corners follow a base pushed out of plane (linear field), top corners' out-of-plane slot is no equation | 1e-12 |
+| 3D: a stack that nothing holds out of plane solves (no mechanism), the tied bottom staying at zero out of plane | exact |
 | Position outside the base range, bearing with foundation, base station without bearing: named errors | exact |
 
 Tests: `core/tests/elements/stud_wall_bearing.rs`.

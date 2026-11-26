@@ -309,6 +309,24 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         }
     }
 
+    fn node_dof_mask(&self, k: usize, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> DofMask {
+        match self {
+            Element::StudWall(wall) => wall.node_dof_mask(k, nodes),
+            _ => self.dof_mask(nodes),
+        }
+    }
+
+    fn conditional_dof_mask(
+        &self,
+        k: usize,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+    ) -> DofMask {
+        match self {
+            Element::StudWall(wall) => wall.conditional_dof_mask(k, nodes),
+            _ => DofMask::none(),
+        }
+    }
+
     fn validate(&self, nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>) -> Result<(), &'static str> {
         match self {
             Element::Tri3(t) => t.validate(nodes),
@@ -829,6 +847,28 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
             Element3::Shell4(s) => s.dof_mask(),
             Element3::StudWall(w) => w.dof_mask(nodes),
             Element3::Diaphragm(d) => d.dof_mask(nodes),
+        }
+    }
+
+    fn node_dof_mask(
+        &self,
+        k: usize,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> DofMask {
+        match self {
+            Element3::StudWall(w) => w.node_dof_mask(k, nodes),
+            _ => self.dof_mask(nodes),
+        }
+    }
+
+    fn conditional_dof_mask(
+        &self,
+        k: usize,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+    ) -> DofMask {
+        match self {
+            Element3::StudWall(w) => w.conditional_dof_mask(k, nodes),
+            _ => DofMask::none(),
         }
     }
 

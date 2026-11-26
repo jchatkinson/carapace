@@ -472,6 +472,13 @@ pub struct StudWall<K: NodeKey = NodeId> {
     full_load_slots: Vec<DVector<f64>>,
     foundation_supports: Vec<(f64, usize, usize)>,
     bearing: Vec<BearingRec>,
+    /// A bearing wall's out-of-plane ties (3D): each bottom exterior node (corner or bottom station, by exterior index) and its
+    /// interpolated base (exterior indices and weights), joined by `kh` along the wall's normal. The wall stiffens nothing else
+    /// out of plane, so without them its bottom would not follow the floor.
+    plan_ties: Vec<(usize, Vec<(usize, f64)>)>,
+    /// Per exterior node: 1 when it is a tied bottom node (its normal slots are equations of this element), 2 when it is only a
+    /// base node of a tie (its normal slots join only an equation something else makes, `conditional_dof_mask`), else 0.
+    plan_tied: Vec<u8>,
     /// Nonlinear components: the piers when the sheathing law is nonlinear (the first `pier_comps`), then the
     /// hold-downs of a bearing wall. Each is a `PierRec` (`area` 1 and `c` 0 for a hold-down).
     comps: Vec<PierRec>,
@@ -832,6 +839,31 @@ impl<K: NodeKey> StudWall<K> {
                 ..b
             })
             .collect();
+        let mut plan_ties = Vec::new();
+        if layout.bearing.is_some() {
+            let tol = 1e-9 * layout.length.max(1.);
+            let bottoms = [(0, 0.), (1, layout.length)].into_iter().chain(
+                stations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.chord == WallChord::Bottom)
+                    .map(|(j, s)| (4 + j, s.x)),
+            );
+            for (e, x) in bottoms {
+                if let Some(b) = bearing.iter().find(|b| (b.x - x).abs() <= tol) {
+                    plan_ties.push((e, b.base.clone()));
+                }
+            }
+        }
+        let mut plan_tied = vec![0u8; 4 + stations.len()];
+        for (e, w) in &plan_ties {
+            plan_tied[*e] = 1;
+            for &(b, _) in w {
+                if plan_tied[b] == 0 {
+                    plan_tied[b] = 2;
+                }
+            }
+        }
         let mut foundation_supports = Vec::new();
         if layout.foundation {
             // A bottom station replaces the internal support at its position (for a hold-down there).
@@ -970,6 +1002,8 @@ impl<K: NodeKey> StudWall<K> {
             full_load_slots,
             foundation_supports,
             bearing,
+            plan_ties,
+            plan_tied,
             comps,
             pier_comps,
             nonlinear,
@@ -987,17 +1021,64 @@ impl<K: NodeKey> StudWall<K> {
     pub fn stations(&self) -> &[WallStation<K>] {
         &self.stations
     }
+    /// The in-plane slots, and the normal slots of a 3D bearing wall's plan ties.
+    fn masks<const NDIM: usize, const NDOF: usize>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> (DofMask, DofMask) {
+        let p = self.corners.map(|id| nodes.get(id).coords);
+        match PlaneMap::from_corners(p[0], p[1], p[3]) {
+            Ok(map) => {
+                let plane = map
+                    .slots
+                    .iter()
+                    .fold(DofMask::none(), |m, s| m.with(*s as usize));
+                let normal = if NDIM >= 3 && !self.plan_ties.is_empty() {
+                    normal_slots(&map)
+                        .iter()
+                        .fold(DofMask::none(), |m, s| m.with(s.0 as usize))
+                } else {
+                    DofMask::none()
+                };
+                (plane, normal)
+            }
+            Err(_) => (
+                (0..NDIM.min(3)).fold(DofMask::none(), |m, s| m.with(s)),
+                DofMask::none(),
+            ),
+        }
+    }
     pub fn dof_mask<const NDIM: usize, const NDOF: usize>(
         &self,
         nodes: &NodeView<'_, NDIM, NDOF, K>,
     ) -> DofMask {
-        let p = self.corners.map(|id| nodes.get(id).coords);
-        match PlaneMap::from_corners(p[0], p[1], p[3]) {
-            Ok(map) => map
-                .slots
-                .iter()
-                .fold(DofMask::none(), |m, s| m.with(*s as usize)),
-            Err(_) => (0..NDIM.min(3)).fold(DofMask::none(), |m, s| m.with(s)),
+        let (plane, normal) = self.masks(nodes);
+        plane.union(normal)
+    }
+    /// The in-plane slots at every node, plus the normal slots at the tied bottom nodes.
+    pub fn node_dof_mask<const NDIM: usize, const NDOF: usize>(
+        &self,
+        k: usize,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> DofMask {
+        let (plane, normal) = self.masks(nodes);
+        if self.plan_tied.get(k) == Some(&1) {
+            plane.union(normal)
+        } else {
+            plane
+        }
+    }
+    /// The normal slots at a tie's base nodes: the bottom follows the base out of plane only where something else (a
+    /// diaphragm, a beam, a support) holds the base that way; elsewhere the base stays at zero, so no mechanism is made.
+    pub fn conditional_dof_mask<const NDIM: usize, const NDOF: usize>(
+        &self,
+        k: usize,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+    ) -> DofMask {
+        if self.plan_tied.get(k) == Some(&2) {
+            self.masks(nodes).1
+        } else {
+            DofMask::none()
         }
     }
     pub fn accepts_load(&self, load: &ElementLoad) -> bool {
@@ -1116,11 +1197,73 @@ impl<K: NodeKey> StudWall<K> {
                         kg.push(v);
                     }
                 }
-                sink.add_dyn(&exterior_dofs, kg, &rg);
+                self.emit(nodes, &map, &exterior_dofs, kg, &rg, sink);
             });
         } else {
-            sink.add_dyn(&exterior_dofs, &prepared.stiffness, &rg);
+            self.emit(nodes, &map, &exterior_dofs, &prepared.stiffness, &rg, sink);
         }
+    }
+    /// Hands the condensed in-plane tangent to `sink`, with a 3D bearing wall's plan ties added (one call, so a sink that keeps
+    /// only the last call sees the whole element). A tie is `kh (a·d) a`, `a` the bottom node's normal slots minus its base's.
+    fn emit<const NDIM: usize, const NDOF: usize, S: TangentSink<K>>(
+        &self,
+        nodes: &NodeView<'_, NDIM, NDOF, K>,
+        map: &PlaneMap,
+        dofs: &[(K, u8)],
+        k: &[f64],
+        r: &[f64],
+        sink: &mut S,
+    ) {
+        let kh = self.layout.bearing.as_ref().map_or(0., |b| b.kh);
+        if NDIM < 3 || self.plan_ties.is_empty() || kh == 0. {
+            sink.add_dyn(dofs, k, r);
+            return;
+        }
+        let ns = normal_slots(map);
+        let m = map.slots.len();
+        let mut all: Vec<(K, u8)> = dofs.to_vec();
+        // Position of (exterior node, normal slot t) in `all`: its in-plane slot when the normal shares one, else appended.
+        let mut pos = vec![ArrayVec::<usize, 3>::new(); self.nodes.len()];
+        for (e, p) in pos
+            .iter_mut()
+            .enumerate()
+            .filter(|(e, _)| self.plan_tied[*e] > 0)
+        {
+            for &(s, _) in &ns {
+                p.push(match map.slots.iter().position(|&q| q == s) {
+                    Some(i) => e * m + i,
+                    None => {
+                        all.push((self.nodes[e], s));
+                        all.len() - 1
+                    }
+                });
+            }
+        }
+        let (n0, n) = (dofs.len(), all.len());
+        let mut kk = vec![0.; n * n];
+        let mut rr = vec![0.; n];
+        for i in 0..n0 {
+            kk[i * n..i * n + n0].copy_from_slice(&k[i * n0..(i + 1) * n0]);
+            rr[i] = r[i];
+        }
+        for (e, w) in &self.plan_ties {
+            let mut a: Vec<(usize, f64)> = Vec::new();
+            for (t, &(_, c)) in ns.iter().enumerate() {
+                a.push((pos[*e][t], c));
+                a.extend(w.iter().map(|&(b, wt)| (pos[b][t], -wt * c)));
+            }
+            let gap: f64 = a
+                .iter()
+                .map(|&(i, c)| c * nodes.get(all[i].0).displacement[all[i].1 as usize])
+                .sum();
+            for &(i, ci) in &a {
+                rr[i] += kh * ci * gap;
+                for &(j, cj) in &a {
+                    kk[i * n + j] += kh * ci * cj;
+                }
+            }
+        }
+        sink.add_dyn(&all, &kk, &rr);
     }
     pub fn assemble_load<const NDIM: usize, const NDOF: usize, S: VectorSink<K>>(
         &self,
@@ -2361,6 +2504,19 @@ fn add_sheathing(
 /// Springs from every bottom-plate bearing position to the interpolated base surface ([`WallBearing`]): `kh` and
 /// `kv` into the frame stiffness, and at each pier end (with a hold-down law) a nonlinear component in place of
 /// `kv`. Returns the bearing positions (`hold` indexing the returned components) and the components.
+/// The global translation slots along a wall's unit normal (`ex × ey`), with the normal's component on each.
+fn normal_slots(map: &PlaneMap) -> ArrayVec<(u8, f64), 3> {
+    let (a, b) = (map.ex, map.ey);
+    let n = [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ];
+    (0..3)
+        .filter(|&i| n[i].abs() > 1e-12)
+        .map(|i| (i as u8, n[i]))
+        .collect()
+}
 fn add_bearing<K: NodeKey>(
     model: &mut FrameBuild,
     l: &StudWallLayout,

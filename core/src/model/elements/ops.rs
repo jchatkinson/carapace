@@ -273,6 +273,21 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
     /// (debug builds assert against it).
     fn dof_mask(&self, nodes: &NodeView<'_, NDIM, NDOF, NId>) -> DofMask;
 
+    /// The slots this element stiffens at its `k`-th node (`nodes()` order), for an element whose nodes differ (a bearing stud
+    /// wall ties only its bottom nodes and their base out of plane). Must lie within `dof_mask`; the default is `dof_mask` itself.
+    fn node_dof_mask(&self, k: usize, nodes: &NodeView<'_, NDIM, NDOF, NId>) -> DofMask {
+        let _ = k;
+        self.dof_mask(nodes)
+    }
+
+    /// Slots at the `k`-th node this element couples to only when something else makes them equations (a bearing stud wall's
+    /// base nodes along its normal); otherwise they stay at zero and the element's contribution there is dropped. Within
+    /// `dof_mask`; none by default.
+    fn conditional_dof_mask(&self, k: usize, nodes: &NodeView<'_, NDIM, NDOF, NId>) -> DofMask {
+        let _ = (k, nodes);
+        DofMask::none()
+    }
+
     /// Rejects an element whose geometry or parameters make it unusable
     /// (coincident nodes, inverted orientation, ...); called by
     /// `Domain::validate`. The default accepts everything.

@@ -470,3 +470,171 @@ fn bearing_errors_are_named() {
     let e = StudWall::new(corners, vec![base(0., 4)], g, vec![]).unwrap_err();
     assert!(e.0.contains("base station without bearing"), "{e}");
 }
+
+/// 3D: the wall stiffens only its own plane, so a bearing wall ties its bottom corners to the base along its normal (`kh`), and
+/// only those. A wall along Y on three fixed base nodes (y = -1000, 2000, 5000) pushed out of plane by a prescribed `ux` linear in
+/// y: its bottom corners follow the interpolated base exactly (nothing else resists), its top corners' `ux` is no equation.
+#[test]
+fn bearing_ties_bottom_corners_out_of_plane() {
+    use carapace_core::model::{Domain3, Element3, Node3};
+    let mut d = Domain3::new();
+    let fixed = |p: [f64; 3]| (0..6).fold(Node3::new(p), |n, k| n.fix(k));
+    let base: Vec<_> = [-1000., 2000., 5000.]
+        .map(|y| d.add_node(fixed([0., y, 0.])))
+        .to_vec();
+    let c = [[0., 0., 0.], [0., 4000., 0.], [0., 4000., H], [0., 0., H]]
+        .map(|p| d.add_node(Node3::new(p)));
+    let stations = base
+        .iter()
+        .zip([-1000., 2000., 5000.])
+        .map(|(&node, x)| WallStation {
+            chord: WallChord::Base,
+            x,
+            node,
+        })
+        .collect();
+    let l = StudWallLayout {
+        bearing: Some(WallBearing {
+            kv: KV,
+            kh: KH,
+            hold_down: None,
+        }),
+        ..layout(4000., false, false)
+    };
+    d.add_element(Element3::StudWall(
+        StudWall::new3(c, stations, l, vec![]).unwrap(),
+    ));
+    d.validate().unwrap();
+    assert!(
+        d.is_active(c[0], 0) && d.is_active(c[1], 0),
+        "bottom corners are tied out of plane"
+    );
+    assert!(
+        !d.is_active(c[2], 0) && !d.is_active(c[3], 0),
+        "top corners are not"
+    );
+    for (&b, y) in base.iter().zip([-1000., 2000., 5000.]) {
+        assert!(d.prescribe_displacement(b, 0, (y + 1000.) / 1000.));
+    }
+    let mut a = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::LoadControl { increment: 1. })
+        .algorithm(Algorithm::Linear)
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-10,
+            max_iter: 4,
+        })
+        .build(d);
+    a.step().unwrap();
+    near(
+        a.domain().node(c[0]).displacement[0],
+        1.,
+        1e-12,
+        1.,
+        "c0 ux",
+    );
+    near(
+        a.domain().node(c[1]).displacement[0],
+        5.,
+        1e-12,
+        1.,
+        "c1 ux",
+    );
+    near(
+        a.domain().node(c[2]).displacement[1],
+        0.,
+        1e-12,
+        1.,
+        "no in-plane movement",
+    );
+}
+
+/// 3D: the tie only joins an out-of-plane equation something else makes. A wall along X on a wall along X with nothing holding
+/// either out of plane (no diaphragm) solves under gravity as before (no mechanism): the lower top corner's `uy` stays no equation
+/// and the upper bottom corner, tied to it, stays at zero.
+#[test]
+fn bearing_tie_makes_no_mechanism_out_of_plane() {
+    use carapace_core::model::{Domain3, Element3, ElementLoad3, Node3};
+    let mut d = Domain3::new();
+    let fixed = |p: [f64; 3]| (0..6).fold(Node3::new(p), |n, k| n.fix(k));
+    let ground = [0., 4000.].map(|x| d.add_node(fixed([x, 0., 0.])));
+    let lo = [[0., 0., 0.], [4000., 0., 0.], [4000., 0., H], [0., 0., H]]
+        .map(|p| d.add_node(Node3::new(p)));
+    let up = [
+        [0., 0., H],
+        [4000., 0., H],
+        [4000., 0., 2. * H],
+        [0., 0., 2. * H],
+    ]
+    .map(|p| d.add_node(Node3::new(p)));
+    let bearing = Some(WallBearing {
+        kv: KV,
+        kh: KH,
+        hold_down: None,
+    });
+    let base = |nodes: [carapace_core::model::Node3Id; 2]| {
+        nodes
+            .iter()
+            .zip([0., 4000.])
+            .map(|(&node, x)| WallStation {
+                chord: WallChord::Base,
+                x,
+                node,
+            })
+            .collect::<Vec<_>>()
+    };
+    let lower = StudWall::new3(
+        lo,
+        base(ground),
+        StudWallLayout {
+            bearing: bearing.clone(),
+            ..layout(4000., false, false)
+        },
+        vec![],
+    )
+    .unwrap();
+    let upper = StudWall::new3(
+        up,
+        base([lo[3], lo[2]]),
+        StudWallLayout {
+            bearing,
+            ..layout(4000., false, false)
+        },
+        top_line(4000., 0., -5.),
+    )
+    .unwrap();
+    d.add_element(Element3::StudWall(lower));
+    let wall = d.add_element(Element3::StudWall(upper));
+    let p = d.add_load_pattern(LoadSeries::Linear { slope: 1. });
+    d.add_element_load(
+        p,
+        wall,
+        ElementLoad3 {
+            wall: Some(WallCaseLoad {
+                case: 0,
+                factor: 1.,
+            }),
+            ..Default::default()
+        },
+    );
+    d.validate().unwrap();
+    assert!(
+        !d.is_active(lo[3], 1),
+        "nothing holds the lower top corner out of plane"
+    );
+    let mut a = AnalysisBuilder::new()
+        .constraint_handler(ConstraintHandler::Plain)
+        .integrator(Integrator::LoadControl { increment: 1. })
+        .algorithm(Algorithm::Linear)
+        .test(ConvergenceTest::NormUnbalance {
+            tol: 1e-6,
+            max_iter: 4,
+        })
+        .build(d);
+    a.step().expect("no out-of-plane mechanism");
+    assert_eq!(a.domain().node(up[0]).displacement[1], 0.);
+    assert!(
+        a.domain().node(up[2]).displacement[2] < 0.,
+        "the load goes down"
+    );
+}
