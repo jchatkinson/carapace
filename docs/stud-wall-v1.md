@@ -156,7 +156,10 @@ only) and `A = diag(A_p)`. Eliminating the internal DOFs leaves a P×P system in
 - `y` is the pier strain of the unsheathed frame: `G = B_eᵀ − B_iᵀ K_ii⁻¹ K_ie` (the exterior map) and
   `y_k = B_iᵀ K_ii⁻¹ p_i,k` (load case `k`; `λ_k` are the effective case factors, the sum over active patterns).
 - A local Newton solve (fixed-size buffers, hand-written LU with partial pivoting, residual `≤ 1e-14 (1 + max|y|)`,
-  at most 40 iterations) starts from `γ_sh = y` and evaluates each law and its tangent `D = diag(dq/dγ_sh)`.
+  at most 60 iterations) starts from `γ_sh = y` and evaluates each law and its tangent `D = diag(dq/dγ_sh)`. Each
+  step backtracks (halving, Armijo on `|r|₂`) until the residual decreases: the laws are monotone and `C` is positive
+  definite, so `I + C D` is nonsingular and the Newton direction descends, while full steps can cycle across a kinked
+  law (a hold-down switching between tension and bearing).
   `Material` laws are evaluated as trials from their committed state.
 - Exterior resisting force: `K_c,frame u_e + C q`, with `C = G ᵀ A`, the condensed force map of the pier
   fields. The case loads are applied by `assemble_load` as in the linear path.

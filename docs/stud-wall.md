@@ -197,7 +197,9 @@ one path-independent law. Positive relative `uy` is uplift. In a between-storey 
 `tension` is the effective hold-down stiffness in N/mm: combine device stiffness (`T_cap / delta_max`), rod
 stiffness (`A E / L`) and fastener slip in series. Set it to zero for bearing only. `slack` is shrinkage plus
 physical gaps in mm; estimate shrinkage as `0.002 * (MC_fab - MC_service) * L_shrink` (moisture contents in
-percent). For compression use `AnchorageBearing::O86Crush { qr }` with `qr = K_D K_S K_Z f_cp A` in N, or
+percent). For compression use `AnchorageBearing::O86Crush { qr }` with the factored bearing resistance of the post on its plate,
+`qr = φ F_cp A_b K_B K_Zcp` in N (CSA O86:19 6.5.6.2, `φ = 0.8`, `F_cp = f_cp K_D K_Scp K_T`; e.g. 84.3 kN for a 3-ply 2x6
+S-P-F post: `f_cp` 5.3 MPa, `A_b` 114 × 140, `K_B` 1.08, `K_Zcp` 1.15), or
 `Linear { k }` with `k` in N/mm. The O86 crush curve is the WoodWorks Shearwalls 11 design-report legend
 “Crush – Deformation of bottom plate at compression end of wall segment.” O86:19 11.7.1.2's `d_a` is total
 anchorage-system displacement; WoodWorks adds hold-down elongation, slip, shrinkage and crush. A single link at

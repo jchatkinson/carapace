@@ -8,6 +8,8 @@
 //!   springs: 1e-8.
 //! - Offset studs: each base node's reaction is the lever-rule share of the spring forces, coincident base
 //!   nodes share equally, and the reactions sum to the load: 1e-9.
+//! - O86-crush hold-downs cycled between bearing and uplift (lateral load reversed under constant gravity) follow
+//!   the same link model step by step: 1e-6. The element's local solve crosses the hold-down kinks without cycling.
 
 use carapace_core::analysis::{
     Algorithm, AnalysisBuilder, ConstraintHandler, ConvergenceTest, Integrator, TangentStrategy,
@@ -111,9 +113,12 @@ fn load_wall(d: &mut D2, wall: ElementId) {
     );
 }
 fn solve(d: D2) -> carapace_core::analysis::Analysis {
+    solve_steps(d, 0.25, 4)
+}
+fn solve_steps(d: D2, increment: f64, steps: usize) -> carapace_core::analysis::Analysis {
     let mut a = AnalysisBuilder::new()
         .constraint_handler(ConstraintHandler::Transformation)
-        .integrator(Integrator::LoadControl { increment: 0.25 })
+        .integrator(Integrator::LoadControl { increment })
         .algorithm(Algorithm::Newton {
             tangent: TangentStrategy::Current,
             line_search: None,
@@ -123,7 +128,7 @@ fn solve(d: D2) -> carapace_core::analysis::Analysis {
             max_iter: 100,
         })
         .build(d);
-    for _ in 0..4 {
+    for _ in 0..steps {
         a.step().expect("bearing wall step");
     }
     a
@@ -226,6 +231,62 @@ fn bearing_on_ground_matches_foundation_with_links() {
 #[test]
 fn aligned_stack_matches_station_links() {
     let length = 3600.;
+    let (b, tb) = stack(true, anchor(), StackLoad::Proportional);
+    let (s, ts) = stack(false, anchor(), StackLoad::Proportional);
+    let scale = ts[0][0].abs();
+    for (p, q) in tb.iter().zip(&ts) {
+        near(p[0], q[0], 1e-8, scale, "top ux");
+        near(p[1], q[1], 1e-8, scale, "top uy");
+    }
+    for (p, q) in b.piers.iter().zip(&s.piers) {
+        near(p.q, q.q, 1e-8, q.q, "pier q");
+        near(p.chords[0], q.chords[0], 1e-8, q.chords[0], "pier chord");
+    }
+    for (p, q) in b.studs.iter().zip(&s.studs) {
+        near(p.bottom, q.bottom, 1e-8, 6. * length, "stud force");
+    }
+    near(b.base[1], 6. * length, 1e-9, 6. * length, "gravity sum");
+}
+
+/// A 2x6 S-P-F window wall on the wall below with O86-crush hold-downs (tension 15 kN/mm, end posts Qr = 84.3 kN,
+/// studs at the crush curve's initial 47.4 kN/mm), constant gravity and a lateral load cycled +1, -1, +1: every
+/// pier end crosses between bearing and uplift. The bearing wall follows the equivalent link model at every step
+/// (1e-6 of the top drift). Before the local solve's line search, full Newton steps cycled across the hold-down
+/// kinks and the step failed.
+#[test]
+fn crush_hold_downs_cycle_between_bearing_and_uplift() {
+    let hold =
+        Material::anchorage(15_000., 0., AnchorageBearing::O86Crush { qr: 84_323. }).unwrap();
+    let (b, tb) = stack(true, hold.clone(), StackLoad::Cyclic);
+    let (s, ts) = stack(false, hold, StackLoad::Cyclic);
+    let scale = ts.iter().map(|p| p[0].abs()).fold(0., f64::max);
+    for (p, q) in tb.iter().zip(&ts) {
+        near(p[0], q[0], 1e-6, scale, "top ux");
+        near(p[1], q[1], 1e-6, scale, "top uy");
+    }
+    for (p, q) in b.piers.iter().zip(&s.piers) {
+        near(p.chords[0], q.chords[0], 1e-6, q.chords[0], "pier chord");
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum StackLoad {
+    /// Gravity and lateral together, in four steps.
+    Proportional,
+    /// Gravity constant; lateral (12 N/mm) along a path 0, 1, -1, 1 in 24 steps.
+    Cyclic,
+}
+
+/// The aligned stack: a 3.6 m wall with a floor zone on the ground (foundation), and a window wall on its top row,
+/// either bearing on it (`bearing`) or on bottom stations linked to it at every stud (`hold` at pier ends, `KV`
+/// elsewhere). Returns the upper wall's response and its top corners' displacements at the end.
+fn stack(
+    bearing: bool,
+    hold: Material,
+    load: StackLoad,
+) -> (carapace_core::model::StudWallResponse, [[f64; 3]; 2]) {
+    let length = 3600.;
+    let anchor = || hold.clone();
     let run = |bearing: bool| {
         let mut d = D2::new();
         let ground = d.add_node(Node::new([0., 0.]).fix(0).fix(1).fix(2));
@@ -311,35 +372,46 @@ fn aligned_stack_matches_station_links() {
                 ));
             }
         }
+        let cases = match load {
+            StackLoad::Proportional => top_line(length, 5., -6.),
+            StackLoad::Cyclic => [top_line(length, 0., -6.), top_line(length, 12., 0.)].concat(),
+        };
         let wall = d.add_element(Element::StudWall(
-            StudWall::new(
-                [uc[0], uc[1], uc[2], uc[3]],
-                stations,
-                ul,
-                top_line(length, 5., -6.),
-            )
-            .unwrap(),
+            StudWall::new([uc[0], uc[1], uc[2], uc[3]], stations, ul, cases).unwrap(),
         ));
-        load_wall(&mut d, wall);
-        let a = solve(d);
+        let a = match load {
+            StackLoad::Proportional => {
+                load_wall(&mut d, wall);
+                solve(d)
+            }
+            StackLoad::Cyclic => {
+                for (case, series) in [
+                    (0, LoadSeries::Constant),
+                    (
+                        1,
+                        LoadSeries::Path {
+                            times: vec![0., 1., 3., 5.],
+                            factors: vec![0., 1., -1., 1.],
+                        },
+                    ),
+                ] {
+                    let p = d.add_load_pattern(series);
+                    d.add_element_load(
+                        p,
+                        wall,
+                        ElementLoad {
+                            wall: Some(WallCaseLoad { case, factor: 1. }),
+                            ..Default::default()
+                        },
+                    );
+                }
+                solve_steps(d, 5. / 24., 24)
+            }
+        };
         let r = a.domain().element_stud_wall_response(wall, 1.).unwrap();
         (r, [uc[2], uc[3]].map(|n| a.domain().node(n).displacement))
     };
-    let (b, tb) = run(true);
-    let (s, ts) = run(false);
-    let scale = ts[0][0].abs();
-    for (p, q) in tb.iter().zip(&ts) {
-        near(p[0], q[0], 1e-8, scale, "top ux");
-        near(p[1], q[1], 1e-8, scale, "top uy");
-    }
-    for (p, q) in b.piers.iter().zip(&s.piers) {
-        near(p.q, q.q, 1e-8, q.q, "pier q");
-        near(p.chords[0], q.chords[0], 1e-8, q.chords[0], "pier chord");
-    }
-    for (p, q) in b.studs.iter().zip(&s.studs) {
-        near(p.bottom, q.bottom, 1e-8, 6. * length, "stud force");
-    }
-    near(b.base[1], 6. * length, 1e-9, 6. * length, "gravity sum");
+    run(bearing)
 }
 
 /// Studs at 400 on base nodes offset by 150 (and two nodes at one position): each base node's reaction is the

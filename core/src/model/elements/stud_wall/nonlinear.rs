@@ -2,22 +2,59 @@
 
 use super::*;
 
+type Comps = ArrayVec<f64, MAX_WALL_PIERS>;
+
 impl<K: NodeKey> StudWall<K> {
+    /// The components' responses `q`, tangents `d` and residuals `gamma - y + C q` at the trial strains `gamma`.
+    fn local_residual(
+        &self,
+        cache: &NonlinearCache,
+        y: &Comps,
+        gamma: &Comps,
+    ) -> Option<(Comps, Comps, Comps)> {
+        let count = gamma.len();
+        let (mut q, mut d) = (Comps::new(), Comps::new());
+        for (i, &g) in gamma.iter().enumerate() {
+            let (stress, tangent) = if i < self.pier_comps {
+                shear_law_response(
+                    &self.layout.sheathing.as_ref()?.law,
+                    self.material_states[i].as_ref(),
+                    g,
+                )
+            } else {
+                self.material_states[i].as_ref()?.trial_stress_tangent(g)
+            };
+            q.push(stress);
+            d.push(tangent);
+        }
+        let r = (0..count)
+            .map(|i| {
+                gamma[i] - y[i]
+                    + (0..count)
+                        .map(|j| cache.compliance[(i, j)] * q[j])
+                        .sum::<f64>()
+            })
+            .collect();
+        Some((q, d, r))
+    }
+
+    /// Solves the components' local system `gamma + C q(gamma) = y` (`y` the strains the exterior displacements and loads impose, `C`
+    /// the condensed frame's compliance) by Newton with a backtracking line search on `|r|`. The laws are monotone and `C` is positive
+    /// definite, so the Jacobian `I + C diag(d)` is never singular and its Newton step always reduces `|r|`; full steps alone can cycle
+    /// across a kinked law (a hold-down between tension and bearing), which the line search breaks. Returns the strains, the responses
+    /// and `dq/dy`.
     pub(super) fn nonlinear_trial(
         &self,
         ue: &[f64],
         cases: &[WallCaseLoad],
     ) -> Option<(
-        ArrayVec<f64, MAX_WALL_PIERS>,
-        ArrayVec<f64, MAX_WALL_PIERS>,
+        Comps,
+        Comps,
         ArrayVec<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>,
     )> {
         let cache = self.nonlinear.as_ref()?;
         let count = self.comps.len();
-        let mut y = ArrayVec::<f64, MAX_WALL_PIERS>::new();
-        let mut gamma = ArrayVec::<f64, MAX_WALL_PIERS>::new();
-        let mut q = ArrayVec::<f64, MAX_WALL_PIERS>::new();
-        let mut d = ArrayVec::<f64, MAX_WALL_PIERS>::new();
+        let mut y = Comps::new();
         for i in 0..count {
             let mut yi = (0..ue.len())
                 .map(|j| cache.strain_map[(i, j)] * ue[j])
@@ -26,45 +63,28 @@ impl<K: NodeKey> StudWall<K> {
                 yi += cache.load_strain[c.case as usize][i] * c.factor;
             }
             y.push(yi);
-            gamma.push(yi);
-            q.push(0.);
-            d.push(0.);
         }
-        let mut jac = ArrayVec::<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>::new();
-        jac.extend((0..count * count).map(|_| 0.));
-        for _ in 0..40 {
-            for i in 0..count {
-                let (stress, tangent) = if i < self.pier_comps {
-                    let law = &self.layout.sheathing.as_ref()?.law;
-                    shear_law_response(law, self.material_states[i].as_ref(), gamma[i])
-                } else {
-                    self.material_states[i]
-                        .as_ref()?
-                        .trial_stress_tangent(gamma[i])
-                };
-                q[i] = stress;
-                d[i] = tangent;
-            }
-            let mut norm = 0.0f64;
-            for i in 0..count {
-                let residual = gamma[i] - y[i]
-                    + (0..count)
-                        .map(|j| cache.compliance[(i, j)] * q[j])
-                        .sum::<f64>();
-                norm = norm.max(residual.abs());
-                for j in 0..count {
-                    jac[i * count + j] = f64::from(i == j) + cache.compliance[(i, j)] * d[j];
-                }
-            }
-            let scale = 1. + y.iter().map(|v| v.abs()).fold(0.0, f64::max);
-            if norm <= 1e-14 * scale {
+        let jacobian = |d: &Comps| {
+            let mut jac = ArrayVec::<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>::new();
+            jac.extend((0..count * count).map(|k| {
+                f64::from(k / count == k % count)
+                    + cache.compliance[(k / count, k % count)] * d[k % count]
+            }));
+            jac
+        };
+        let norm2 = |r: &Comps| r.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let scale = 1. + y.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let mut gamma = y.clone();
+        let (mut q, mut d, mut r) = self.local_residual(cache, &y, &gamma)?;
+        for _ in 0..60 {
+            if r.iter().fold(0.0f64, |m, v| m.max(v.abs())) <= 1e-14 * scale {
+                let jac = jacobian(&d);
                 let mut dqdy = ArrayVec::<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>::new();
                 dqdy.extend((0..count * count).map(|_| 0.));
                 for col in 0..count {
                     let mut a = jac.clone();
-                    let mut rhs = ArrayVec::<f64, MAX_WALL_PIERS>::new();
-                    rhs.extend((0..count).map(|_| 0.));
-                    rhs[col] = 1.;
+                    let mut rhs = Comps::new();
+                    rhs.extend((0..count).map(|i| f64::from(i == col)));
                     if !small_lu_solve(&mut a, &mut rhs, count) {
                         return None;
                     }
@@ -74,24 +94,26 @@ impl<K: NodeKey> StudWall<K> {
                 }
                 return Some((gamma, q, dqdy));
             }
-            let mut a = jac.clone();
-            let mut rhs = ArrayVec::<f64, MAX_WALL_PIERS>::new();
-            for i in 0..count {
-                rhs.push(
-                    gamma[i] - y[i]
-                        + (0..count)
-                            .map(|j| cache.compliance[(i, j)] * q[j])
-                            .sum::<f64>(),
-                );
-            }
-            if !small_lu_solve(&mut a, &mut rhs, count) {
+            let mut a = jacobian(&d);
+            let mut step = r.clone();
+            if !small_lu_solve(&mut a, &mut step, count) {
                 return None;
             }
-            for i in 0..count {
-                gamma[i] -= rhs[i];
-            }
-            if !gamma.iter().all(|v| v.is_finite()) {
-                return None;
+            // Backtrack until |r| decreases (Armijo); a vanishing step is taken anyway rather than stalling.
+            let n0 = norm2(&r);
+            let mut t = 1.;
+            loop {
+                let trial: Comps = (0..count).map(|i| gamma[i] - t * step[i]).collect();
+                if !trial.iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                let next = self.local_residual(cache, &y, &trial)?;
+                if norm2(&next.2) <= (1. - 1e-4 * t) * n0 || t < 1e-8 {
+                    gamma = trial;
+                    (q, d, r) = next;
+                    break;
+                }
+                t *= 0.5;
             }
         }
         None
