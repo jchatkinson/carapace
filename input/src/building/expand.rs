@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use carapace_core::model::{AnchorageBearing, Material};
+use carapace_core::model::Material;
 use serde::{Deserialize, Serialize};
 
 use super::build::{convert_layout, err, floor_transfer_for, BuildError, SLOTS};
@@ -124,14 +124,10 @@ fn stations(m: &BTreeMap<i64, u32>) -> Vec<StationNode> {
 }
 
 fn anchorage(a: &AnchorageSpec) -> Result<MaterialSpec, BuildError> {
-    let bearing = match a.bearing {
-        AnchorageBearingSpec::Linear { k } => AnchorageBearing::Linear { k },
-        AnchorageBearingSpec::O86Crush { qr } => AnchorageBearing::O86Crush { qr },
-    };
     if a.tension < 0. || a.slack < 0. || !a.tension.is_finite() || !a.slack.is_finite() {
         return Err(err("invalid anchorage values"));
     }
-    Material::anchorage(a.tension, a.slack, bearing).map_err(|e| err(e.to_string()))?;
+    Material::anchorage(a.tension, a.slack, a.bearing.to_core()).map_err(|e| err(e.to_string()))?;
     Ok(MaterialSpec::Anchorage {
         tension: a.tension,
         slack: a.slack,

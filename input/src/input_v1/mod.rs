@@ -15,6 +15,7 @@ pub mod materials;
 pub mod model_output;
 pub mod sequence;
 pub mod tables;
+pub mod walls;
 
 mod decode;
 mod run;

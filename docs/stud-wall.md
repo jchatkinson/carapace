@@ -13,11 +13,22 @@ It is built for design:
   11.7.1.2 deflection terms for one storey, and the O86 Annex A.11.7.1 multi-storey method for stacked walls;
 - **design forces** per pier: shear flow `q` and the M/jd chord (hold-down) force.
 
-Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls`,
-`diaphragms`, the `wallLoad` element load and `floorLoads`). The CLI consumes the same format. PySees does not compile these
-tables and has no stud-wall model API. Implementation details
-are in [`stud-wall-v1.md`](stud-wall-v1.md); the long-term
-design and its rationale in [`stud-wall-panel.md`](stud-wall-panel.md).
+Status: core Rust API and `CarapaceInputV1` wire tables (`studWalls`, `diaphragms`, the `wallLoad` element load
+and `floorLoads`), read by the CLI and compiled by PySees.
+
+Related documents:
+
+- [`floors.md`](floors.md): the floor zone, one-way joist load transfer, pier-end anchorage and diaphragms.
+- [`stud-wall-bearing.md`](stud-wall-bearing.md): a wall bearing on what is below it (design record).
+- [`building.md`](building.md): stacked stud-wall buildings expanded into these tables.
+- [`stud-wall-v1.md`](stud-wall-v1.md): the implementation spec; [`stud-wall-panel.md`](stud-wall-panel.md): the
+  long-term design, its rationale and the deferred features.
+- Finished plans, kept as design records: [`obsolete/stud-wall-elements-plan.md`](obsolete/stud-wall-elements-plan.md),
+  [`obsolete/floor-system-plan.md`](obsolete/floor-system-plan.md).
+
+Code: `core/src/model/elements/stud_wall/` (the element), `shear_law.rs` (shared with `diaphragm.rs`),
+`floor_zone.rs`, `wall_plane.rs`; `core/src/model/floor_transfer.rs` (joist load transfer); `input/src/input_v1/walls.rs`
+(wire types, shared with `input/src/building/`).
 
 Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [2a Floor zone](#2a-floor-zone) · [3 Sheathing laws](#3-sheathing-laws) ·
 [4 Supports](#4-supports-anchorage-and-hold-downs) · [5 Loads](#5-loads) · [6 Analysis](#6-analysis-setup) ·

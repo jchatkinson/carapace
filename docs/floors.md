@@ -1,7 +1,7 @@
 # Floors
 
 Floor components for stud-wall models (core Rust API and `CarapaceInputV1` tables, 2D and 3D). The plan and its rationale are in
-[floor-system-plan.md](floor-system-plan.md); the walls themselves are in [stud-wall.md](stud-wall.md).
+[floor-system-plan.md](obsolete/floor-system-plan.md) (archived); the walls themselves are in [stud-wall.md](stud-wall.md).
 For automatic stacked building generation, see [building.md](building.md).
 
 ## 1. Floor depth: the floor zone of the wall
@@ -142,7 +142,7 @@ domain.rigid_diaphragm(master, &level_nodes);
 
 ### Flexible
 
-`flexible_diaphragm_loads` wraps the simple-span statics in [`transfer_floor`](../core/src/model/floor.rs).
+`flexible_diaphragm_loads` wraps the simple-span statics in [`transfer_floor`](../core/src/model/floor_transfer.rs).
 Supports are wall lines perpendicular to the lateral load, and area loads represent lateral force per floor
 area. Returned line reactions are distributed to those supports without using wall stiffness. Use
 `lump_line_reaction` to distribute each uniform reaction piece to ordered exterior top nodes by midpoint

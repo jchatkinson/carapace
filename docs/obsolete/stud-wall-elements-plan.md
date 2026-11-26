@@ -1,6 +1,6 @@
 # Plan: stud walls as ordinary elements (Carapace and PySees)
 
-Status: C1–C4 complete; P1–P5 complete in PySees, 2026-11-24 (see PySees `docs/editor-plan.md`, section 5). Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
+Status: archived design record. C1–C4 complete; P1–P5 complete in PySees, 2026-11-24 (see PySees `docs/editor-plan.md`, section 5). Supersedes the PySees part of `floor-system-plan.md` and the `building`-as-model
 approach.
 
 ## Why

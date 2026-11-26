@@ -6,9 +6,8 @@ use crate::input_v1::sequence::{AlgorithmSpec, IntegratorSpec, StageSpec};
 use crate::input_v1::tables::ElementKind;
 use crate::input_v1::{decode, Session};
 use carapace_core::model::{
-    transfer_floor, ChordDistribution, Domain3, Element3Id, FloorBounds, FloorContinuity,
-    FloorLoad, FloorReactions, FloorSupport, FloorZone, LoadPatternId, Node3Id, StudWallLayout,
-    WallLoad, WallOpening, WallShearLaw, WallSheathing, WallStud,
+    transfer_floor, Domain3, Element3Id, FloorBounds, FloorLoad, FloorReactions, FloorSupport,
+    LoadPatternId, Node3Id, StudWallLayout,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,57 +262,9 @@ pub(super) fn convert_layout(
     si: usize,
     name: &str,
 ) -> Result<StudWallLayout, BuildError> {
-    let sheathing = l.sheathing.as_ref().map(|s| WallSheathing {
-        law: match s.law {
-            WallShearLawSpec::Linear { ga } => WallShearLaw::Linear { ga },
-            WallShearLawSpec::O86 {
-                bv,
-                nail_spacing,
-                nail_diameter,
-            } => WallShearLaw::O86 {
-                bv,
-                nail_spacing,
-                nail_diameter,
-            },
-        },
-    });
-    let x = StudWallLayout {
-        length: l.length,
-        height: l.height,
-        studs: l
-            .studs
-            .iter()
-            .map(|s| WallStud { x: s.x, ea: s.ea })
-            .collect(),
-        top_ea: l.top_ea,
-        top_ei: l.top_ei,
-        top_distribution: match l.top_distribution {
-            ChordDistributionSpec::Beam => ChordDistribution::Beam,
-            ChordDistributionSpec::Direct => ChordDistribution::Direct,
-        },
-        bottom_ea: l.bottom_ea,
-        bottom_ei: l.bottom_ei,
-        openings: l
-            .openings
-            .iter()
-            .map(|o| WallOpening {
-                x0: o.x0,
-                x1: o.x1,
-                head_height: o.head_height,
-                header_ei: o.header_ei,
-                jack_ea: o.jack_ea,
-                door: o.door,
-            })
-            .collect(),
-        sheathing,
-        foundation: l.foundation,
-        bearing: None,
-        floor: l.floor.map(|z| FloorZone {
-            depth: z.depth,
-            ga: z.ga,
-            rim_ea: z.rim_ea,
-        }),
-    };
+    let x = l
+        .to_core()
+        .map_err(|e| err(format!("storey {si} wall {name}: {e}")))?;
     if [l.length, l.height, l.top_ea, l.bottom_ea, l.bottom_ei]
         .iter()
         .any(|v| !v.is_finite() || *v < 0.)
@@ -323,26 +274,6 @@ pub(super) fn convert_layout(
         )));
     }
     Ok(x)
-}
-pub(crate) fn convert_wall_load(l: WallLoadSpec) -> WallLoad {
-    match l {
-        WallLoadSpec::TopPoint { x, fx, fy } => WallLoad::TopPoint { x, fx, fy },
-        WallLoadSpec::TopLine {
-            x0,
-            x1,
-            wx0,
-            wx1,
-            wy0,
-            wy1,
-        } => WallLoad::TopLine {
-            x0,
-            x1,
-            wx0,
-            wx1,
-            wy0,
-            wy1,
-        },
-    }
 }
 
 pub(super) fn floor_transfer_for(
@@ -411,15 +342,7 @@ pub(super) fn floor_transfer_for(
             FloorLoadSpec::Point { slot, p, s, t } => FloorLoad::Point { slot, p, s, t },
         })
         .collect::<Vec<_>>();
-    let reactions = transfer_floor(
-        b,
-        &supports,
-        &loads,
-        match f.continuity {
-            FloorContinuitySpec::Simple => FloorContinuity::Simple,
-            FloorContinuitySpec::Continuous => FloorContinuity::Continuous,
-        },
-    )
-    .map_err(|e| err(e.to_string()))?;
+    let reactions = transfer_floor(b, &supports, &loads, f.continuity.to_core())
+        .map_err(|e| err(e.to_string()))?;
     Ok((reactions, b, supports))
 }

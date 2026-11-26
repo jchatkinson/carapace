@@ -2,27 +2,25 @@
 //! the `Domain3`/`Element3`/`Friction3`/`FiberSection3` constructors.
 
 use carapace_core::model::{
-    Axis3, ChordDistribution, Diaphragm, DiaphragmLayout, DispBeamColumn3, Domain3,
-    ElasticBeamColumn3, Element3, Element3Id, ElementLoad3, Fiber3, FiberSection3, FloorZone,
-    ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3, Shell4, ShellModifiers,
-    ShellSection, StudWall, StudWallLayout, Truss3, WallLoad, WallOpening, WallShearLaw,
-    WallSheathing, WallStation, WallStud, ZeroLength3, ZeroLengthSection3,
+    Axis3, Diaphragm, DiaphragmLayout, DispBeamColumn3, Domain3, ElasticBeamColumn3, Element3,
+    Element3Id, ElementLoad3, Fiber3, FiberSection3, ForceBeamColumn3, Friction3, GeomTransf3,
+    Material, Node3Id, Shell3, Shell4, ShellModifiers, ShellSection, StudWall, Truss3, WallLoad,
+    ZeroLength3, ZeroLengthSection3,
 };
 
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
-    build_fiber_section, check_fibers, finish, friction_by_row, integration_of, material_lookup,
-    materials_by_row, node_lookup, orientations_by_row, reject_tables, validate_stud_wall_geometry,
-    wall_load_plan, ElementIds,
+    build_fiber_section, check_fibers, decode_stud_wall_row, finish, friction_by_row,
+    integration_of, material_lookup, materials_by_row, node_lookup, orientations_by_row,
+    reject_tables, stud_wall_error, wall_load_plan, ElementIds,
 };
-use crate::building::{ChordDistributionSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::ModelOutput;
 use crate::input_v1::session::Session3;
 use crate::input_v1::tables::{
-    Axis3Spec, ElementKind, ElementLoadSpec, Shell3Table, Shell4Table, ShellSectionSpec,
-    TransformSpec3, ZeroLengthSectionTable, ZeroLengthTable,
+    Axis3Spec, ElementKind, ElementLoadSpec, NodeTable, Shell3Table, Shell4Table, ShellSectionSpec,
+    StudWallSpec, TransformSpec3, ZeroLengthSectionTable, ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -223,108 +221,19 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
     )
 }
 
-fn layout3(l: &crate::building::WallLayoutSpec) -> Result<StudWallLayout, String> {
-    Ok(StudWallLayout {
-        length: l.length,
-        height: l.height,
-        studs: l
-            .studs
-            .iter()
-            .map(|s| WallStud { x: s.x, ea: s.ea })
-            .collect(),
-        top_ea: l.top_ea,
-        top_ei: l.top_ei,
-        top_distribution: match l.top_distribution {
-            ChordDistributionSpec::Beam => ChordDistribution::Beam,
-            ChordDistributionSpec::Direct => ChordDistribution::Direct,
-        },
-        bottom_ea: l.bottom_ea,
-        bottom_ei: l.bottom_ei,
-        openings: l
-            .openings
-            .iter()
-            .map(|o| WallOpening {
-                x0: o.x0,
-                x1: o.x1,
-                head_height: o.head_height,
-                header_ei: o.header_ei,
-                jack_ea: o.jack_ea,
-                door: o.door,
-            })
-            .collect(),
-        sheathing: l.sheathing.as_ref().map(|s| WallSheathing {
-            law: match s.law {
-                WallShearLawSpec::Linear { ga } => WallShearLaw::Linear { ga },
-                WallShearLawSpec::O86 {
-                    bv,
-                    nail_spacing,
-                    nail_diameter,
-                } => WallShearLaw::O86 {
-                    bv,
-                    nail_spacing,
-                    nail_diameter,
-                },
-            },
-        }),
-        foundation: l.foundation,
-        bearing: super::shared::decode_wall_bearing(l)?,
-        floor: l.floor.map(|z| FloorZone {
-            depth: z.depth,
-            ga: z.ga,
-            rim_ea: z.rim_ea,
-        }),
-    })
-}
 fn decode_stud_walls3(
     d: &mut Domain3,
-    t: &[crate::input_v1::tables::StudWallSpec],
-    node_table: &crate::input_v1::tables::NodeTable,
+    t: &[StudWallSpec],
+    node_table: &NodeTable,
     node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
     cases: &[Vec<Vec<WallLoad>>],
 ) -> Result<Vec<Element3Id>, DecodeError> {
     let mut out = Vec::with_capacity(t.len());
     for (i, r) in t.iter().enumerate() {
-        let c = r
-            .corners
-            .map(|x| node(x, "stud_walls"))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .unwrap();
-        let st = r
-            .stations
-            .iter()
-            .map(|s| {
-                Ok(WallStation {
-                    chord: super::shared::decode_wall_chord(s.chord),
-                    x: s.x,
-                    node: node(s.node, "stud_walls")?,
-                })
-            })
-            .collect::<Result<Vec<_>, DecodeError>>()?;
-        validate_stud_wall_geometry(node_table, 3, r).map_err(|reason| {
-            DecodeError::InvalidMacroElement {
-                table: "stud_walls",
-                row: i as u32,
-                reason: reason.into(),
-            }
-        })?;
-        let w = StudWall::new3(
-            c,
-            st,
-            layout3(&r.layout).map_err(|reason| DecodeError::InvalidMacroElement {
-                table: "stud_walls",
-                row: i as u32,
-                reason,
-            })?,
-            cases[i].clone(),
-        )
-        .map_err(|e| DecodeError::InvalidMacroElement {
-            table: "stud_walls",
-            row: i as u32,
-            reason: e.to_string(),
-        })?;
-        out.push(d.add_element(Element3::StudWall(w)));
+        let (corners, stations, layout) = decode_stud_wall_row(node_table, 3, i, r, node)?;
+        let wall = StudWall::new3(corners, stations, layout, cases[i].clone())
+            .map_err(|e| stud_wall_error(i, e.to_string()))?;
+        out.push(d.add_element(Element3::StudWall(wall)));
     }
     Ok(out)
 }
@@ -336,26 +245,7 @@ fn decode_diaphragms(
     let mut out = Vec::with_capacity(t.len());
     for (i, r) in t.iter().enumerate() {
         let l = &r.layout;
-        let laws = l
-            .bays
-            .iter()
-            .map(|law| {
-                law.map(|x| match x {
-                    WallShearLawSpec::Linear { ga } => {
-                        carapace_core::model::WallShearLaw::Linear { ga }
-                    }
-                    WallShearLawSpec::O86 {
-                        bv,
-                        nail_spacing,
-                        nail_diameter,
-                    } => carapace_core::model::WallShearLaw::O86 {
-                        bv,
-                        nail_spacing,
-                        nail_diameter,
-                    },
-                })
-            })
-            .collect();
+        let laws = l.bays.iter().map(|law| law.map(|x| x.to_core())).collect();
         let nodes = r
             .nodes
             .iter()

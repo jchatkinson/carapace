@@ -1951,19 +1951,15 @@ impl Domain {
 /// displacement, matching every other `Linear`/`Linear3` (small-
 /// displacement) geometric transform's scope in this crate.
 ///
-/// Planar-only, in its own impl block: `normal` requires a full 3D
+/// 3D only, in its own impl block: `normal` requires a full 3D
 /// coordinate/rotation set (`Axis3`, and a rotation-about-`normal` dof)
-/// that only the spatial profile's `Node3`/`SpatialDof` provide.
+/// that only the 3D profile's `Node3`/`SpatialDof` provide.
 impl Domain3 {
-    /// Recovered floor-band shear and rim forces at the current 3D state.
-    /// `rigid_diaphragm_about` with `normal = Axis3::Y` — the "up" axis in
-    /// this crate's y-up global convention,
-    /// so the diaphragm plane is the horizontal `x`-`z` plane: the common
-    /// case (an ordinary floor diaphragm).
-    /// Tie level nodes to a retained node as a rigid horizontal floor in the global X-Z plane (global Y up).
-    /// The retained node's `ux`, `uz`, and `ry` define the floor motion; constrained nodes' `ux` and `uz` are
-    /// slaved with the rigid-body lever arm. Loads may be applied directly to the retained node, including an
-    /// offset force for accidental torsion. Vertical motion is not constrained.
+    /// `rigid_diaphragm_about` with `normal = Axis3::Y`: a rigid floor in the global X-Z plane, for a Y-up model
+    /// (a Z-up model such as PySees' passes `Axis3::Z`). The retained node's `ux`, `uz` and `ry` define the floor
+    /// motion; constrained nodes' `ux` and `uz` are slaved with the rigid-body lever arm. Loads may be applied
+    /// directly to the retained node, including an offset force for accidental torsion. Vertical motion is not
+    /// constrained.
     pub fn rigid_diaphragm(&mut self, retained: Node3Id, constrained: &[Node3Id]) {
         self.rigid_diaphragm_about(retained, constrained, Axis3::Y);
     }

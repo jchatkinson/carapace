@@ -9,12 +9,11 @@ use std::collections::HashMap;
 
 use carapace_core::model::{
     transfer_floor, BeamIntegration, Domain, ElementLoadComponents, ElementOps, FloorBounds,
-    FloorContinuity, FloorLoad, FloorSupport, LoadPatternId, Material, Node, Orientation,
-    WallCaseLoad, WallLoad,
+    FloorLoad, FloorSupport, LoadPatternId, Material, Node, Orientation, StudWallLayout,
+    WallCaseLoad, WallLoad, WallStation,
 };
 
 use super::stages::{compile_stages, load_series_of};
-use crate::building::convert_wall_load;
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::model_output::ModelOutput;
 use crate::input_v1::sequence::{BulkQuantity, BulkTable, GaussQuantity, RecorderSpec};
@@ -24,6 +23,7 @@ use crate::input_v1::tables::{
     IntegrationSpec, LinearConstraintTable, LoadPatternTable, NodeTable, OrientRow,
     RigidDiaphragmTable, RigidLinkTable, StudWallSpec,
 };
+use crate::input_v1::walls::WallChordSpec;
 use crate::input_v1::CarapaceInputV1;
 
 pub(super) fn check_dof_within(
@@ -99,8 +99,8 @@ pub(super) fn validate_stud_wall_geometry(
     for station in &wall.stations {
         let (x, y, off) = local(point(station.node));
         let target = match station.chord {
-            crate::building::WallChordSpec::Top => height,
-            crate::building::WallChordSpec::Bottom | crate::building::WallChordSpec::Base => 0.,
+            WallChordSpec::Top => height,
+            WallChordSpec::Bottom | WallChordSpec::Base => 0.,
         };
         if (x - station.x).abs().max((y - target).abs()).max(off) > tol {
             return Err("station does not lie at its declared chord location");
@@ -197,7 +197,7 @@ pub(super) fn wall_load_plan(
             ));
         }
         entry.1 = Some(loads.stage[i]);
-        entry.0.push(convert_wall_load(load));
+        entry.0.push(load.to_core());
     }
     for (fi, floor) in input.floor_loads.iter().enumerate() {
         if floor.pattern as usize >= input.load_patterns.series.len() {
@@ -243,10 +243,7 @@ pub(super) fn wall_load_plan(
                 FloorTransferLoadSpec::Point { p, s, t } => FloorLoad::Point { slot: 0, p, s, t },
             })
             .collect::<Vec<_>>();
-        let continuity = match floor.continuity {
-            crate::building::FloorContinuitySpec::Simple => FloorContinuity::Simple,
-            crate::building::FloorContinuitySpec::Continuous => FloorContinuity::Continuous,
-        };
+        let continuity = floor.continuity.to_core();
         let reactions =
             transfer_floor(bounds, &supports, &floor_loads, continuity).map_err(|e| {
                 DecodeError::InvalidFloorTransfer {
@@ -1320,45 +1317,50 @@ where
     ))
 }
 
-/// A stud-wall layout's bearing spec to the core type (the hold-down as an `Anchorage` material).
-pub(super) fn decode_wall_bearing(
-    l: &crate::building::WallLayoutSpec,
-) -> Result<Option<carapace_core::model::WallBearing>, String> {
-    use carapace_core::model::{AnchorageBearing, Material, WallBearing};
-    let Some(b) = &l.bearing else {
-        return Ok(None);
-    };
-    let hold_down = b
-        .hold_down
-        .map(|a| {
-            let bearing = match a.bearing {
-                crate::building::AnchorageBearingSpec::Linear { k } => {
-                    AnchorageBearing::Linear { k }
-                }
-                crate::building::AnchorageBearingSpec::O86Crush { qr } => {
-                    AnchorageBearing::O86Crush { qr }
-                }
-            };
-            Material::anchorage(a.tension, a.slack, bearing)
-                .map_err(|e| format!("bearing.holdDown: {e}"))
-        })
-        .transpose()?;
-    Ok(Some(WallBearing {
-        kv: b.kv,
-        kh: b.kh,
-        hold_down,
-    }))
+/// A `studWalls` row error.
+pub(super) fn stud_wall_error(row: usize, reason: String) -> DecodeError {
+    DecodeError::InvalidMacroElement {
+        table: "stud_walls",
+        row: row as u32,
+        reason,
+    }
 }
 
-/// A station chord spec to the core type.
-pub(super) fn decode_wall_chord(
-    c: crate::building::WallChordSpec,
-) -> carapace_core::model::WallChord {
-    use crate::building::WallChordSpec as S;
-    use carapace_core::model::WallChord;
-    match c {
-        S::Top => WallChord::Top,
-        S::Bottom => WallChord::Bottom,
-        S::Base => WallChord::Base,
-    }
+/// A decoded `studWalls` row: corners, stations and layout.
+pub(super) type StudWallRow<NId> = ([NId; 4], Vec<WallStation<NId>>, StudWallLayout);
+
+/// One `studWalls` row up to the element constructor (`StudWall::new` / `new3`): its corners, stations and core
+/// layout, with the corner and station geometry checked against the layout.
+pub(super) fn decode_stud_wall_row<NId: Copy>(
+    nodes: &NodeTable,
+    ndm: usize,
+    row: usize,
+    wall: &StudWallSpec,
+    node: &impl Fn(u32, &'static str) -> Result<NId, DecodeError>,
+) -> Result<StudWallRow<NId>, DecodeError> {
+    let c0 = node(wall.corners[0], "stud_walls")?;
+    let corners = [
+        c0,
+        node(wall.corners[1], "stud_walls")?,
+        node(wall.corners[2], "stud_walls")?,
+        node(wall.corners[3], "stud_walls")?,
+    ];
+    let stations = wall
+        .stations
+        .iter()
+        .map(|s| {
+            Ok(WallStation {
+                chord: s.chord.to_core(),
+                x: s.x,
+                node: node(s.node, "stud_walls")?,
+            })
+        })
+        .collect::<Result<Vec<_>, DecodeError>>()?;
+    validate_stud_wall_geometry(nodes, ndm, wall)
+        .map_err(|reason| stud_wall_error(row, reason.into()))?;
+    let layout = wall
+        .layout
+        .to_core()
+        .map_err(|reason| stud_wall_error(row, reason))?;
+    Ok((corners, stations, layout))
 }

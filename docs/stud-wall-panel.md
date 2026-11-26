@@ -417,7 +417,7 @@ Pairing out-of-plane pressures with gravity cases, and code checks, belong to Py
 
 | Item | Plan |
 |---|---|
-| Element | `core/src/model/elements/stud_wall.rs`, `Element::StudWall`, 2D only. A generic condensed-substructure core (bars, beams, hybrid bay fields, bordered local solve) plus a stud-wall generator, so the substructure can be tested directly. |
+| Element | `core/src/model/elements/stud_wall/`, `Element::StudWall`, 2D only. A generic condensed-substructure core (bars, beams, hybrid bay fields, bordered local solve) plus a stud-wall generator, so the substructure can be tested directly. |
 | Variable connectivity | Shared infrastructure, not an escape hatch for one element. `NodeList` (an `ArrayVec` capped at 4, `ops.rs`) becomes a borrowed `&[NId]` that elements store at construction. Tangent and vector sinks gain slice-based `add` paths. DOF activation, `dof_mask` conformance, constraints, reactions, mass and recorders iterate the slice. Serial and parallel scatter keep element order and a fixed order within each element, so results stay bit-identical. Closed enums and generic dispatch are unchanged. |
 | Assembly scratch | Per-worker arena in the assembly context (Section 5.6). |
 | Failure | Depends on the element-failure path being added separately (Section 5.6). |

@@ -24,7 +24,9 @@
 //! `#[serde(rename_all = "camelCase")]` throughout so the JS/TS shape
 //! matches the PySees naming (`nodeI`, not `node_i`).
 
-use crate::building::{WallChordSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec};
+use super::walls::{
+    FloorContinuitySpec, WallChordSpec, WallLayoutSpec, WallLoadSpec, WallShearLawSpec,
+};
 use serde::{Deserialize, Serialize};
 
 /// Node table: `coords` stride `ndm` (x, y[, z]); `fixed` one bitmask byte per
@@ -689,7 +691,7 @@ pub struct DiaphragmLayoutSpec {
 #[serde(rename_all = "camelCase")]
 pub struct FloorTransferSpec {
     pub bounds: [f64; 4],
-    pub continuity: crate::building::FloorContinuitySpec,
+    pub continuity: FloorContinuitySpec,
     pub supports: Vec<FloorTransferSupportSpec>,
     /// The load pattern the reactions load (an index into `loadPatterns`): each support wall gets them as
     /// `wallLoad`s of this pattern.

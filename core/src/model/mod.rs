@@ -5,7 +5,7 @@ mod domain;
 mod elements;
 mod error;
 mod fiber_section;
-mod floor;
+mod floor_transfer;
 mod integration;
 mod load_pattern;
 mod materials;
@@ -28,7 +28,7 @@ pub use elements::{
 };
 pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};
-pub use floor::{
+pub use floor_transfer::{
     flexible_diaphragm_loads, lump_line_reaction, transfer_floor, FloorBounds, FloorContinuity,
     FloorError, FloorLoad, FloorReactions, FloorSupport, ReactionLine, ReactionPoint,
     SupportReaction,

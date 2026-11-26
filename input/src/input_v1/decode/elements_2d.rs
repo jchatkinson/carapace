@@ -6,20 +6,18 @@
 
 use carapace_core::model::continuum::{bond_polyline, embed_polyline_in, BondSpec, EndSpring};
 use carapace_core::model::{
-    ChordDistribution, CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain,
-    ElasticBeamColumn, Element, ElementId, ElementLoad, EmbeddedBar, EmbeddedBarHost, Fiber,
-    FiberSection, FloorZone, ForceBeamColumn, Friction, GeomTransf, Material, NodeId,
-    PlaneMaterial, Quad4, Quad4Formulation, StudWall, StudWallLayout, Tri3, Truss, WallLoad,
-    WallOpening, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength, ZeroLengthSection,
+    CsfmConcreteLaw, CsfmRebarRouting, DispBeamColumn, Domain, ElasticBeamColumn, Element,
+    ElementId, ElementLoad, EmbeddedBar, EmbeddedBarHost, Fiber, FiberSection, ForceBeamColumn,
+    Friction, GeomTransf, Material, NodeId, PlaneMaterial, Quad4, Quad4Formulation, StudWall, Tri3,
+    Truss, WallLoad, ZeroLength, ZeroLengthSection,
 };
 
 use super::shared::{
     add_equal_dofs, add_linear_constraints, add_nodes, add_rigid_diaphragms, add_rigid_links,
-    build_fiber_section, check_fibers, finish, friction_by_row, integration_of, material_lookup,
-    materials_by_row, node_lookup, orientations_by_row, reject_tables, validate_stud_wall_geometry,
-    wall_load_plan, ElementIds,
+    build_fiber_section, check_fibers, decode_stud_wall_row, finish, friction_by_row,
+    integration_of, material_lookup, materials_by_row, node_lookup, orientations_by_row,
+    reject_tables, stud_wall_error, wall_load_plan, ElementIds,
 };
-use crate::building::{ChordDistributionSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::{
@@ -28,8 +26,8 @@ use crate::input_v1::model_output::{
 use crate::input_v1::session::Session2;
 use crate::input_v1::tables::{
     CsfmConcreteLawSpec, ElementKind, ElementLoadSpec, EmbeddedBarHostsSpec, EmbeddedBarSpec,
-    PlaneMaterialSpec, PlaneStateSpec, Quad4FormulationSpec, QuadTable, TransformSpec,
-    TriangleTable, ZeroLengthSectionTable, ZeroLengthTable,
+    NodeTable, PlaneMaterialSpec, PlaneStateSpec, Quad4FormulationSpec, QuadTable, StudWallSpec,
+    TransformSpec, TriangleTable, ZeroLengthSectionTable, ZeroLengthTable,
 };
 use crate::input_v1::CarapaceInputV1;
 
@@ -236,107 +234,18 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session2, DecodeError> {
     Ok(session)
 }
 
-fn decode_layout(l: &crate::building::WallLayoutSpec) -> Result<StudWallLayout, String> {
-    Ok(StudWallLayout {
-        length: l.length,
-        height: l.height,
-        studs: l
-            .studs
-            .iter()
-            .map(|s| WallStud { x: s.x, ea: s.ea })
-            .collect(),
-        top_ea: l.top_ea,
-        top_ei: l.top_ei,
-        top_distribution: match l.top_distribution {
-            ChordDistributionSpec::Beam => ChordDistribution::Beam,
-            ChordDistributionSpec::Direct => ChordDistribution::Direct,
-        },
-        bottom_ea: l.bottom_ea,
-        bottom_ei: l.bottom_ei,
-        openings: l
-            .openings
-            .iter()
-            .map(|o| WallOpening {
-                x0: o.x0,
-                x1: o.x1,
-                head_height: o.head_height,
-                header_ei: o.header_ei,
-                jack_ea: o.jack_ea,
-                door: o.door,
-            })
-            .collect(),
-        sheathing: l.sheathing.as_ref().map(|s| WallSheathing {
-            law: match s.law {
-                WallShearLawSpec::Linear { ga } => WallShearLaw::Linear { ga },
-                WallShearLawSpec::O86 {
-                    bv,
-                    nail_spacing,
-                    nail_diameter,
-                } => WallShearLaw::O86 {
-                    bv,
-                    nail_spacing,
-                    nail_diameter,
-                },
-            },
-        }),
-        foundation: l.foundation,
-        bearing: super::shared::decode_wall_bearing(l)?,
-        floor: l.floor.map(|z| FloorZone {
-            depth: z.depth,
-            ga: z.ga,
-            rim_ea: z.rim_ea,
-        }),
-    })
-}
 fn decode_stud_walls(
     domain: &mut Domain,
-    t: &[crate::input_v1::tables::StudWallSpec],
-    node_table: &crate::input_v1::tables::NodeTable,
+    t: &[StudWallSpec],
+    node_table: &NodeTable,
     node: &impl Fn(u32, &'static str) -> Result<NodeId, DecodeError>,
     cases: &[Vec<Vec<WallLoad>>],
 ) -> Result<Vec<ElementId>, DecodeError> {
     let mut out = Vec::with_capacity(t.len());
     for (i, r) in t.iter().enumerate() {
-        let c = r
-            .corners
-            .map(|x| node(x, "stud_walls"))
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .try_into()
-            .unwrap();
-        let st = r
-            .stations
-            .iter()
-            .map(|s| {
-                Ok(WallStation {
-                    chord: super::shared::decode_wall_chord(s.chord),
-                    x: s.x,
-                    node: node(s.node, "stud_walls")?,
-                })
-            })
-            .collect::<Result<Vec<_>, DecodeError>>()?;
-        validate_stud_wall_geometry(node_table, 2, r).map_err(|reason| {
-            DecodeError::InvalidMacroElement {
-                table: "stud_walls",
-                row: i as u32,
-                reason: reason.into(),
-            }
-        })?;
-        let wall = StudWall::new(
-            c,
-            st,
-            decode_layout(&r.layout).map_err(|reason| DecodeError::InvalidMacroElement {
-                table: "stud_walls",
-                row: i as u32,
-                reason,
-            })?,
-            cases[i].clone(),
-        )
-        .map_err(|e| DecodeError::InvalidMacroElement {
-            table: "stud_walls",
-            row: i as u32,
-            reason: e.to_string(),
-        })?;
+        let (corners, stations, layout) = decode_stud_wall_row(node_table, 2, i, r, node)?;
+        let wall = StudWall::new(corners, stations, layout, cases[i].clone())
+            .map_err(|e| stud_wall_error(i, e.to_string()))?;
         out.push(domain.add_element(Element::StudWall(wall)));
     }
     Ok(out)

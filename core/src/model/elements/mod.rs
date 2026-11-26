@@ -20,6 +20,7 @@ mod floor_zone;
 mod force_beam_column;
 mod plane_common;
 mod quad4;
+mod shear_law;
 mod shell3;
 mod shell4;
 mod stud_wall;
@@ -35,13 +36,14 @@ pub use elastic_beam_column::{ElasticBeamColumn, ElasticBeamColumn3};
 pub use embedded_bar::{EmbeddedBar, EmbeddedBarHost};
 pub use force_beam_column::{ForceBeamColumn, ForceBeamColumn3};
 pub use quad4::{Quad4, Quad4Formulation};
+pub use shear_law::WallShearLaw;
 pub use shell3::Shell3;
 pub use shell4::Shell4;
 pub use stud_wall::{
     ChordDistribution, FloorZone, StudWall, StudWallError, StudWallLayout, StudWallResponse,
     WallAxialResponse, WallBaseResponse, WallBearing, WallChord, WallChordResponse, WallFloorBay,
     WallHeaderResponse, WallHoldDownResponse, WallLoad, WallMemberResponse, WallOpening,
-    WallPierResponse, WallShearLaw, WallSheathing, WallStation, WallStud,
+    WallPierResponse, WallSheathing, WallStation, WallStud,
 };
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};

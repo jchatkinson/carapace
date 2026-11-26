@@ -3,7 +3,7 @@
 use arrayvec::ArrayVec;
 use nalgebra::{SMatrix, SVector};
 
-use super::stud_wall::shear_law_response;
+use super::shear_law::shear_law_response;
 use super::{DofMask, NodeView, TangentSink, VectorSink};
 use crate::model::{ElementForce, Material, Node3Id, NodeKey, WallShearLaw};
 

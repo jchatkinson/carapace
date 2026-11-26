@@ -3,11 +3,11 @@
 //! materials reference other arena entries by index rather than duplicating
 //! them inline, mirroring `core`'s own arena-of-indices philosophy.
 
-use carapace_core::model::{AnchorageBearing, Material, Pinching4DmgCyc};
+use carapace_core::model::{Material, Pinching4DmgCyc};
 use serde::{Deserialize, Serialize};
 
 use super::error::DecodeError;
-use crate::building::AnchorageBearingSpec;
+use super::walls::AnchorageBearingSpec;
 
 /// Wire-format mirror of `core::Pinching4DmgCyc` (which carries no `serde`
 /// derives of its own — `core` stays free of any wasm/serde awareness, see
@@ -223,16 +223,10 @@ fn resolve_one(
             tension,
             slack,
             bearing,
-        } => Material::anchorage(
-            *tension,
-            *slack,
-            match bearing {
-                AnchorageBearingSpec::Linear { k } => AnchorageBearing::Linear { k: *k },
-                AnchorageBearingSpec::O86Crush { qr } => AnchorageBearing::O86Crush { qr: *qr },
-            },
-        )
-        .map_err(|_| DecodeError::InvalidAnchorageMaterial {
-            index: index as u32,
+        } => Material::anchorage(*tension, *slack, bearing.to_core()).map_err(|_| {
+            DecodeError::InvalidAnchorageMaterial {
+                index: index as u32,
+            }
         })?,
         MaterialSpec::Steel01 {
             fy,
