@@ -673,6 +673,20 @@ fn reset_stage_lets_an_unheld_pattern_ramp_again() {
     assert!((second[2].2 - end_of_first).abs() < 1e-12);
 }
 
+/// Without a hold or a reset, a later static stage continues the pseudo-time (load factor) the
+/// earlier one reached, as OpenSees' domain time carries over between `analyze` calls until
+/// `loadConst -time 0`: the second stage ramps the same pattern from 1.0 to 2.0, doubling the load.
+#[test]
+fn an_unheld_pattern_continues_its_load_factor_in_the_next_static_stage() {
+    let samples = all_samples(&mut two_stage_bar(true, None, false));
+    let end_of_first = samples.iter().rfind(|s| s.0 == 0).unwrap().2;
+    let second: Vec<_> = samples.iter().filter(|s| s.0 == 1).collect();
+    assert_eq!(second.len(), 3);
+    assert_eq!((second[0].1, second[0].2), (1.0, end_of_first), "starts where the first stage ended");
+    assert!((second[1].1 - 1.5).abs() < 1e-12 && (second[1].2 - 1.5 * end_of_first).abs() < 1e-12);
+    assert!((second[2].1 - 2.0).abs() < 1e-12 && (second[2].2 - 2.0 * end_of_first).abs() < 1e-12);
+}
+
 /// Malformed accelerograms are decode errors, never interpolation panics.
 #[test]
 fn rejects_invalid_bounded_paths_before_constructing_the_domain() {

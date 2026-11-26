@@ -153,6 +153,18 @@ where
         &mut self.domain
     }
 
+    /// Start this analysis at `load_factor` instead of zero: the pseudo-time a
+    /// previous static analysis on the same domain ended at, for a phase that
+    /// continues its un-held patterns rather than restarting them. OpenSees
+    /// keeps the domain time across `analyze` calls until `loadConst -time 0`,
+    /// `setTime` or `reset`, so a second `DisplacementControl` leg on the same
+    /// reference pattern (a cyclic protocol written as separate analyses)
+    /// starts from the load factor the first leg reached.
+    pub fn with_load_factor(mut self, load_factor: f64) -> Self {
+        self.load_factor = load_factor;
+        self
+    }
+
     /// Swap the integrator without rebuilding `Analysis` — no
     /// `Domain::number_dofs`, no new `SparseSolver`, `step_count`/
     /// `load_factor` carry over unchanged. This is what makes a cyclic/

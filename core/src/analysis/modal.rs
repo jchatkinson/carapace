@@ -165,6 +165,16 @@ where
             for l in 0..built {
                 shape += y[l] * &vectors[l + 1];
             }
+            // The Lanczos seed is arbitrary at massless DOFs, so the Ritz vector carries some of
+            // that into them. One inverse-iteration step, `x <- K^-1 M x / theta`, puts every
+            // DOF back in the range of `K^-1 M`: massless DOFs become the static condensation of
+            // the massive ones (what OpenSees reports), and the massive ones are unchanged for a
+            // converged mode. Then restore the unit M-norm.
+            let mut shape = factorization.solve(&mass.component_mul(&shape)) / theta;
+            let norm = m_norm(&shape);
+            if norm > 0.0 {
+                shape /= norm;
+            }
             Mode {
                 frequency: (1.0 / theta).sqrt(),
                 shape,

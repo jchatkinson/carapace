@@ -988,6 +988,9 @@ where
     pristine: Option<Domain<NDIM, NDOF, NId, E>>,
     // Every `holdPatternsAfter` freeze applied so far, in order, so a `Reset` can re-apply them.
     holds: Vec<(LoadPatternId, f64)>,
+    // The pseudo-time the next static stage starts from: where the last static stage ended, unless it held its
+    // patterns (OpenSees' `loadConst -time 0`), or a reset or transient stage came since (`reset`/`setTime 0`).
+    carried_load_factor: f64,
     record_initial: bool,
     stages: Vec<CompiledStage<NId, E::Id, E::Load>>,
     current_stage: usize,
@@ -1070,6 +1073,7 @@ where
             modal_results: Vec::new(),
             pristine,
             holds: Vec::new(),
+            carried_load_factor: 0.0,
             record_initial,
             stages,
             current_stage: 0,
@@ -1302,7 +1306,7 @@ where
                 {
                     Ok(analysis) => {
                         self.runner = Some(StageRunner::Static {
-                            analysis,
+                            analysis: analysis.with_load_factor(self.carried_load_factor),
                             steps_remaining: stage.steps,
                         });
                     }
@@ -1372,7 +1376,10 @@ where
                 }
             }
         }
-        self.load_factor = 0.0;
+        self.load_factor = match self.stages[self.current_stage].kind {
+            CompiledStageKind::Static { .. } => self.carried_load_factor,
+            _ => 0.0,
+        };
         if self.record_initial
             && matches!(
                 self.stages[self.current_stage].kind,
@@ -1488,6 +1495,11 @@ where
             }
             StageRunner::Transient { analysis, .. } => analysis.into_domain(),
             StageRunner::Reset { domain, .. } => domain,
+        };
+        self.carried_load_factor = match &self.stages[self.current_stage].kind {
+            CompiledStageKind::Static { .. } if hold_patterns_after.is_empty() => load_factor,
+            CompiledStageKind::Modal { .. } => self.carried_load_factor,
+            _ => 0.0,
         };
         for pattern in hold_patterns_after {
             domain.hold_pattern_constant(pattern, load_factor);

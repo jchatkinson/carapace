@@ -476,6 +476,13 @@ No preceding modal stage is required. Unavailable modes fail the run; invalid
 mode numbers or ratios fail decoding. Omitting `modalAnchors` preserves direct
 coefficient behavior.
 
+A `static` stage starts at the load factor (pseudo-time) the previous `static` stage ended at,
+unless that stage held patterns (`holdPatternsAfter` non-empty, OpenSees' `loadConst -time 0`) or a
+`reset` or `transient` stage came between; then it starts at `0`. A `modal` stage in between changes
+nothing. This is OpenSees' domain time carrying over between `analyze` calls, so a cyclic protocol
+written as successive `displacementControl` stages on one reference pattern continues that pattern's
+load factor instead of restarting it.
+
 `GroundMotionSpec`: `{ direction, series: TimeSeriesSpec, scaleFactor }`.
 `direction` is `0` for x, `1` for y, and `2` for z (3D only).
 
@@ -488,7 +495,7 @@ nothing.
 
 `header.recordInitial` (optional, default `false`): record one sample of every supported
 recorder at the start of each `static`/`transient` stage, before its first step, at
-load factor/time `0`: the stage's initial conditions, i.e. step 0 of that analysis.
+load factor/time it starts from (`0`, or the carried load factor above): the stage's initial conditions, i.e. step 0 of that analysis.
 
 ### Integrators
 

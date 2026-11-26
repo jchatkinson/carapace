@@ -297,3 +297,34 @@ fn arc_length_needs_no_rotation_scale_when_rotations_are_inactive() {
     let step = analysis.step().expect("no rotation scale is needed");
     assert!(step.load_factor > 0.0);
 }
+
+/// Massless DOFs in a mode shape are the static condensation of the massive ones, as OpenSees
+/// reports them. A two-element cantilever with mass only on its tip translation has one mode, and
+/// its shape is exactly the deflected shape under a tip load: tip rotation / tip deflection =
+/// 3/(2L), mid-height deflection / tip deflection = 5/16. (The Lanczos seed is arbitrary at the
+/// massless DOFs; without the recovery step they kept the seed's values.)
+#[test]
+fn mode_shapes_condense_massless_dofs_statically() {
+    let (e, a, i, length) = (200e9, 0.01, 1e-4, 3.0);
+    let mut domain = Domain::new();
+    let base = domain.add_node(Node::new([0.0, 0.0]).fix(0).fix(1).fix(2));
+    let mid = domain.add_node(Node::new([0.0, length / 2.0]));
+    let tip = domain.add_node(Node::new([0.0, length]).with_mass(0, 500.0));
+    for (n1, n2) in [(base, mid), (mid, tip)] {
+        domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
+            n1, n2, e, a, i, GeomTransf::Linear,
+        )));
+    }
+    let modes = modal_analysis(&mut domain, 1).expect("one massive DOF, one mode");
+    let at = |node, dof| modes[0].shape[domain.equation_of(node, dof).unwrap()];
+    let u_tip = at(tip, 0);
+    // A column along +y: a +x deflection is a negative rotation about z.
+    assert!(
+        (at(tip, 2) / u_tip + 3.0 / (2.0 * length)).abs() < 1e-9,
+        "tip rotation {} vs tip deflection {u_tip}",
+        at(tip, 2)
+    );
+    assert!((at(mid, 0) / u_tip - 5.0 / 16.0).abs() < 1e-9, "mid-height deflection {}", at(mid, 0));
+    let k = 3.0 * e * i / length.powi(3);
+    assert!((modes[0].frequency - (k / 500.0).sqrt()).abs() < 1e-9 * modes[0].frequency);
+}
