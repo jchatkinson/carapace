@@ -682,7 +682,11 @@ fn an_unheld_pattern_continues_its_load_factor_in_the_next_static_stage() {
     let end_of_first = samples.iter().rfind(|s| s.0 == 0).unwrap().2;
     let second: Vec<_> = samples.iter().filter(|s| s.0 == 1).collect();
     assert_eq!(second.len(), 3);
-    assert_eq!((second[0].1, second[0].2), (1.0, end_of_first), "starts where the first stage ended");
+    assert_eq!(
+        (second[0].1, second[0].2),
+        (1.0, end_of_first),
+        "starts where the first stage ended"
+    );
     assert!((second[1].1 - 1.5).abs() < 1e-12 && (second[1].2 - 1.5 * end_of_first).abs() < 1e-12);
     assert!((second[2].1 - 2.0).abs() < 1e-12 && (second[2].2 - 2.0 * end_of_first).abs() < 1e-12);
 }

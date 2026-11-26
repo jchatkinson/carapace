@@ -312,7 +312,12 @@ fn mode_shapes_condense_massless_dofs_statically() {
     let tip = domain.add_node(Node::new([0.0, length]).with_mass(0, 500.0));
     for (n1, n2) in [(base, mid), (mid, tip)] {
         domain.add_element(Element::ElasticBeamColumn(ElasticBeamColumn::new(
-            n1, n2, e, a, i, GeomTransf::Linear,
+            n1,
+            n2,
+            e,
+            a,
+            i,
+            GeomTransf::Linear,
         )));
     }
     let modes = modal_analysis(&mut domain, 1).expect("one massive DOF, one mode");
@@ -324,7 +329,11 @@ fn mode_shapes_condense_massless_dofs_statically() {
         "tip rotation {} vs tip deflection {u_tip}",
         at(tip, 2)
     );
-    assert!((at(mid, 0) / u_tip - 5.0 / 16.0).abs() < 1e-9, "mid-height deflection {}", at(mid, 0));
+    assert!(
+        (at(mid, 0) / u_tip - 5.0 / 16.0).abs() < 1e-9,
+        "mid-height deflection {}",
+        at(mid, 0)
+    );
     let k = 3.0 * e * i / length.powi(3);
     assert!((modes[0].frequency - (k / 500.0).sqrt()).abs() < 1e-9 * modes[0].frequency);
 }
