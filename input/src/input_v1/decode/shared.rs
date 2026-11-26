@@ -100,7 +100,7 @@ pub(super) fn validate_stud_wall_geometry(
         let (x, y, off) = local(point(station.node));
         let target = match station.chord {
             crate::building::WallChordSpec::Top => height,
-            crate::building::WallChordSpec::Bottom => 0.,
+            crate::building::WallChordSpec::Bottom | crate::building::WallChordSpec::Base => 0.,
         };
         if (x - station.x).abs().max((y - target).abs()).max(off) > tol {
             return Err("station does not lie at its declared chord location");
@@ -1318,4 +1318,47 @@ where
         elements.locations(),
         input.header.record_initial,
     ))
+}
+
+/// A stud-wall layout's bearing spec to the core type (the hold-down as an `Anchorage` material).
+pub(super) fn decode_wall_bearing(
+    l: &crate::building::WallLayoutSpec,
+) -> Result<Option<carapace_core::model::WallBearing>, String> {
+    use carapace_core::model::{AnchorageBearing, Material, WallBearing};
+    let Some(b) = &l.bearing else {
+        return Ok(None);
+    };
+    let hold_down = b
+        .hold_down
+        .map(|a| {
+            let bearing = match a.bearing {
+                crate::building::AnchorageBearingSpec::Linear { k } => {
+                    AnchorageBearing::Linear { k }
+                }
+                crate::building::AnchorageBearingSpec::O86Crush { qr } => {
+                    AnchorageBearing::O86Crush { qr }
+                }
+            };
+            Material::anchorage(a.tension, a.slack, bearing)
+                .map_err(|e| format!("bearing.holdDown: {e}"))
+        })
+        .transpose()?;
+    Ok(Some(WallBearing {
+        kv: b.kv,
+        kh: b.kh,
+        hold_down,
+    }))
+}
+
+/// A station chord spec to the core type.
+pub(super) fn decode_wall_chord(
+    c: crate::building::WallChordSpec,
+) -> carapace_core::model::WallChord {
+    use crate::building::WallChordSpec as S;
+    use carapace_core::model::WallChord;
+    match c {
+        S::Top => WallChord::Top,
+        S::Bottom => WallChord::Bottom,
+        S::Base => WallChord::Base,
+    }
 }

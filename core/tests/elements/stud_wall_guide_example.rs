@@ -53,6 +53,7 @@ fn guide_example_runs() {
             },
         }),
         foundation: true,
+        bearing: None,
         floor: None,
     };
 

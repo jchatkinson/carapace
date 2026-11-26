@@ -611,6 +611,7 @@ fn floor_to_window_wall_factored_takedown() {
         }],
         sheathing: None,
         foundation: true,
+        bearing: None,
         floor: None,
     };
     let mut d: Domain<2, 3, NodeId, Element> = Domain::new();

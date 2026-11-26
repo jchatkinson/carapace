@@ -21,10 +21,10 @@ pub use elements::{
     Friction3, GaussResponse, NodeList, NodeView, Orientation, OrientationError, Quad4,
     Quad4Formulation, Shell3, Shell4, ShellResponse, SpatialElementMatrix, SpatialElementVector,
     StudWall, StudWallError, StudWallLayout, StudWallResponse, TangentSink, Tri3, Truss, Truss3,
-    VectorSink, WallAxialResponse, WallBaseResponse, WallChord, WallChordResponse, WallFloorBay,
-    WallHeaderResponse, WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallShearLaw,
-    WallSheathing, WallStation, WallStud, ZeroLength, ZeroLength3, ZeroLengthSection,
-    ZeroLengthSection3, MAX_ELEMENT_NODES,
+    VectorSink, WallAxialResponse, WallBaseResponse, WallBearing, WallChord, WallChordResponse,
+    WallFloorBay, WallHeaderResponse, WallHoldDownResponse, WallLoad, WallMemberResponse,
+    WallOpening, WallPierResponse, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength,
+    ZeroLength3, ZeroLengthSection, ZeroLengthSection3, MAX_ELEMENT_NODES,
 };
 pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};

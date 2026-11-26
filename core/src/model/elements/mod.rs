@@ -39,9 +39,9 @@ pub use shell3::Shell3;
 pub use shell4::Shell4;
 pub use stud_wall::{
     ChordDistribution, FloorZone, StudWall, StudWallError, StudWallLayout, StudWallResponse,
-    WallAxialResponse, WallBaseResponse, WallChord, WallChordResponse, WallFloorBay,
-    WallHeaderResponse, WallLoad, WallMemberResponse, WallOpening, WallPierResponse, WallShearLaw,
-    WallSheathing, WallStation, WallStud,
+    WallAxialResponse, WallBaseResponse, WallBearing, WallChord, WallChordResponse, WallFloorBay,
+    WallHeaderResponse, WallHoldDownResponse, WallLoad, WallMemberResponse, WallOpening,
+    WallPierResponse, WallShearLaw, WallSheathing, WallStation, WallStud,
 };
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};

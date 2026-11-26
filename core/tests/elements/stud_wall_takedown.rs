@@ -37,6 +37,7 @@ fn layout(
         openings,
         sheathing: None,
         foundation: false,
+        bearing: None,
         floor: None,
     }
 }

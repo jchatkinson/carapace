@@ -208,8 +208,15 @@ fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
         BulkSource::WallMembers => {
             for &element in &bulk.elements {
                 match domain.element_stud_wall_response(element, progress) {
-                    Some(r) if 3 + 3 * (r.studs.len() + r.jacks.len() + r.cripples.len()) == bulk.components as usize => {
-                        out.extend([r.studs.len() as f64, r.jacks.len() as f64, r.cripples.len() as f64]);
+                    Some(r)
+                        if 3 + 3 * (r.studs.len() + r.jacks.len() + r.cripples.len())
+                            == bulk.components as usize =>
+                    {
+                        out.extend([
+                            r.studs.len() as f64,
+                            r.jacks.len() as f64,
+                            r.cripples.len() as f64,
+                        ]);
                         for s in &r.studs {
                             out.extend([s.x, s.bottom, s.top]);
                         }

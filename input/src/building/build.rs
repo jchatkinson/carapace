@@ -307,6 +307,7 @@ pub(super) fn convert_layout(
             .collect(),
         sheathing,
         foundation: l.foundation,
+        bearing: None,
         floor: l.floor.map(|z| FloorZone {
             depth: z.depth,
             ga: z.ga,

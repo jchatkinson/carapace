@@ -69,6 +69,7 @@ All values are in consistent units (N and mm throughout this guide), in the wall
 | `openings: Vec<WallOpening>` | `x0`, `x1` (clear opening edges, where the jacks are), `head_height` (underside of header), `header_ei`, `jack_ea` (all plies of one side), `door` (cuts the bottom plate between `x0` and `x1`). |
 | `sheathing: Option<WallSheathing { law }>` | One shear law for the whole wall, applied to each pier ([Section 3](#3-sheathing-laws)). `None` for a gravity-only wall. |
 | `floor: Option<FloorZone { depth, ga, rim_ea }>` | The floor or roof depth carried by the wall top ([Section 2a](#2a-floor-zone)): exterior top corners and stations at `y = H + depth`. `None` for a wall that ends at its top plate. |
+| `bearing: Option<WallBearing { kv, kh, hold_down }>` | The wall stands on its `Base` stations (the nodes below it, at any `x`) through the plate sandwich: springs `kv` / `kh` at every bottom-plate bearing position to the surface interpolated linearly between base positions, and the `hold_down` law at pier ends. No per-stud links needed, studs need not line up. Exclusive with `foundation`. See [stud-wall-bearing.md](stud-wall-bearing.md) and [Section 4](#4-supports-anchorage-and-hold-downs). |
 | `foundation: bool` | The wall bears on a rigid foundation: every interior bottom-plate position (each stud and jack) is fixed internally in `u` (sill anchorage) and `v` (bearing). The bottom corners remain exterior nodes, and a bottom station replaces the internal support at its position, for hold-downs at interior pier ends ([Section 4](#4-supports-anchorage-and-hold-downs)). |
 
 **Openings.**
@@ -200,7 +201,14 @@ reactions are reported in `base_nodes`. Put hold-downs at the corners and at bot
 pier ends: a bottom station replaces the internal support at its position. For load reversal, every pier end
 needs a hold-down (both directions).
 
-**On a floor or another wall**, leave `foundation: false` and connect the bottom plate with stations: a
+**On a floor, another wall or beams, with `bearing`** (recommended): list the nodes the wall stands on as `Base`
+stations (the exterior top row of the wall below, beam nodes, or two fixed nodes for rigid ground). Every stud
+and jack bears through `kv` on the surface interpolated between them, `kh` ties the plate sideways, and each pier
+end has the `hold_down` law (uplift positive). Studs need not line up with the nodes below; every bearing
+position must lie within the base nodes' range. Hold-down forces are in `hold_downs`, bearing forces in
+`base_nodes`. A wall with a hold-down is nonlinear (use Newton).
+
+**On a floor or another wall without `bearing`**, leave `foundation: false` and connect the bottom plate with stations: a
 station at each stud and each opening edge, joined to the plate or wall below (shared nodes, or `ZeroLength`
 springs for bearing and slip), with hold-downs at the pier ends. For stacked storeys with floor depth, give the
 lower wall a [floor zone](#2a-floor-zone): the upper wall's bottom nodes sit on its exterior top nodes, joined by
@@ -479,7 +487,8 @@ Not modelled, or not yet available:
 - Sills and cripples below windows; force transfer around openings and the perforated shear-wall method
   (segmented design only).
 - Nonlinear or hysteretic framing members; staged sheathing installation.
-- Internal hold-downs, tension-only bearing and slip inside the element: use exterior `ZeroLength`s.
+- Tension-only interior-stud bearing inside the element (`bearing` springs are bilateral; hold-downs at pier ends
+  are internal with `bearing`, otherwise exterior `ZeroLength`s).
 - The automatic stacked building builder is an explicit expansion (`building::expand`, `carapace expand`,
   `expandBuilding` in wasm) that returns an ordinary model; the wire format has no `building` table
   ([building.md](building.md)).

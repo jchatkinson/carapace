@@ -122,6 +122,7 @@ fn o86_stud_wall_matches_central_difference() {
             },
         }),
         foundation: false,
+        bearing: None,
         floor: None,
     };
     let wall = StudWall::new(ids, vec![], layout, vec![]).unwrap();
@@ -191,6 +192,7 @@ fn nonlinear_door_wall_with_slot_load_matches_central_difference() {
             }],
             sheathing: Some(WallSheathing { law }),
             foundation: false,
+            bearing: None,
             floor: None,
         };
         let loads = vec![vec![carapace_core::model::WallLoad::TopLine {

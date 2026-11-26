@@ -229,6 +229,7 @@ fn one_storey_layout(sheathing: WallShearLaw) -> StudWallLayout {
         openings: vec![],
         sheathing: Some(WallSheathing { law: sheathing }),
         foundation: false,
+        bearing: None,
         floor: Some(FloorZone {
             depth: ONE_DEPTH,
             ga: 1e10,
@@ -501,6 +502,7 @@ fn window(rigid: Option<[f64; 3]>) -> Window {
             law: WallShearLaw::Linear { ga: 6000. },
         }),
         foundation: rigid.is_none(),
+        bearing: None,
         floor: Some(FloorZone {
             depth,
             ga: RIGID,
@@ -831,6 +833,7 @@ fn zone_stack(c: &StackCase) -> StackResult {
                 law: WallShearLaw::Linear { ga: c.secant_ga(i) },
             }),
             foundation: false,
+            bearing: None,
             floor: zone,
         };
         let mut loads = empty_loads();

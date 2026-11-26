@@ -75,6 +75,7 @@ fn layout() -> StudWallLayout {
             law: WallShearLaw::Linear { ga: 2e5 },
         }),
         foundation: true,
+        bearing: None,
         floor: None,
     }
 }
@@ -280,6 +281,7 @@ fn window_layout() -> StudWallLayout {
             law: WallShearLaw::Linear { ga: 6000. },
         }),
         foundation: true,
+        bearing: None,
         floor: None,
     }
 }
@@ -751,6 +753,7 @@ fn rigid_stack_2d() -> (Vec<f64>, Vec<f64>) {
                 },
             }),
             foundation: false,
+            bearing: None,
             floor: (i == 0).then_some(FloorZone {
                 depth: D,
                 ga: R,
@@ -867,6 +870,7 @@ fn rigid_stack_3d(z_up: bool) -> (Vec<f64>, Vec<f64>) {
                 },
             }),
             foundation: false,
+            bearing: None,
             floor: (i == 0).then_some(FloorZone {
                 depth: D,
                 ga: R,
@@ -996,6 +1000,7 @@ fn z_up_floor_zone_equals_2d() {
             law: WallShearLaw::Linear { ga: 6000. },
         }),
         foundation: true,
+        bearing: None,
         floor: Some(FloorZone {
             depth: D,
             ga: 5e6,

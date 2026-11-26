@@ -5,7 +5,7 @@ use carapace_core::model::{
     Axis3, ChordDistribution, Diaphragm, DiaphragmLayout, DispBeamColumn3, Domain3,
     ElasticBeamColumn3, Element3, Element3Id, ElementLoad3, Fiber3, FiberSection3, FloorZone,
     ForceBeamColumn3, Friction3, GeomTransf3, Material, Node3Id, Shell3, Shell4, ShellModifiers,
-    ShellSection, StudWall, StudWallLayout, Truss3, WallChord, WallLoad, WallOpening, WallShearLaw,
+    ShellSection, StudWall, StudWallLayout, Truss3, WallLoad, WallOpening, WallShearLaw,
     WallSheathing, WallStation, WallStud, ZeroLength3, ZeroLengthSection3,
 };
 
@@ -15,7 +15,7 @@ use super::shared::{
     materials_by_row, node_lookup, orientations_by_row, reject_tables, validate_stud_wall_geometry,
     wall_load_plan, ElementIds,
 };
-use crate::building::{ChordDistributionSpec, WallChordSpec, WallShearLawSpec};
+use crate::building::{ChordDistributionSpec, WallShearLawSpec};
 use crate::input_v1::error::DecodeError;
 use crate::input_v1::materials::resolve_materials;
 use crate::input_v1::model_output::ModelOutput;
@@ -223,8 +223,8 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
     )
 }
 
-fn layout3(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
-    StudWallLayout {
+fn layout3(l: &crate::building::WallLayoutSpec) -> Result<StudWallLayout, String> {
+    Ok(StudWallLayout {
         length: l.length,
         height: l.height,
         studs: l
@@ -267,12 +267,13 @@ fn layout3(l: &crate::building::WallLayoutSpec) -> StudWallLayout {
             },
         }),
         foundation: l.foundation,
+        bearing: super::shared::decode_wall_bearing(l)?,
         floor: l.floor.map(|z| FloorZone {
             depth: z.depth,
             ga: z.ga,
             rim_ea: z.rim_ea,
         }),
-    }
+    })
 }
 fn decode_stud_walls3(
     d: &mut Domain3,
@@ -295,10 +296,7 @@ fn decode_stud_walls3(
             .iter()
             .map(|s| {
                 Ok(WallStation {
-                    chord: match s.chord {
-                        WallChordSpec::Top => WallChord::Top,
-                        WallChordSpec::Bottom => WallChord::Bottom,
-                    },
+                    chord: super::shared::decode_wall_chord(s.chord),
                     x: s.x,
                     node: node(s.node, "stud_walls")?,
                 })
@@ -311,12 +309,20 @@ fn decode_stud_walls3(
                 reason: reason.into(),
             }
         })?;
-        let w = StudWall::new3(c, st, layout3(&r.layout), cases[i].clone()).map_err(|e| {
-            DecodeError::InvalidMacroElement {
+        let w = StudWall::new3(
+            c,
+            st,
+            layout3(&r.layout).map_err(|reason| DecodeError::InvalidMacroElement {
                 table: "stud_walls",
                 row: i as u32,
-                reason: e.to_string(),
-            }
+                reason,
+            })?,
+            cases[i].clone(),
+        )
+        .map_err(|e| DecodeError::InvalidMacroElement {
+            table: "stud_walls",
+            row: i as u32,
+            reason: e.to_string(),
         })?;
         out.push(d.add_element(Element3::StudWall(w)));
     }

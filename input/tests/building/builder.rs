@@ -47,6 +47,7 @@ pub fn layout(window: bool) -> WallLayoutSpec {
             law: WallShearLawSpec::Linear { ga: 1e7 },
         }),
         foundation: false,
+        bearing: None,
         floor: None,
     }
 }

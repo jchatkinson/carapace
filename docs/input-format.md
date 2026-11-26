@@ -155,10 +155,12 @@ to other arena entries; cycles are rejected (`cyclicMaterialReference`).
 
 ### Stud walls (with floor zones) and diaphragms
 
-`studWalls` is an array of rows: `{ corners: [u32, u32, u32, u32], stations: { chord: "top" | "bottom", x, node }[], layout: WallLayoutSpec }`. Wall loads are not on the row: they are `wallLoad` element loads in load patterns (below).
+`studWalls` is an array of rows: `{ corners: [u32, u32, u32, u32], stations: { chord: "top" | "bottom" | "base", x, node }[], layout: WallLayoutSpec }`. Wall loads are not on the row: they are `wallLoad` element loads in load patterns (below).
 The profile comes from `header.ndm`; there is no `plane` field. Local `x` follows `c0 → c1` and local `y`
 follows `c0 → c3`; the axes must be orthogonal within relative `1e-9`, and every corner and station must lie
-at its declared local coordinate. `layout.foundation` defaults to false. The sheathing law is `{ kind: "linear",
+at its declared local coordinate. `layout.foundation` defaults to false. `layout.bearing` (optional,
+exclusive with `foundation`): `{ kv, kh, holdDown?: { tension, slack, bearing } }` stands the wall on its `"base"`
+stations (any `x` on the bottom line, also beyond the ends), see [stud-wall-bearing.md](stud-wall-bearing.md). The sheathing law is `{ kind: "linear",
 ga }` or `{ kind: "o86", bv, nailSpacing, nailDiameter }`; every field of these tagged specs (shear laws,
 wall loads, floor loads, anchorage bearing) is camelCase. Invalid node indices,
 degenerate/non-orthogonal geometry and constructor failures produce decode errors.

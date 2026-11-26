@@ -76,6 +76,22 @@ pub enum DiaphragmKind {
 pub enum WallChordSpec {
     Top,
     Bottom,
+    /// A node the wall stands on (with `layout.bearing`): on the bottom line, any `x`.
+    Base,
+}
+
+/// The wall bears on its `base` stations through the plate sandwich: `kv` / `kh` per bearing position and the
+/// pier-end hold-down law (stud-wall tables only; the building generates its own links).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "tsify", derive(tsify::Tsify))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WallBearingSpec {
+    pub kv: f64,
+    pub kh: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub hold_down: Option<AnchorageSpec>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -119,6 +135,10 @@ pub struct WallLayoutSpec {
     #[serde(default)]
     #[cfg_attr(feature = "tsify", tsify(optional))]
     pub foundation: bool,
+    /// Bearing on base stations (stud-wall tables only; rejected in a building).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "tsify", tsify(optional))]
+    pub bearing: Option<WallBearingSpec>,
     /// Floor zone above the framing (stud-wall tables only; a building takes it from its storey).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "tsify", tsify(optional))]

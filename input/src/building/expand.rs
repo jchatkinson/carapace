@@ -272,6 +272,12 @@ pub fn expand(spec: &BuildingSpec, options: &ExpandOptions) -> Result<Expansion,
             if s.walls.iter().filter(|o| o.name == w.name).count() > 1 {
                 return Err(err(format!("storey {si}: duplicate wall {}", w.name)));
             }
+            if w.layout.bearing.is_some() {
+                return Err(err(format!(
+                    "storey {si} wall {}: a building generates its own links; the wall layout takes no bearing",
+                    w.name
+                )));
+            }
             if w.layout.floor.is_some() {
                 return Err(err(format!(
                     "storey {si} wall {}: the floor zone comes from the storey (floorDepth, bandGa, rimEa), not the wall layout",

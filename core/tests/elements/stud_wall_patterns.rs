@@ -42,6 +42,7 @@ fn layout(law: WallShearLaw) -> StudWallLayout {
         }],
         sheathing: Some(WallSheathing { law }),
         foundation: true,
+        bearing: None,
         floor: None,
     }
 }

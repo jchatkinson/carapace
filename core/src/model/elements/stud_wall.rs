@@ -23,7 +23,7 @@ const MAX_EXTERIOR_NODES: usize = 256;
 const MAX_EXTERIOR_DOFS: usize = MAX_EXTERIOR_NODES * 3;
 /// Maximum number of piers in a wall with a nonlinear sheathing law (`O86` or `Material`): the local pier
 /// solve uses fixed-size stack buffers.
-pub const MAX_WALL_PIERS: usize = 16;
+pub const MAX_WALL_PIERS: usize = 32;
 thread_local! {
     /// Dense tangent of a nonlinear wall (`(m n)²`, up to `MAX_EXTERIOR_DOFS²`): too large for the stack, so each
     /// thread reuses one buffer, which allocates only when it first grows.
@@ -37,6 +37,9 @@ pub enum WallChord {
     Top,
     /// Bottom plate, at local `y = 0`.
     Bottom,
+    /// A base node the wall stands on (with [`StudWallLayout::bearing`]): on the bottom line (`y = 0`) at any
+    /// `x`, also outside `0..L`. Not part of the wall's framing; see [`WallBearing`].
+    Base,
 }
 /// How the top plate distributes load to the studs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +159,22 @@ pub struct FloorZone {
     /// Rim axial stiffness `EA` (all of it, `>= 0`), along the exterior top row, in addition to the top plate.
     pub rim_ea: f64,
 }
+/// The wall stands on the surface below through its bottom plate: the plates, subfloor, rim or blocking and the
+/// top plate below (the bearing "sandwich"). The surface is the wall's [`WallChord::Base`] stations, interpolated
+/// linearly between consecutive base positions (several nodes at one `x` share equally). Every bottom-plate
+/// bearing position (each stud and jack, the corners, bottom stations) gets a vertical spring `kv` and a
+/// horizontal spring `kh` to the interpolated point; at each pier end the `hold_down` law, if given, replaces
+/// `kv`. Every bearing position must lie within the base positions' range. Design: `docs/stud-wall-bearing.md`.
+#[derive(Debug, Clone)]
+pub struct WallBearing {
+    /// Vertical bearing stiffness per position (force/length), `> 0`: the sandwich's crushing under one stud.
+    pub kv: f64,
+    /// Horizontal stiffness per position (force/length), `> 0`: sill nailing (a penalty for a rigid tie).
+    pub kh: f64,
+    /// Pier-end anchorage (`Material::anchorage` or any uniaxial material with a positive initial tangent):
+    /// deformation is the post's rise relative to the surface, tension positive. `None`: pier ends bear on `kv`.
+    pub hold_down: Option<Material>,
+}
 /// Framing of one wall, in its local frame (`x` along the bottom plate from `c0` to `c1`, `y` up the studs) and
 /// consistent units. Validated by [`StudWall::new`].
 #[derive(Debug, Clone)]
@@ -186,6 +205,8 @@ pub struct StudWallLayout {
     /// internal support at its position, so hold-downs can attach at interior pier ends
     /// ([`StudWallLayout::pier_ends`]).
     pub foundation: bool,
+    /// The wall bears on its [`WallChord::Base`] stations ([`WallBearing`]); exclusive with `foundation`.
+    pub bearing: Option<WallBearing>,
     /// Floor zone above the framing. With it the exterior top corners and top stations sit at local
     /// `y = H + depth`, top-slot loads act on that row, and every top station must coincide with a stud, jack or
     /// cripple position.
@@ -288,6 +309,14 @@ pub struct WallBaseResponse {
     pub fx: f64,
     pub fy: f64,
 }
+/// A pier-end hold-down of a bearing wall: the post's rise relative to the surface and the law's force
+/// (tension positive).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WallHoldDownResponse {
+    pub x: f64,
+    pub deformation: f64,
+    pub force: f64,
+}
 /// Recovered internal response, in local axes, tension positive. See `docs/stud-wall.md` §7 for design use.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StudWallResponse {
@@ -308,7 +337,10 @@ pub struct StudWallResponse {
     /// Full-height piers, in `x` order (empty without sheathing).
     pub piers: Vec<WallPierResponse>,
     /// Bottom exterior nodes (`c0`, `c1`, bottom stations) and, with `foundation`, every internal support, by `x`.
+    /// With `bearing`: every bearing position (spring and hold-down forces) instead.
     pub base_nodes: Vec<WallBaseResponse>,
+    /// Pier-end hold-downs of a bearing wall, by `x` (empty otherwise).
+    pub hold_downs: Vec<WallHoldDownResponse>,
     /// `[Fx, Fy, M]`: sums over `base_nodes`, `M = Σ (x − L/2)·fy`.
     pub base: [f64; 3],
     /// Floor-zone bays between consecutive top positions (empty without a zone).
@@ -378,6 +410,17 @@ struct PierRec {
     c: f64,
     area: f64,
 }
+/// One bearing position of a [`WallBearing`] wall: the plate node's `(u, v)` DOFs and the interpolated base
+/// point (exterior node index, weight).
+#[derive(Clone, Debug)]
+struct BearingRec {
+    x: f64,
+    u: usize,
+    v: usize,
+    base: Vec<(usize, f64)>,
+    /// Nonlinear component index of the hold-down at a pier end (replacing `kv`).
+    hold: Option<usize>,
+}
 #[derive(Debug, Clone)]
 struct PreparedAssembly {
     stiffness: Vec<f64>,
@@ -428,8 +471,14 @@ pub struct StudWall<K: NodeKey = NodeId> {
     full_stiffness: Option<DMatrix<f64>>,
     full_load_slots: Vec<DVector<f64>>,
     foundation_supports: Vec<(f64, usize, usize)>,
+    bearing: Vec<BearingRec>,
+    /// Nonlinear components: the piers when the sheathing law is nonlinear (the first `pier_comps`), then the
+    /// hold-downs of a bearing wall. Each is a `PierRec` (`area` 1 and `c` 0 for a hold-down).
+    comps: Vec<PierRec>,
+    pier_comps: usize,
     nonlinear: Option<NonlinearCache>,
-    material_states: Vec<Material>,
+    /// Per component: its uniaxial material state (a `Material` sheathing law or a hold-down), else `None`.
+    material_states: Vec<Option<Material>>,
     committed_gamma: ArrayVec<f64, MAX_WALL_PIERS>,
     committed_q: ArrayVec<f64, MAX_WALL_PIERS>,
 }
@@ -766,6 +815,23 @@ impl<K: NodeKey> StudWall<K> {
             }
         }
         let piers = add_sheathing(&mut model, &layout, &top_nodes, &bottom_nodes)?;
+        let (bearing, holds) = add_bearing(&mut model, &layout, &stations, &bottom_nodes)?;
+        let pier_comps = if is_nonlinear { piers.len() } else { 0 };
+        let mut comps: Vec<PierRec> = piers[..pier_comps].to_vec();
+        comps.extend(holds);
+        if comps.len() > MAX_WALL_PIERS {
+            return Err(StudWallError(format!(
+                "{} nonlinear components (piers and hold-downs) exceed the stud-wall limit of {MAX_WALL_PIERS}",
+                comps.len()
+            )));
+        }
+        let bearing: Vec<BearingRec> = bearing
+            .into_iter()
+            .map(|b| BearingRec {
+                hold: b.hold.map(|h| pier_comps + h),
+                ..b
+            })
+            .collect();
         let mut foundation_supports = Vec::new();
         if layout.foundation {
             // A bottom station replaces the internal support at its position (for a hold-down there).
@@ -777,8 +843,8 @@ impl<K: NodeKey> StudWall<K> {
             }
         }
         let full_stiffness = layout.foundation.then(|| model.k.clone());
-        let mut nonlinear = if is_nonlinear {
-            Some(make_nonlinear_cache(&model, ne, &piers)?)
+        let mut nonlinear = if !comps.is_empty() {
+            Some(make_nonlinear_cache(&model, ne, &comps)?)
         } else {
             None
         };
@@ -866,10 +932,19 @@ impl<K: NodeKey> StudWall<K> {
                     .collect()
             })
             .collect();
-        let material_states = match layout.sheathing.as_ref().map(|s| &s.law) {
-            Some(WallShearLaw::Material(m)) => (0..piers.len()).map(|_| m.clone()).collect(),
-            _ => Vec::new(),
-        };
+        let material_states = (0..comps.len())
+            .map(|i| {
+                if i >= pier_comps {
+                    layout.bearing.as_ref().and_then(|b| b.hold_down.clone())
+                } else if let Some(WallShearLaw::Material(m)) =
+                    layout.sheathing.as_ref().map(|s| &s.law)
+                {
+                    Some(m.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
         Ok(Self {
             corners,
             stations,
@@ -894,6 +969,9 @@ impl<K: NodeKey> StudWall<K> {
             full_stiffness,
             full_load_slots,
             foundation_supports,
+            bearing,
+            comps,
+            pier_comps,
             nonlinear,
             material_states,
             committed_gamma: ArrayVec::new(),
@@ -986,7 +1064,7 @@ impl<K: NodeKey> StudWall<K> {
             u.extend(map.local(&nodes.get(id).displacement));
         }
         let n = self.nodes.len() * map.slots.len();
-        let p = self.piers.len();
+        let p = self.comps.len();
         let owned = self.prepared.is_none().then(|| self.prepared_for(&map));
         let prepared = self
             .prepared
@@ -1098,15 +1176,17 @@ impl<K: NodeKey> StudWall<K> {
             self.committed_q.clear();
             self.committed_q.extend(q.iter().copied());
             for (material, strain) in self.material_states.iter_mut().zip(gamma.iter()) {
-                *material = material.commit(*strain);
+                if let Some(m) = material {
+                    *m = m.commit(*strain);
+                }
             }
         } else {
             self.committed_gamma.clear();
             self.committed_gamma
-                .extend((0..self.piers.len()).map(|_| f64::NAN));
+                .extend((0..self.comps.len()).map(|_| f64::NAN));
             self.committed_q.clear();
             self.committed_q
-                .extend((0..self.piers.len()).map(|_| f64::NAN));
+                .extend((0..self.comps.len()).map(|_| f64::NAN));
         }
     }
     pub fn local_force_width(&self) -> usize {
@@ -1164,6 +1244,7 @@ impl<K: NodeKey> StudWall<K> {
             .as_ref()
             .and_then(|_| self.nonlinear_trial(ue.as_slice(), cases));
         let nonlinear_q = nonlinear_state.as_ref().map(|(_, q, _)| q.clone());
+        let nonlinear_gamma = nonlinear_state.as_ref().map(|(g, _, _)| g.clone());
         if let (Some(cache), Some((_, q, _))) = (&self.nonlinear, &nonlinear_state) {
             for i in 0..ui.len() {
                 for j in 0..q.len() {
@@ -1173,11 +1254,7 @@ impl<K: NodeKey> StudWall<K> {
         }
         let mut ufull = ue.as_slice().to_vec();
         ufull.extend(ui.iter().copied());
-        let q: Vec<f64> = if let Some(q) = nonlinear_q.as_ref() {
-            q.iter().copied().collect()
-        } else if self.nonlinear.is_some() {
-            vec![f64::NAN; self.piers.len()]
-        } else {
+        let q: Vec<f64> = if self.pier_comps == 0 {
             self.piers
                 .iter()
                 .map(|p| {
@@ -1189,6 +1266,10 @@ impl<K: NodeKey> StudWall<K> {
                     ga * p.area * gamma / (p.area + ga * p.c)
                 })
                 .collect()
+        } else if let Some(q) = nonlinear_q.as_ref() {
+            q[..self.pier_comps].to_vec()
+        } else {
+            vec![f64::NAN; self.piers.len()]
         };
         let disp = |d: usize| {
             if d < ue.len() {
@@ -1266,6 +1347,9 @@ impl<K: NodeKey> StudWall<K> {
             resisting -= &self.load_slots[c.case as usize] * c.factor;
         }
         for (i, id) in self.nodes.iter().enumerate() {
+            if self.layout.bearing.is_some() {
+                break;
+            }
             if i < 2
                 || self
                     .stations
@@ -1291,6 +1375,34 @@ impl<K: NodeKey> StudWall<K> {
                 r.base_nodes.push(WallBaseResponse { x, fx, fy });
             }
         }
+        if let Some(bl) = &self.layout.bearing {
+            // Spring forces on the wall (gravity positive): `-k (plate - surface)`; a hold-down's law force.
+            let rel = |d: usize, slot: usize, base: &[(usize, f64)]| {
+                disp(d) - base.iter().map(|&(e, w)| w * ue[2 * e + slot]).sum::<f64>()
+            };
+            for b in &self.bearing {
+                let fx = -bl.kh * rel(b.u, 0, &b.base);
+                let fy = match b.hold {
+                    Some(c) => {
+                        let (deformation, force) = match (&nonlinear_gamma, &nonlinear_q) {
+                            (Some(g), Some(q)) => (g[c], q[c]),
+                            _ => (f64::NAN, f64::NAN),
+                        };
+                        r.hold_downs.push(WallHoldDownResponse {
+                            x: b.x,
+                            deformation,
+                            force,
+                        });
+                        -force
+                    }
+                    None => -bl.kv * rel(b.v, 1, &b.base),
+                };
+                r.base[0] += fx;
+                r.base[1] += fy;
+                r.base[2] += (b.x - self.layout.length / 2.) * fy;
+                r.base_nodes.push(WallBaseResponse { x: b.x, fx, fy });
+            }
+        }
         if let Some(z) = self.layout.floor {
             for b in &self.zone_bays {
                 let u: [f64; 8] = std::array::from_fn(|i| disp(b.dofs[i]));
@@ -1308,7 +1420,7 @@ impl<K: NodeKey> StudWall<K> {
             let mut residual =
                 self.full_stiffness.as_ref().unwrap() * DVector::from_column_slice(&ufull);
             if let Some(q) = &nonlinear_q {
-                for (i, pier) in self.piers.iter().enumerate() {
+                for (i, pier) in self.comps.iter().enumerate() {
                     residual += &pier.beta * (pier.area * q[i]);
                 }
             }
@@ -1467,7 +1579,7 @@ impl<K: NodeKey> StudWall<K> {
         ArrayVec<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>,
     )> {
         let cache = self.nonlinear.as_ref()?;
-        let count = self.piers.len();
+        let count = self.comps.len();
         let mut y = ArrayVec::<f64, MAX_WALL_PIERS>::new();
         let mut gamma = ArrayVec::<f64, MAX_WALL_PIERS>::new();
         let mut q = ArrayVec::<f64, MAX_WALL_PIERS>::new();
@@ -1488,9 +1600,14 @@ impl<K: NodeKey> StudWall<K> {
         jac.extend((0..count * count).map(|_| 0.));
         for _ in 0..40 {
             for i in 0..count {
-                let law = &self.layout.sheathing.as_ref()?.law;
-                let (stress, tangent) =
-                    shear_law_response(law, self.material_states.get(i), gamma[i]);
+                let (stress, tangent) = if i < self.pier_comps {
+                    let law = &self.layout.sheathing.as_ref()?.law;
+                    shear_law_response(law, self.material_states[i].as_ref(), gamma[i])
+                } else {
+                    self.material_states[i]
+                        .as_ref()?
+                        .trial_stress_tangent(gamma[i])
+                };
                 q[i] = stress;
                 d[i] = tangent;
             }
@@ -1912,7 +2029,28 @@ fn validate_layout<K: NodeKey>(
             _ => {}
         }
     }
+    if let Some(b) = &l.bearing {
+        if l.foundation {
+            return Err(StudWallError("bearing and foundation are exclusive".into()));
+        }
+        if !b.kv.is_finite() || b.kv <= 0. || !b.kh.is_finite() || b.kh <= 0. {
+            return Err(StudWallError(
+                "bearing.kv and bearing.kh must be positive and finite".into(),
+            ));
+        }
+    }
     for (i, s) in stations.iter().enumerate() {
+        if s.chord == WallChord::Base {
+            if l.bearing.is_none() {
+                return Err(StudWallError(format!(
+                    "stations[{i}] is a base station without bearing"
+                )));
+            }
+            if !s.x.is_finite() {
+                return Err(StudWallError(format!("stations[{i}].x must be finite")));
+            }
+            continue;
+        }
         if !s.x.is_finite() || s.x < 0. || s.x > l.length {
             return Err(StudWallError(format!("stations[{i}].x must be in [0,L]")));
         }
@@ -2219,6 +2357,93 @@ fn add_sheathing(
         });
     }
     Ok(out)
+}
+/// Springs from every bottom-plate bearing position to the interpolated base surface ([`WallBearing`]): `kh` and
+/// `kv` into the frame stiffness, and at each pier end (with a hold-down law) a nonlinear component in place of
+/// `kv`. Returns the bearing positions (`hold` indexing the returned components) and the components.
+fn add_bearing<K: NodeKey>(
+    model: &mut FrameBuild,
+    l: &StudWallLayout,
+    stations: &[WallStation<K>],
+    bottom: &[(f64, [usize; 3])],
+) -> Result<(Vec<BearingRec>, Vec<PierRec>), StudWallError> {
+    let Some(b) = &l.bearing else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let tol = 1e-9 * l.length.max(1.);
+    // Base positions: sorted, nodes at one `x` grouped (exterior node index 4 + station index).
+    let mut base: Vec<(f64, Vec<usize>)> = Vec::new();
+    let mut pts: Vec<(f64, usize)> = stations
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.chord == WallChord::Base)
+        .map(|(j, s)| (s.x, 4 + j))
+        .collect();
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (x, e) in pts {
+        match base.last_mut() {
+            Some((bx, g)) if (x - *bx).abs() <= tol => g.push(e),
+            _ => base.push((x, vec![e])),
+        }
+    }
+    let weights = |x: f64| -> Option<Vec<(usize, f64)>> {
+        let share = |g: &[usize], w: f64| {
+            g.iter()
+                .map(|&e| (e, w / g.len() as f64))
+                .collect::<Vec<_>>()
+        };
+        if let Some((_, g)) = base.iter().find(|(bx, _)| (x - bx).abs() <= tol) {
+            return Some(share(g, 1.));
+        }
+        let i = base.windows(2).position(|w| w[0].0 < x && x < w[1].0)?;
+        let ((x0, g0), (x1, g1)) = (&base[i], &base[i + 1]);
+        let t = (x - x0) / (x1 - x0);
+        let mut v = share(g0, 1. - t);
+        v.extend(share(g1, t));
+        Some(v)
+    };
+    let ends = l.pier_ends();
+    let mut recs = Vec::new();
+    let mut holds = Vec::new();
+    for &(x, d) in bottom {
+        let w = weights(x).ok_or_else(|| {
+            StudWallError(format!(
+                "bearing position x = {x} lies outside the base nodes' range"
+            ))
+        })?;
+        let hold = b.hold_down.is_some() && ends.iter().any(|e| (e - x).abs() <= tol);
+        for (slot, dof, k) in [(0, d[0], b.kh), (1, d[1], b.kv)] {
+            let mut idx = vec![(dof, 1.)];
+            idx.extend(w.iter().map(|&(e, wt)| (2 * e + slot, -wt)));
+            if slot == 1 && hold {
+                let mut beta = DVector::zeros(model.ndof);
+                for &(i, v) in &idx {
+                    beta[i] += v;
+                }
+                holds.push(PierRec {
+                    xa: x,
+                    xb: x,
+                    beta,
+                    c: 0.,
+                    area: 1.,
+                });
+            } else {
+                for &(i, vi) in &idx {
+                    for &(j, vj) in &idx {
+                        model.k[(i, j)] += k * vi * vj;
+                    }
+                }
+            }
+        }
+        recs.push(BearingRec {
+            x,
+            u: d[0],
+            v: d[1],
+            base: w,
+            hold: hold.then(|| holds.len() - 1),
+        });
+    }
+    Ok((recs, holds))
 }
 fn stud_at(l: &StudWallLayout, x: f64) -> &WallStud {
     l.studs.iter().find(|s| (s.x - x).abs() < 1e-10).unwrap()

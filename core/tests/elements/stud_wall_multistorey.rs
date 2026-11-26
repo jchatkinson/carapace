@@ -243,6 +243,7 @@ fn layout(c: &Case, i: usize, v: Variant, foundation: bool, nonlinear: bool) -> 
             },
         }),
         foundation: foundation && v.bearing && i == 0,
+        bearing: None,
         floor: None,
     }
 }

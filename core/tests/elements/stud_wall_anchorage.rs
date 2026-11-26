@@ -86,6 +86,7 @@ fn solve(v_total: f64, slack: f64) -> Out {
             law: WallShearLaw::Linear { ga: GA },
         }),
         foundation: false,
+        bearing: None,
         floor: None,
     };
     let mut loads: Vec<Vec<WallLoad>> = vec![vec![]; 8];

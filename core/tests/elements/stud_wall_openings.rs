@@ -57,6 +57,7 @@ fn layout(
             law: WallShearLaw::Linear { ga: 6000. },
         }),
         foundation: true,
+        bearing: None,
         floor: None,
     }
 }
