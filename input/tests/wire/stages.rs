@@ -810,3 +810,104 @@ fn run_many_matches_sequential_runs_in_order() {
         assert_eq!(a, &b.unwrap());
     }
 }
+
+/// The initial row of the stage after a `Reset` is the reset state: nothing acts yet, so a held
+/// element load's fixed-end forces do not show at zero displacement; it applies from the first step,
+/// and the stage ends where the first one did. A 2D cantilever under a held uniform load; exact.
+#[test]
+fn the_initial_row_after_a_reset_has_no_held_element_load_forces() {
+    let mut input = empty_input(2);
+    input.header.record_initial = true;
+    input.nodes = NodeTable {
+        coords: vec![0.0, 0.0, 100.0, 0.0],
+        fixed: vec![0b111, 0b000],
+        mass_node_index: vec![],
+        mass: vec![],
+    };
+    input.elastic_beam_columns_2d = ElasticBeamColumn2dTable {
+        node_i: vec![0],
+        node_j: vec![1],
+        e: vec![30_000.0],
+        a: vec![10.0],
+        iz: vec![1000.0],
+        transform: vec![TransformSpec::Linear],
+        density: vec![0.0],
+    };
+    input.load_patterns = LoadPatternTable {
+        series: vec![TimeSeriesSpec::Linear { slope: 1.0 }],
+        scale_factor: vec![1.0],
+    };
+    input.element_loads = ElementLoadTable {
+        pattern: vec![0],
+        element_kind: vec![ElementKind::ElasticBeamColumn2d],
+        element_index: vec![0],
+        load: vec![ElementLoadSpec::Uniform {
+            wx: 0.0,
+            wy: -1.0,
+            wz: None,
+        }],
+        stage: vec![0],
+    };
+    let stage = |id: &str| StageSpec::Static {
+        id: id.to_string(),
+        steps: 2,
+        integrator: IntegratorSpec::LoadControl { increment: 0.5 },
+        algorithm: AlgorithmSpec::Linear,
+        convergence: Some(ConvergenceSpec::NormUnbalance {
+            tol: 1e-9,
+            max_iter: 10,
+        }),
+        hold_patterns_after: vec![0],
+    };
+    let force = |component| RecorderSpec::ElementForce {
+        element_kind: ElementKind::ElasticBeamColumn2d,
+        element_index: 0,
+        component,
+    };
+    input.sequence = SequenceSpec {
+        stages: vec![
+            stage("first"),
+            StageSpec::Reset {
+                id: "reset".to_string(),
+            },
+            stage("second"),
+        ],
+        recorders: (0..6)
+            .map(force)
+            .chain([RecorderSpec::NodeDisp { node: 1, dof: 1 }])
+            .collect(),
+    };
+    let mut session = decode(input).expect("well-formed input should decode");
+    let mut samples: Vec<Vec<(usize, f64)>> = vec![Vec::new(); 7];
+    loop {
+        let outcome = session.advance(8);
+        assert!(outcome.error.is_none(), "{outcome:?}");
+        for batch in &outcome.recorder_batches {
+            samples[batch.recorder_index]
+                .extend(batch.samples.iter().map(|&(_, v)| (batch.stage_index, v)));
+        }
+        if outcome.done {
+            break;
+        }
+    }
+    for (recorder, rows) in samples.iter().enumerate() {
+        let first: Vec<f64> = rows.iter().filter(|r| r.0 == 0).map(|r| r.1).collect();
+        let second: Vec<f64> = rows.iter().filter(|r| r.0 == 2).map(|r| r.1).collect();
+        assert_eq!((first.len(), second.len()), (3, 3), "recorder {recorder}");
+        assert_eq!(
+            first[0], 0.0,
+            "recorder {recorder}: first stage starts unloaded"
+        );
+        assert_eq!(
+            second[0], 0.0,
+            "recorder {recorder}: second stage starts at the reset state"
+        );
+        assert!(
+            (second[1] - first[2]).abs() < 1e-9,
+            "recorder {recorder}: held load in full at once"
+        );
+        assert!((second[2] - first[2]).abs() < 1e-9, "recorder {recorder}");
+    }
+    // The fixed end's shear is the whole load, wL = 100.
+    assert!((samples[1][2].1.abs() - 100.0).abs() < 1e-9);
+}

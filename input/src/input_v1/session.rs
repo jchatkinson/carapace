@@ -156,6 +156,98 @@ where
     values.get(component as usize).copied()
 }
 
+/// One sample of every scalar and bulk recorder from `domain` at `progress`: a static step, or the reset state a
+/// stage after a `Reset` records as its initial row (`dynamic`: a transient stage, whose velocity and acceleration
+/// recorders read the nodes; reactions are static, without inertia).
+#[allow(clippy::too_many_arguments)]
+fn sample_domain<const NDIM: usize, const NDOF: usize, NId, E>(
+    domain: &Domain<NDIM, NDOF, NId, E>,
+    progress: f64,
+    dynamic: bool,
+    recorders: &[ResolvedRecorder<NId, E::Id>],
+    batches: &mut [Vec<(f64, f64)>],
+    bulks: &[ResolvedBulk<NId, E::Id>],
+    bulk_out: &mut [(Vec<f64>, Vec<f64>)],
+) where
+    NId: NodeKey,
+    E: ElementOps<NDIM, NDOF, NId>,
+{
+    for (recorder, batch) in recorders.iter().zip(batches.iter_mut()) {
+        let value = match *recorder {
+            ResolvedRecorder::StudWallPier {
+                element,
+                pier,
+                quantity,
+            } => wall_pier_value(domain, element, pier, quantity, progress),
+            ResolvedRecorder::StudWallBase { element, component } => domain
+                .element_stud_wall_response(element, progress)
+                .map(|r| r.base[component as usize]),
+            ResolvedRecorder::DiaphragmBay {
+                element,
+                bay,
+                quantity,
+            } => diaphragm_bay_value(domain, element, bay, quantity),
+            ResolvedRecorder::NodeDisp { node, dof } => {
+                Some(domain.node(node).displacement[dof as usize])
+            }
+            ResolvedRecorder::NodeDifference {
+                node,
+                other_node,
+                dof,
+            } => Some(
+                domain.node(node).displacement[dof as usize]
+                    - other_node.map_or(0., |n| domain.node(n).displacement[dof as usize]),
+            ),
+            ResolvedRecorder::ElementForce { element, component } => {
+                Some(domain.element_end_force(element, progress)[component as usize])
+            }
+            ResolvedRecorder::ElementLoad { element, component } => {
+                Some(domain.element_load_component(element, progress, component as usize))
+            }
+            ResolvedRecorder::Reaction { node, dof } => {
+                Some(domain.reaction(node, dof as usize, progress))
+            }
+            ResolvedRecorder::Fiber {
+                element,
+                point,
+                fiber,
+                response,
+            } => fiber_value(domain, element, point, fiber, response),
+            ResolvedRecorder::GaussPoint {
+                element,
+                point,
+                quantity,
+                component,
+            } => gauss_value(domain, element, point, quantity, component),
+            ResolvedRecorder::EmbeddedBar { element, quantity } => {
+                embedded_bar_value(domain, element, quantity)
+            }
+            ResolvedRecorder::NodeVel { node, dof } if dynamic => {
+                Some(domain.node(node).velocity[dof as usize])
+            }
+            ResolvedRecorder::NodeAccel { node, dof } if dynamic => {
+                Some(domain.node(node).acceleration[dof as usize])
+            }
+            ResolvedRecorder::NodeVel { .. }
+            | ResolvedRecorder::NodeAccel { .. }
+            | ResolvedRecorder::ModeShape { .. }
+            | ResolvedRecorder::Bulk { .. } => None,
+        };
+        if let Some(value) = value {
+            batch.push((progress, value));
+        }
+    }
+    for (bulk, (frames, values)) in bulks.iter().zip(bulk_out.iter_mut()) {
+        frames.push(progress);
+        // One pass over the model, not a sweep per DOF.
+        let reactions = |nodes: &[NId]| {
+            let all = domain.reactions_all(progress);
+            nodes.iter().flat_map(|&node| all[node]).collect()
+        };
+        append_bulk_values(domain, bulk, progress, dynamic, &reactions, values);
+    }
+}
+
 /// Appends one frame of `bulk`'s values (row, then point, then component order). A value the
 /// model cannot produce (it never happens for a decoded recorder) is `NaN`, so frames keep their
 /// width. `dynamic` is false outside a `Transient` stage, where velocity and acceleration read `0`.
@@ -998,6 +1090,9 @@ where
     pristine: Option<Domain<NDIM, NDOF, NId, E>>,
     // Every `holdPatternsAfter` freeze applied so far, in order, so a `Reset` can re-apply them.
     holds: Vec<(LoadPatternId, f64)>,
+    // Set by a `Reset`: `holds` are not yet re-applied, so the next loading stage records the reset state as its
+    // initial row (no load acting) and only then freezes them.
+    holds_pending: bool,
     // The pseudo-time the next static stage starts from: where the last static stage ended, unless it held its
     // patterns (OpenSees' `loadConst -time 0`), or a reset or transient stage came since (`reset`/`setTime 0`).
     carried_load_factor: f64,
@@ -1083,6 +1178,7 @@ where
             modal_results: Vec::new(),
             pristine,
             holds: Vec::new(),
+            holds_pending: false,
             carried_load_factor: 0.0,
             record_initial,
             stages,
@@ -1260,10 +1356,12 @@ where
         let mut domain = self.domain.take().expect("domain held between stages");
         if matches!(stage.kind, CompiledStageKind::Reset) {
             // As-built domain plus every load an earlier stage had registered (loads are
-            // registered when their stage starts, so the pristine copy has none), and the freezes
-            // (`loadConst`) already applied: like OpenSees' `reset`, this reverts the state but not
-            // which patterns are held constant, so a held pattern is applied in full from the
-            // first step after the reset.
+            // registered when their stage starts, so the pristine copy has none). Like OpenSees'
+            // `reset`, this reverts the state but not which patterns are held constant (`loadConst`),
+            // so a held pattern is applied in full from the first step after the reset. The freezes
+            // are re-applied when the next loading stage starts, after it records its initial row:
+            // the reset state, with no load acting yet (frozen element loads would otherwise show
+            // their fixed-end forces at zero displacement).
             domain = self.pristine.clone().expect("kept for Reset stages");
             for earlier in &self.stages[..self.current_stage] {
                 for &(pattern, node, dof, value) in &earlier.pending_nodal_loads {
@@ -1273,15 +1371,25 @@ where
                     domain.add_element_load(*pattern, *element, *load);
                 }
             }
-            for &(pattern, factor) in &self.holds {
-                domain.hold_pattern_constant(pattern, factor);
-            }
+            self.holds_pending = true;
             self.runner = Some(StageRunner::Reset {
                 domain,
                 steps_remaining: 0,
             });
             self.load_factor = 0.0;
             return;
+        }
+        // The first loading stage after a reset re-applies the freezes, once it has recorded the reset state as its
+        // initial row (a modal stage reads no loads and leaves them pending).
+        let after_reset =
+            self.holds_pending && !matches!(stage.kind, CompiledStageKind::Modal { .. });
+        if after_reset {
+            self.holds_pending = false;
+            if matches!(stage.kind, CompiledStageKind::InstallSheathing) {
+                for &(pattern, factor) in &self.holds {
+                    domain.hold_pattern_constant(pattern, factor);
+                }
+            }
         }
         if matches!(stage.kind, CompiledStageKind::InstallSheathing) {
             // At the committed state, with every pattern at its factor where the next stage starts. A no-step stage, held
@@ -1299,6 +1407,23 @@ where
         }
         for (pattern, element, load) in &stage.pending_element_loads {
             domain.add_element_load(*pattern, *element, *load);
+        }
+        if after_reset {
+            if self.record_initial {
+                let dynamic = matches!(stage.kind, CompiledStageKind::Transient { .. });
+                sample_domain(
+                    &domain,
+                    self.carried_load_factor,
+                    dynamic,
+                    &self.recorders,
+                    &mut self.current_batch,
+                    &self.bulks,
+                    &mut self.current_bulk,
+                );
+            }
+            for &(pattern, factor) in &self.holds {
+                domain.hold_pattern_constant(pattern, factor);
+            }
         }
         // `Transformation` resolves `equal_dof`/`rigid_diaphragm` ties;
         // `Plain` is a strictly cheaper no-op for a domain with none (and
@@ -1404,6 +1529,7 @@ where
             _ => 0.0,
         };
         if self.record_initial
+            && !after_reset
             && matches!(
                 self.stages[self.current_stage].kind,
                 CompiledStageKind::Static { .. } | CompiledStageKind::Transient { .. }
@@ -1613,84 +1739,15 @@ where
         match runner {
             StageRunner::Static { analysis, .. } => {
                 let progress = self.load_factor;
-                for (recorder, batch) in self.recorders.iter().zip(self.current_batch.iter_mut()) {
-                    let value = match *recorder {
-                        ResolvedRecorder::StudWallPier {
-                            element,
-                            pier,
-                            quantity,
-                        } => wall_pier_value(analysis.domain(), element, pier, quantity, progress),
-                        ResolvedRecorder::StudWallBase { element, component } => analysis
-                            .domain()
-                            .element_stud_wall_response(element, progress)
-                            .map(|r| r.base[component as usize]),
-                        ResolvedRecorder::DiaphragmBay {
-                            element,
-                            bay,
-                            quantity,
-                        } => diaphragm_bay_value(analysis.domain(), element, bay, quantity),
-                        ResolvedRecorder::NodeDisp { node, dof } => {
-                            Some(analysis.domain().node(node).displacement[dof as usize])
-                        }
-                        ResolvedRecorder::NodeDifference {
-                            node,
-                            other_node,
-                            dof,
-                        } => Some(
-                            analysis.domain().node(node).displacement[dof as usize]
-                                - other_node.map_or(0., |n| {
-                                    analysis.domain().node(n).displacement[dof as usize]
-                                }),
-                        ),
-                        ResolvedRecorder::ElementForce { element, component } => Some(
-                            analysis.domain().element_end_force(element, progress)
-                                [component as usize],
-                        ),
-                        ResolvedRecorder::ElementLoad { element, component } => {
-                            Some(analysis.domain().element_load_component(
-                                element,
-                                progress,
-                                component as usize,
-                            ))
-                        }
-                        ResolvedRecorder::Reaction { node, dof } => {
-                            Some(analysis.domain().reaction(node, dof as usize, progress))
-                        }
-                        ResolvedRecorder::Fiber {
-                            element,
-                            point,
-                            fiber,
-                            response,
-                        } => fiber_value(analysis.domain(), element, point, fiber, response),
-                        ResolvedRecorder::GaussPoint {
-                            element,
-                            point,
-                            quantity,
-                            component,
-                        } => gauss_value(analysis.domain(), element, point, quantity, component),
-                        ResolvedRecorder::EmbeddedBar { element, quantity } => {
-                            embedded_bar_value(analysis.domain(), element, quantity)
-                        }
-                        ResolvedRecorder::NodeVel { .. }
-                        | ResolvedRecorder::NodeAccel { .. }
-                        | ResolvedRecorder::ModeShape { .. }
-                        | ResolvedRecorder::Bulk { .. } => None,
-                    };
-                    if let Some(value) = value {
-                        batch.push((progress, value));
-                    }
-                }
-                for (bulk, (frames, values)) in self.bulks.iter().zip(self.current_bulk.iter_mut())
-                {
-                    frames.push(progress);
-                    let domain = analysis.domain();
-                    // One pass over the model, not a sweep per DOF.
-                    let reactions = |nodes: &[NId]| {
-                        let all = domain.reactions_all(progress);
-                        nodes.iter().flat_map(|&node| all[node]).collect()
-                    };
-                    append_bulk_values(domain, bulk, progress, false, &reactions, values);
-                }
+                sample_domain(
+                    analysis.domain(),
+                    progress,
+                    false,
+                    &self.recorders,
+                    &mut self.current_batch,
+                    &self.bulks,
+                    &mut self.current_bulk,
+                );
                 if let Some((element, utilization, kind)) = analysis
                     .domain()
                     .controlling_limit_utilization(&LimitStateConfig::default())

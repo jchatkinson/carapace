@@ -493,7 +493,9 @@ velocities and all element/material history return to their starting values and 
 `0`. Like OpenSees it does not undo `holdPatternsAfter` freezes: a held pattern stays
 applied at its frozen factor, so the next stage sees that load in full from its first
 step (patterns that were not held ramp again from `0`). It takes no steps and records
-nothing.
+nothing. With `header.recordInitial`, the next `static`/`transient` stage's initial sample is the reset
+state itself: zero displacement and no load acting, so a held element load's fixed-end forces appear only
+from that stage's first step.
 
 `installSheathing` installs the stud walls' sheathing (pier shear fields and floor-zone bays) at the current state. With
 one anywhere in the sequence, every `studWalls` row with sheathing or a floor zone is built uninstalled: its shear fields keep
