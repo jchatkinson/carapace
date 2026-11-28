@@ -1068,7 +1068,7 @@ fn unsheathed_walls_match_explicit_frames() {
             let a = response.bottom_chord[2 * i];
             let b = response.bottom_chord[2 * i + 1];
             near(a.axial, -f[0], 1e-9);
-            near(a.moment, f[2], 1e-9);
+            near(a.moment, -f[2], 1e-9);
             near(a.shear, f[1], 1e-9);
             near(b.axial, f[3], 1e-9);
             near(b.moment, f[5], 1e-9);
@@ -1082,7 +1082,7 @@ fn unsheathed_walls_match_explicit_frames() {
             let a = response.top_chord[2 * i];
             let b = response.top_chord[2 * i + 1];
             near(a.axial, -f[0], 1e-9);
-            near(a.moment, f[2], 1e-9);
+            near(a.moment, -f[2], 1e-9);
             near(a.shear, f[1], 1e-9);
             near(b.axial, f[3], 1e-9);
             near(b.moment, f[5], 1e-9);
@@ -1092,7 +1092,7 @@ fn unsheathed_walls_match_explicit_frames() {
             let f = fa.domain().element_end_force(*eid, 1.);
             let a = response.header[2 * i];
             let b = response.header[2 * i + 1];
-            near(a.moment, f[2], 1e-9);
+            near(a.moment, -f[2], 1e-9);
             near(a.shear, f[1], 1e-9);
             near(b.moment, f[5], 1e-9);
             near(b.shear, -f[4], 1e-9);

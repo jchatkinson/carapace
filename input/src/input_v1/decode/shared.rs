@@ -1111,7 +1111,11 @@ where
                             .ok_or(not_applicable("a row is past the end of the table"))?;
                         let width = |id| {
                             domain.element_stud_wall_response(id, 0.).map(|r| {
-                                3 + 3 * (r.studs.len() + r.jacks.len() + r.cripples.len())
+                                4 + 3
+                                    * (r.studs.len()
+                                        + r.jacks.len()
+                                        + r.cripples.len()
+                                        + r.header.len())
                             })
                         };
                         let Some(&first) = ids.first() else {

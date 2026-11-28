@@ -117,30 +117,23 @@ impl<K: NodeKey> StudWall<K> {
         cases: &[WallCaseLoad],
     ) -> StudWallResponse {
         let ue = self.local_displacement(nodes);
-        let mut ui = -(&self.recovery * &ue);
-        for c in cases {
-            ui += &self.load_recovery[c.case as usize] * c.factor;
-        }
         let nonlinear_state = self
             .nonlinear
             .as_ref()
             .and_then(|_| self.nonlinear_trial(ue.as_slice(), cases));
         let nonlinear_q = nonlinear_state.as_ref().map(|(_, q, _)| q.clone());
         let nonlinear_gamma = nonlinear_state.as_ref().map(|(g, _, _)| g.clone());
-        if let (Some(cache), Some((_, q, _))) = (&self.nonlinear, &nonlinear_state) {
-            for i in 0..ui.len() {
-                for j in 0..q.len() {
-                    ui[i] -= cache.internal_recovery[(i, j)] * q[j];
-                }
-            }
-        }
+        let ui = self.internal_displacement(&ue, cases, nonlinear_q.as_ref().map(|q| q.as_slice()));
+        // Shear strains are measured from installation (a staged wall), when they were zero stress.
+        let pier_g0 = |i: usize| self.offset.as_ref().map_or(0., |o| o.pier_gamma0[i]);
         let mut ufull = ue.as_slice().to_vec();
         ufull.extend(ui.iter().copied());
         let q: Vec<f64> = if self.pier_comps == 0 {
             self.piers
                 .iter()
-                .map(|p| {
-                    let gamma = p.beta.dot(&DVector::from_column_slice(&ufull));
+                .enumerate()
+                .map(|(i, p)| {
+                    let gamma = p.beta.dot(&DVector::from_column_slice(&ufull)) - pier_g0(i);
                     let WallShearLaw::Linear { ga } = &self.layout.sheathing.as_ref().unwrap().law
                     else {
                         unreachable!("nonlinear laws use the local pier solve")
@@ -185,7 +178,8 @@ impl<K: NodeKey> StudWall<K> {
             let d = [disp(v0), disp(t0), disp(v1), disp(t1)];
             let k = beam4(h.ei, l);
             let f: [f64; 4] = std::array::from_fn(|a| (0..4).map(|b| k[a][b] * d[b]).sum());
-            for (x, m, shear) in [(h.x0, f[1], f[0]), (h.x1, f[3], -f[2])] {
+            // End forces on the segment (CCW moments): sagging is `-f[1]` at its left end and `f[3]` at its right.
+            for (x, m, shear) in [(h.x0, -f[1], f[0]), (h.x1, f[3], -f[2])] {
                 r.header.push(WallHeaderResponse {
                     x,
                     moment: m,
@@ -197,7 +191,7 @@ impl<K: NodeKey> StudWall<K> {
         r.bottom_chord =
             self.chord_response(&self.bottom_nodes, &ue, &ui, WallChord::Bottom, &q, cases);
         for (i, p) in self.piers.iter().enumerate() {
-            let gamma = p.beta.dot(&DVector::from_column_slice(&ufull));
+            let gamma = p.beta.dot(&DVector::from_column_slice(&ufull)) - pier_g0(i);
             let mid = (p.xa + p.xb) * 0.5;
             let mut moment_base = 0.;
             let mut moment_top = 0.;
@@ -217,17 +211,8 @@ impl<K: NodeKey> StudWall<K> {
                 chords: [-moment_base / jd, moment_base / jd],
             });
         }
-        let mut resisting = &self.stiffness * &ue;
-        if let (Some(cache), Some(q)) = (&self.nonlinear, &nonlinear_q) {
-            for i in 0..resisting.len() {
-                for j in 0..q.len() {
-                    resisting[i] += cache.coupling[(i, j)] * q[j];
-                }
-            }
-        }
-        for c in cases {
-            resisting -= &self.load_slots[c.case as usize] * c.factor;
-        }
+        let resisting = self.resisting_local(&ue, nonlinear_q.as_ref().map(|q| q.as_slice()))
+            - self.load_local(cases);
         for (i, id) in self.nodes.iter().enumerate() {
             if self.layout.bearing.is_some() {
                 break;
@@ -286,9 +271,11 @@ impl<K: NodeKey> StudWall<K> {
             }
         }
         if let Some(z) = self.layout.floor {
-            for b in &self.zone_bays {
+            for (k, b) in self.zone_bays.iter().enumerate() {
                 let u: [f64; 8] = std::array::from_fn(|i| disp(b.dofs[i]));
-                let (gamma, q, rim) = bay_response(b.x1 - b.x0, z.depth, b.ga, z.rim_ea, &u);
+                let (gamma, _, rim) = bay_response(b.x1 - b.x0, z.depth, b.ga, z.rim_ea, &u);
+                let gamma = gamma - self.offset.as_ref().map_or(0., |o| o.bay_gamma0[k]);
+                let q = b.ga * gamma;
                 r.floor_bays.push(WallFloorBay {
                     x0: b.x0,
                     x1: b.x1,
@@ -308,6 +295,9 @@ impl<K: NodeKey> StudWall<K> {
             }
             for c in cases {
                 residual -= &self.full_load_slots[c.case as usize] * c.factor;
+            }
+            if let Some(full) = self.offset.as_ref().and_then(|o| o.full.as_ref()) {
+                residual += full;
             }
             for &(x, u, v) in &self.foundation_supports {
                 let fx = residual[u];
@@ -376,7 +366,8 @@ impl<K: NodeKey> StudWall<K> {
                         .map(|c| c.factor * self.beam_load_slots[c.case as usize][bi][j])
                         .sum()
                 });
-                (f[1] - p[2], f[0] - p[1], f[3] - p[5], -(f[2] - p[4]))
+                // Sagging positive at both ends: the left end's CCW end moment is hogging.
+                (-(f[1] - p[2]), f[0] - p[1], f[3] - p[5], -(f[2] - p[4]))
             } else {
                 (0., 0., 0., 0.)
             };

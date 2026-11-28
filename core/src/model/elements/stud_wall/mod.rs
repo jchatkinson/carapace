@@ -18,19 +18,22 @@
 use arrayvec::ArrayVec;
 use nalgebra::{DMatrix, DVector};
 
-use super::floor_zone::{bay_response, bay_stiffness};
+use super::floor_zone::{self, bay_response, bay_stiffness};
 use super::shear_law::{shear_law_response, WallShearLaw};
 use super::wall_plane::PlaneMap;
 use super::{DofMask, NodeView, TangentSink, VectorSink};
 use crate::model::{ElementForce, ElementLoad, Material, Node3Id, NodeId, NodeKey, WallCaseLoad};
 
 mod build;
+mod install;
 mod loads;
 mod nonlinear;
 mod response;
 mod validate;
 
 use build::*;
+use install::InstallOffset;
+pub use install::STAGED_SCALE;
 use loads::*;
 use nonlinear::*;
 pub use response::{
@@ -289,6 +292,8 @@ struct BearingRec {
 struct PreparedAssembly {
     stiffness: Vec<f64>,
     loads: Vec<Vec<f64>>,
+    /// An installation offset in global slots.
+    offset: Option<Vec<f64>>,
 }
 #[derive(Debug, Clone)]
 struct NonlinearCache {
@@ -352,6 +357,12 @@ pub struct StudWall<K: NodeKey = NodeId> {
     material_states: Vec<Option<Material>>,
     committed_gamma: ArrayVec<f64, MAX_WALL_PIERS>,
     committed_q: ArrayVec<f64, MAX_WALL_PIERS>,
+    /// The load cases the wall was built with (a staged wall builds itself again).
+    cases: Vec<Vec<WallLoad>>,
+    /// A staged wall's installed build, waiting for `install_sheathing` (`install.rs`).
+    pending: Option<Box<StudWall<K>>>,
+    /// An installed staged wall's continuity offsets.
+    offset: Option<InstallOffset>,
 }
 
 impl StudWall<NodeId> {
@@ -538,6 +549,9 @@ impl<K: NodeKey> StudWall<K> {
                     v += c.coupling[i * p + a] * q[a];
                 }
             }
+            if let Some(o) = &prepared.offset {
+                v += o[i];
+            }
             rg.push(v);
         }
         if self.nonlinear.is_some() {
@@ -676,9 +690,15 @@ impl<K: NodeKey> StudWall<K> {
             self.committed_gamma.extend(gamma.iter().copied());
             self.committed_q.clear();
             self.committed_q.extend(q.iter().copied());
-            for (material, strain) in self.material_states.iter_mut().zip(gamma.iter()) {
+            let origin: Vec<f64> = (0..gamma.len()).map(|i| self.law_origin(i)).collect();
+            for ((material, strain), g0) in self
+                .material_states
+                .iter_mut()
+                .zip(gamma.iter())
+                .zip(origin)
+            {
                 if let Some(m) = material {
-                    *m = m.commit(*strain);
+                    *m = m.commit(*strain - g0);
                 }
             }
         } else {
@@ -700,18 +720,11 @@ impl<K: NodeKey> StudWall<K> {
         nodes: &NodeView<'_, NDIM, NDOF, K>,
     ) -> ElementForce {
         let u = self.local_displacement(nodes);
-        if self.nonlinear.is_some() {
-            let mut r = &self.stiffness * &u;
-            if let Some(cache) = &self.nonlinear {
-                for i in 0..r.len() {
-                    for j in 0..self.committed_q.len() {
-                        r[i] += cache.coupling[(i, j)] * self.committed_q[j];
-                    }
-                }
-            }
-            return ElementForce::from_vec(r.as_slice().to_vec());
-        }
-        ElementForce::from_vec((&self.stiffness * u).as_slice().to_vec())
+        let q = self
+            .nonlinear
+            .is_some()
+            .then_some(self.committed_q.as_slice());
+        ElementForce::from_vec(self.resisting_local(&u, q).as_slice().to_vec())
     }
     pub fn local_load_force<const NDIM: usize, const NDOF: usize>(
         &self,
@@ -768,7 +781,18 @@ impl<K: NodeKey> StudWall<K> {
                 strain_map,
             }
         });
-        (PreparedAssembly { stiffness, loads }, nonlinear)
+        let offset = self
+            .offset
+            .as_ref()
+            .map(|o| map.to_global_vector(o.force.as_slice(), self.nodes.len()));
+        (
+            PreparedAssembly {
+                stiffness,
+                loads,
+                offset,
+            },
+            nonlinear,
+        )
     }
 }
 

@@ -427,6 +427,12 @@ pub enum StageSpec {
     /// first step; patterns that were not held ramp again from `0`. Load patterns and their
     /// loads stay defined. Takes no steps and records nothing.
     Reset { id: String },
+    /// Installs the stud walls' sheathing (pier shear fields and floor-zone bays) at the current state
+    /// (`Domain::install_stud_wall_sheathing`, `docs/stud-wall-panel.md` §6.1): with one of these in the sequence every
+    /// sheathed or floor-zone wall is built uninstalled, so the stages before it take gravity down the framing alone
+    /// (the stick takedown) and the sheathing carries only what the stages after it apply. Takes no steps and records
+    /// nothing; a second one installs nothing more.
+    InstallSheathing { id: String },
     /// Newmark-beta time-history analysis (`core::TransientAnalysis`,
     /// fixed at the unconditionally-stable "average acceleration"
     /// parameters — see its own doc comment). `steps` fixed-size `dt`
@@ -454,6 +460,7 @@ impl StageSpec {
             StageSpec::Static { id, .. }
             | StageSpec::Modal { id, .. }
             | StageSpec::Reset { id }
+            | StageSpec::InstallSheathing { id }
             | StageSpec::Transient { id, .. } => id,
         }
     }

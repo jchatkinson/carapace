@@ -311,6 +311,20 @@ where
         element.stud_wall_response(&self.node_view(), &cases)
     }
 
+    /// Installs every staged stud wall's shear fields at the committed state (`StudWall::install_sheathing`), with the load
+    /// patterns' factors at `pseudo_time`; returns how many it installed. Gravity applied before stays in the framing; the
+    /// sheathing carries what comes after.
+    pub fn install_stud_wall_sheathing(&mut self, pseudo_time: f64) -> usize {
+        let active = active_element_patterns(self.load_patterns.values(), pseudo_time);
+        let view = NodeView::new(&self.nodes);
+        let mut installed = 0;
+        for (id, element) in self.elements.iter_mut() {
+            let (_, cases) = effective_load(&active, id);
+            installed += usize::from(element.install_sheathing(&view, &cases));
+        }
+        installed
+    }
+
     pub fn element_diaphragm_response(&self, id: E::Id) -> Option<DiaphragmResponse> {
         self.elements.get(id)?.diaphragm_response(&self.node_view())
     }

@@ -54,16 +54,7 @@ impl<K: NodeKey> StudWall<K> {
     )> {
         let cache = self.nonlinear.as_ref()?;
         let count = self.comps.len();
-        let mut y = Comps::new();
-        for i in 0..count {
-            let mut yi = (0..ue.len())
-                .map(|j| cache.strain_map[(i, j)] * ue[j])
-                .sum::<f64>();
-            for c in cases {
-                yi += cache.load_strain[c.case as usize][i] * c.factor;
-            }
-            y.push(yi);
-        }
+        let y = self.imposed_strain(ue, cases);
         let jacobian = |d: &Comps| {
             let mut jac = ArrayVec::<f64, { MAX_WALL_PIERS * MAX_WALL_PIERS }>::new();
             jac.extend((0..count * count).map(|k| {

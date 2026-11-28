@@ -209,7 +209,11 @@ fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
             for &element in &bulk.elements {
                 match domain.element_stud_wall_response(element, progress) {
                     Some(r)
-                        if 3 + 3 * (r.studs.len() + r.jacks.len() + r.cripples.len())
+                        if 4 + 3
+                            * (r.studs.len()
+                                + r.jacks.len()
+                                + r.cripples.len()
+                                + r.header.len())
                             == bulk.components as usize =>
                     {
                         out.extend([
@@ -222,6 +226,10 @@ fn append_bulk_values<const NDIM: usize, const NDOF: usize, NId, E>(
                         }
                         for m in r.jacks.iter().chain(&r.cripples) {
                             out.extend([m.x, m.axial, m.axial]);
+                        }
+                        out.push(r.header.len() as f64);
+                        for h in &r.header {
+                            out.extend([h.x, h.shear, h.moment]);
                         }
                     }
                     _ => nan_frame(out),
@@ -704,6 +712,8 @@ pub(super) enum CompiledStageKind<NId> {
     Modal { num_modes: usize },
     /// Swaps the domain for its as-built copy (`ModelSession::pristine`); `steps` is `0`.
     Reset,
+    /// Installs the staged stud walls' sheathing; `steps` is `0`.
+    InstallSheathing,
     Transient {
         algorithm: Algorithm,
         convergence: ConvergenceTest,
@@ -1273,6 +1283,17 @@ where
             self.load_factor = 0.0;
             return;
         }
+        if matches!(stage.kind, CompiledStageKind::InstallSheathing) {
+            // At the committed state, with every pattern at its factor where the next stage starts. A no-step stage, held
+            // like a reset's domain until it ends.
+            domain.install_stud_wall_sheathing(self.carried_load_factor);
+            self.runner = Some(StageRunner::Reset {
+                domain,
+                steps_remaining: 0,
+            });
+            self.load_factor = self.carried_load_factor;
+            return;
+        }
         for &(pattern, node, dof, value) in &stage.pending_nodal_loads {
             domain.add_nodal_load(pattern, node, dof, value);
         }
@@ -1328,7 +1349,9 @@ where
                 }
                 Err(error) => self.error = Some(error.into()),
             },
-            CompiledStageKind::Reset => unreachable!("handled above"),
+            CompiledStageKind::Reset | CompiledStageKind::InstallSheathing => {
+                unreachable!("handled above")
+            }
             CompiledStageKind::Transient {
                 algorithm,
                 convergence,
@@ -1480,7 +1503,8 @@ where
             } => hold_patterns_after.clone(),
             CompiledStageKind::Modal { .. }
             | CompiledStageKind::Transient { .. }
-            | CompiledStageKind::Reset => Vec::new(),
+            | CompiledStageKind::Reset
+            | CompiledStageKind::InstallSheathing => Vec::new(),
         };
         let load_factor = self.load_factor;
 
@@ -1498,7 +1522,9 @@ where
         };
         self.carried_load_factor = match &self.stages[self.current_stage].kind {
             CompiledStageKind::Static { .. } if hold_patterns_after.is_empty() => load_factor,
-            CompiledStageKind::Modal { .. } => self.carried_load_factor,
+            CompiledStageKind::Modal { .. } | CompiledStageKind::InstallSheathing => {
+                self.carried_load_factor
+            }
             _ => 0.0,
         };
         for pattern in hold_patterns_after {

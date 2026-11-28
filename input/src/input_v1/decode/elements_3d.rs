@@ -190,6 +190,12 @@ pub(super) fn decode(input: CarapaceInputV1) -> Result<Session3, DecodeError> {
             &input.nodes,
             &node_at,
             &wall_plan.cases,
+            input.sequence.stages.iter().any(|s| {
+                matches!(
+                    s,
+                    crate::input_v1::sequence::StageSpec::InstallSheathing { .. }
+                )
+            }),
         )?,
     );
     elements.set(
@@ -227,11 +233,13 @@ fn decode_stud_walls3(
     node_table: &NodeTable,
     node: &impl Fn(u32, &'static str) -> Result<Node3Id, DecodeError>,
     cases: &[Vec<Vec<WallLoad>>],
+    staged: bool,
 ) -> Result<Vec<Element3Id>, DecodeError> {
     let mut out = Vec::with_capacity(t.len());
     for (i, r) in t.iter().enumerate() {
         let (corners, stations, layout) = decode_stud_wall_row(node_table, 3, i, r, node)?;
         let wall = StudWall::new3(corners, stations, layout, cases[i].clone())
+            .and_then(|w| if staged { w.stage_sheathing() } else { Ok(w) })
             .map_err(|e| stud_wall_error(i, e.to_string()))?;
         out.push(d.add_element(Element3::StudWall(wall)));
     }

@@ -17,6 +17,7 @@ mod stud_wall_guide_example;
 mod stud_wall_multistorey;
 mod stud_wall_openings;
 mod stud_wall_patterns;
+mod stud_wall_staged;
 mod stud_wall_takedown;
 mod tangent_fd;
 mod truss;

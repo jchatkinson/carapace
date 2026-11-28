@@ -43,7 +43,7 @@ pub use stud_wall::{
     ChordDistribution, FloorZone, StudWall, StudWallError, StudWallLayout, StudWallResponse,
     WallAxialResponse, WallBaseResponse, WallBearing, WallChord, WallChordResponse, WallFloorBay,
     WallHeaderResponse, WallHoldDownResponse, WallLoad, WallMemberResponse, WallOpening,
-    WallPierResponse, WallSheathing, WallStation, WallStud,
+    WallPierResponse, WallSheathing, WallStation, WallStud, STAGED_SCALE,
 };
 pub use tri3::Tri3;
 pub use truss::{SpatialElementMatrix, SpatialElementVector, Truss, Truss3};
@@ -292,6 +292,17 @@ impl ElementOps<PLANAR_NDIM, NDF, NodeId> for Element {
         match self {
             Element::StudWall(w) => Some(w.response(nodes, cases)),
             _ => None,
+        }
+    }
+
+    fn install_sheathing(
+        &mut self,
+        nodes: &NodeView<'_, PLANAR_NDIM, NDF, NodeId>,
+        cases: &[WallCaseLoad],
+    ) -> bool {
+        match self {
+            Element::StudWall(w) => w.install_sheathing(nodes, cases),
+            _ => false,
         }
     }
 
@@ -824,6 +835,17 @@ impl ElementOps<SPATIAL_NDIM, SPATIAL_NDF, Node3Id> for Element3 {
         match self {
             Element3::StudWall(w) => Some(w.response(nodes, cases)),
             _ => None,
+        }
+    }
+
+    fn install_sheathing(
+        &mut self,
+        nodes: &NodeView<'_, SPATIAL_NDIM, SPATIAL_NDF, Node3Id>,
+        cases: &[WallCaseLoad],
+    ) -> bool {
+        match self {
+            Element3::StudWall(w) => w.install_sheathing(nodes, cases),
+            _ => false,
         }
     }
 

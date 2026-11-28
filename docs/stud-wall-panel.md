@@ -3,7 +3,7 @@
 Status: background and long-term design. **What is implemented is specified in `docs/stud-wall-v1.md`**
 (linear elastic framing, per-pier sheathing laws: linear, CSA O86 nail slip, or any uniaxial material), which
 supersedes this document wherever they differ; how to use it is in the user guide, `docs/stud-wall.md`. This
-document keeps the rationale and the features still deferred (staged installation, nonlinear framing,
+document keeps the rationale and the features still deferred (nonlinear framing,
 out-of-plane output, wire format). Revised after review (Codex; Bentley's RAM Structural System walls FAQ,
 KB0112985).
 
@@ -238,6 +238,11 @@ element-failure path; this element depends on it.
 ## 6. Sheathing, gravity and racking
 
 ### 6.1 Not relying on the sheathing
+
+> Implemented (2026-11-26) as one stage action for every wall rather than a per-wall `install` property: a sequence with an
+> `installSheathing` stage builds every sheathed or floor-zone wall uninstalled, and the floor-zone shear bays are staged with
+> the sheathing. Uninstalled fields keep 1e-6 of their stiffness instead of a separate `rackingStiffness`. See
+> [stud-wall.md §6](stud-wall.md#staged-sheathing-gravity-by-the-framing-lateral-by-the-sheathing).
 
 Sheathing spreads gravity load between studs. That effect is real but unquantified: sheathing is often
 installed after most of the dead-load deformation has happened through direct bearing.

@@ -1324,7 +1324,8 @@ fn wall_load_and_floor_pattern_round_trip() {
 
 /// `memberForce` bulk recorder on the window wall under a top line load: counts and positions follow the layout
 /// (8 full-height studs, the 2 jacks at the opening edges, 3 cripples inside it), and the members reaching the
-/// bottom plate (full-height studs at their bottom end, jacks) carry the base reaction (statics, 1e-9 relative).
+/// bottom plate (full-height studs at their bottom end, jacks) carry the base reaction (statics, 1e-9 relative). The header
+/// points (both ends of its 4 segments between the jacks and cripples) give the simply supported header's shear and moment.
 #[test]
 fn stud_wall_member_force_bulk_recorder() {
     use carapace_input::input_v1::sequence::{BulkQuantity, BulkTable};
@@ -1392,9 +1393,24 @@ fn stud_wall_member_force_bulk_recorder() {
     assert!(output.done && output.error.is_none(), "{output:?}");
     let batch = &output.bulk_batches[0];
     let v = &batch.values;
-    assert_eq!((batch.points, batch.components), (1, 3 + 3 * 13));
+    assert_eq!((batch.points, batch.components), (1, 4 + 3 * (13 + 8)));
     assert_eq!([v[0], v[1], v[2]], [8., 2., 3.]);
-    let members: Vec<[f64; 3]> = v[3..].chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let members: Vec<[f64; 3]> = v[3..42].chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+    assert_eq!(v[42], 8.);
+    let header: Vec<[f64; 3]> = v[43..].chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+    // Each cripple brings its 1200 N down onto the header, which spans 1200..2800 on the jacks: 1800 N reactions, no end
+    // moment, and a sagging 1800·800 − 1200·400 = 960 kN·mm at midspan; shear 1800 then 600 left of midspan.
+    let close = |a: f64, b: f64| (a - b).abs() <= 1e-6 * 1e6;
+    let at = |x: f64| header.iter().filter(move |h| h[0] == x);
+    assert!(
+        at(1200.).chain(at(2800.)).all(|h| close(h[2], 0.)),
+        "{header:?}"
+    );
+    assert!(at(2000.).all(|h| close(h[2], 960_000.)), "{header:?}");
+    assert!(
+        close(header[0][1], 1800.) && close(header[2][1], 600.),
+        "{header:?}"
+    );
     let sorted = |r: std::ops::Range<usize>| {
         let mut x: Vec<f64> = members[r].iter().map(|m| m[0]).collect();
         x.sort_by(f64::total_cmp);

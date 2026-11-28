@@ -24,7 +24,7 @@ pub use elements::{
     VectorSink, WallAxialResponse, WallBaseResponse, WallBearing, WallChord, WallChordResponse,
     WallFloorBay, WallHeaderResponse, WallHoldDownResponse, WallLoad, WallMemberResponse,
     WallOpening, WallPierResponse, WallShearLaw, WallSheathing, WallStation, WallStud, ZeroLength,
-    ZeroLength3, ZeroLengthSection, ZeroLengthSection3, MAX_ELEMENT_NODES,
+    ZeroLength3, ZeroLengthSection, ZeroLengthSection3, MAX_ELEMENT_NODES, STAGED_SCALE,
 };
 pub use error::ModelError;
 pub use fiber_section::{Fiber, Fiber3, FiberSection, FiberSection3};

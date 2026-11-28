@@ -141,6 +141,8 @@ pub(super) fn compile_stages<NId: Copy, EId: Copy, Load: Clone>(
                 ),
                 // Takes no steps: the domain is swapped for its pristine copy when the stage starts.
                 StageSpec::Reset { .. } => (0, CompiledStageKind::Reset),
+                // Takes no steps: the walls' sheathing is installed when the stage starts.
+                StageSpec::InstallSheathing { .. } => (0, CompiledStageKind::InstallSheathing),
                 StageSpec::Transient {
                     steps,
                     dt,

@@ -283,6 +283,18 @@ Floor gravity loads reach a wall as top-plate loads computed by the one-way floo
   material states advance only at `commit`.
 - Static analysis only: the element has no mass, so it contributes nothing to modal or transient analysis.
 
+### Staged sheathing: gravity by the framing, lateral by the sheathing
+
+Installed from the start, the pier sheathing and the floor zone's shear bays share gravity between studs wherever their
+shortening differs: a point load at a pier end moves through the sheathing to the far end post, and the floor zone pulls
+load toward the stiffer end posts. A hand takedown leaves the sheathing out. `StudWall::stage_sheathing` builds a wall with
+its shear fields uninstalled (at `STAGED_SCALE` = 1e-6 of their stiffness, which closes the racking mode; vertical load does
+not drive it), and `Domain::install_stud_wall_sheathing(pseudo_time)` installs every staged wall at the committed state,
+stress-free and continuous. So: apply gravity (stud, post, jack and header forces are the stick takedown), hold it, install,
+then apply lateral load, which the sheathing carries in full. Loads applied after installation are shared like any other,
+so keep gravity before it. On the wire this is the `installSheathing` stage (`docs/input-format.md`). Tests:
+`core/tests/elements/stud_wall_staged.rs`.
+
 ## 7. Results
 
 `domain.element_stud_wall_response(id, pseudo_time) -> Option<StudWallResponse>` recovers the internal

@@ -258,6 +258,16 @@ pub trait ElementOps<const NDIM: usize, const NDOF: usize, NId: NodeKey>: Send +
         None
     }
 
+    /// Installs a staged stud wall's shear fields at the committed state (`StudWall::install_sheathing`); `true` when this
+    /// element had any waiting.
+    fn install_sheathing(
+        &mut self,
+        _nodes: &NodeView<'_, NDIM, NDOF, NId>,
+        _cases: &[WallCaseLoad],
+    ) -> bool {
+        false
+    }
+
     fn diaphragm_response(
         &self,
         _nodes: &NodeView<'_, NDIM, NDOF, NId>,

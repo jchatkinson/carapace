@@ -508,6 +508,9 @@ impl<K: NodeKey> StudWall<K> {
             material_states,
             committed_gamma: ArrayVec::new(),
             committed_q: ArrayVec::new(),
+            cases,
+            pending: None,
+            offset: None,
         })
     }
 }
