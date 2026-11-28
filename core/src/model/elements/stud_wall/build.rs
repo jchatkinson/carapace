@@ -208,6 +208,37 @@ impl<K: NodeKey> StudWall<K> {
             &mut beams,
             &mut axial_chords,
         );
+        // `Direct`: the plate is hinged at every stud, so a top station between studs (an attach point) sits on a plate
+        // segment simply supported on the studs either side; the segment is a beam (`top_ei`) through the stations, with
+        // its own end rotations (the hinges), and its load reaches the studs by the lever rule.
+        if layout.top_distribution == ChordDistribution::Direct {
+            let tol = 1e-12 * layout.length.max(1.);
+            let on_stud = |x: f64| layout.studs.iter().any(|s| (s.x - x).abs() <= tol);
+            let ei = layout.top_ei.unwrap_or(0.);
+            let mut i = 0;
+            while i + 1 < top_nodes.len() {
+                let j = (i + 1..top_nodes.len())
+                    .find(|&j| on_stud(top_nodes[j].0))
+                    .ok_or_else(|| StudWallError("a top station has no stud beyond it".into()))?;
+                if j > i + 1 {
+                    let rot: Vec<usize> = (i..=j)
+                        .map(|_| {
+                            model.grow();
+                            model.ndof - 1
+                        })
+                        .collect();
+                    for k in i..j {
+                        let (a, b) = (top_nodes[k], top_nodes[k + 1]);
+                        model.add_beam4(
+                            [a.1[1], rot[k - i], b.1[1], rot[k + 1 - i]],
+                            ei,
+                            b.0 - a.0,
+                        );
+                    }
+                }
+                i = j;
+            }
+        }
         for pair in bottom_nodes.windows(2) {
             if layout
                 .openings

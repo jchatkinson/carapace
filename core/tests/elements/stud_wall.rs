@@ -1602,3 +1602,80 @@ fn unloaded_stations_inside_a_pier_leave_response_unchanged() {
         near(a.top, b.top, 1e-10);
     }
 }
+
+/// Top stations between studs (attach points) on a `Direct` plate: the plate spans between the studs either side,
+/// so loads on the stations reach them by the lever rule, with and without a floor zone. Reference: stud-wall §2
+/// (statics of a simply supported plate segment); 1e-9 of the load.
+#[test]
+fn top_stations_between_studs_load_the_studs_by_the_lever_rule() {
+    for zone in [None, Some(254.)] {
+        let (length, height, p1, p2) = (1200., 2440., 10e3, 6e3);
+        let top = height + zone.unwrap_or(0.);
+        let mut d: D2 = Domain::new();
+        let corners = [
+            d.add_node(Node::new([0., 0.]).fix(0).fix(1)),
+            d.add_node(Node::new([length, 0.]).fix(0).fix(1)),
+            d.add_node(Node::new([length, top])),
+            d.add_node(Node::new([0., top])),
+        ];
+        let at = [500., 700.].map(|x| (x, d.add_node(Node::new([x, top]))));
+        let stations = at
+            .iter()
+            .map(|&(x, node)| WallStation {
+                chord: WallChord::Top,
+                x,
+                node,
+            })
+            .collect();
+        let layout = StudWallLayout {
+            length,
+            height,
+            studs: (0..=3)
+                .map(|i| WallStud {
+                    x: i as f64 * 400.,
+                    ea: 30e6,
+                })
+                .collect(),
+            top_ea: 30e6,
+            top_ei: Some(2e9),
+            top_distribution: ChordDistribution::Direct,
+            bottom_ea: 30e6,
+            bottom_ei: 2e9,
+            openings: vec![],
+            sheathing: Some(carapace_core::model::WallSheathing {
+                law: carapace_core::model::WallShearLaw::Linear { ga: 2e5 },
+            }),
+            foundation: true,
+            bearing: None,
+            floor: zone.map(|depth| carapace_core::model::FloorZone {
+                depth,
+                ga: 1e5,
+                rim_ea: 0.,
+            }),
+        };
+        let id = d.add_element(Element::StudWall(
+            StudWall::new(corners, stations, layout, vec![]).unwrap(),
+        ));
+        let pattern = d.default_pattern();
+        d.add_nodal_load(pattern, at[0].1, 1, -p1);
+        d.add_nodal_load(pattern, at[1].1, 1, -p2);
+        let mut a = AnalysisBuilder::new()
+            .constraint_handler(ConstraintHandler::Transformation)
+            .integrator(Integrator::LoadControl { increment: 1. })
+            .algorithm(Algorithm::Linear)
+            .test(ConvergenceTest::NormUnbalance {
+                tol: 1e-9,
+                max_iter: 4,
+            })
+            .build(d);
+        a.step().expect("attach-point solve");
+        let r = a.domain().element_stud_wall_response(id, 1.).unwrap();
+        let stud = |x: f64| r.studs.iter().find(|s| (s.x - x).abs() < 1e-9).unwrap().top;
+        // Both stations lie between the studs at 400 and 800.
+        let left = p1 * (800. - 500.) / 400. + p2 * (800. - 700.) / 400.;
+        near(-stud(400.), left, 1e-9 * p1);
+        near(-stud(800.), p1 + p2 - left, 1e-9 * p1);
+        near(stud(0.), 0., 1e-9 * p1);
+        near(stud(1200.), 0., 1e-9 * p1);
+    }
+}

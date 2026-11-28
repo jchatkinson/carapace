@@ -167,8 +167,9 @@ degenerate/non-orthogonal geometry and constructor failures produce decode error
 
 `layout.floor` is optional: `{ depth, ga, rimEa }` puts a floor zone of depth `depth` on top of the wall (shear
 rigidity `ga > 0`, rim axial stiffness `rimEa >= 0`; see [stud-wall.md](stud-wall.md#2a-floor-zone)). The exterior top
-corners `c2`, `c3` and every top station then lie at local `y = H + depth`, each top station must coincide with a
-stud, jack or cripple position, and top loads act on that exterior row. There is no `floorBands` table, `floorBand`
+corners `c2`, `c3` and every top station then lie at local `y = H + depth`, and top loads act on that exterior row.
+A top station between studs is an attach point: with `topDistribution: "direct"` it needs `topEi` (the plate spans
+between the studs either side; see [stud-wall.md](stud-wall.md)). There is no `floorBands` table, `floorBand`
 element kind or `floorBandBay` recorder: a floor band is the zone of the wall below it, joined to the wall above by
 vertical `zeroLengths` and `equalDofs`. `building::expand` takes the zone from its storey (`floorDepth`, `bandGa`, `rimEa`) and rejects a spec wall's
 `layout.floor`.

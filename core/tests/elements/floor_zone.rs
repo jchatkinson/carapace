@@ -768,7 +768,7 @@ fn validates_the_zone_and_its_stations() {
         let e = build(zone, vec![]).expect("invalid zone must be rejected");
         assert!(e.contains(text), "{e}");
     }
-    // A top station off every stud, jack and cripple position cannot take a rigid post.
+    // A top station between studs on a Direct plate needs the plate's EI (it spans between the studs).
     let off = {
         let mut d: D2 = D2::new();
         d.add_node(Node::new([1000., 2694.]))
@@ -781,8 +781,8 @@ fn validates_the_zone_and_its_stations() {
             node: off,
         }],
     )
-    .expect("off-stud station must be rejected");
-    assert!(e.contains("floor-zone top station"), "{e}");
+    .expect("an off-stud station without top.ei must be rejected");
+    assert!(e.contains("top.ei"), "{e}");
 }
 
 // --- Stacks ----------------------------------------------------------------------------------------------

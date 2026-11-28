@@ -172,35 +172,18 @@ pub(super) fn validate_layout<K: NodeKey>(
         {
             return Err(StudWallError(format!("stations[{i}] lies inside a door")));
         }
-        if l.floor.is_some()
-            && s.chord == WallChord::Top
+        // A top station between studs (cripples count) needs the plate's EI: with `Direct` the plate spans between the
+        // studs either side as a simply supported beam, so its load reaches them by the lever rule.
+        if s.chord == WallChord::Top
+            && l.top_distribution == ChordDistribution::Direct
             && !l
                 .studs
                 .iter()
-                .map(|w| w.x)
-                .chain(
-                    l.openings
-                        .iter()
-                        .filter(|_| l.top_distribution == ChordDistribution::Beam)
-                        .flat_map(|o| [o.x0, o.x1]),
-                )
-                .any(|x| (x - s.x).abs() < 1e-12 * l.length.max(1.))
+                .any(|w| (w.x - s.x).abs() < 1e-12 * l.length.max(1.))
+            && l.top_ei.is_none_or(|x| !x.is_finite() || x <= 0.)
         {
             return Err(StudWallError(format!(
-                "stations[{i}] floor-zone top station must coincide with a stud, jack or cripple position"
-            )));
-        }
-        if l.top_distribution == ChordDistribution::Direct
-            && s.chord == WallChord::Top
-            && !l.studs.iter().any(|w| w.x == s.x)
-            && !l.openings.iter().any(|o| {
-                l.studs
-                    .iter()
-                    .any(|w| w.x == s.x && w.x > o.x0 && w.x < o.x1)
-            })
-        {
-            return Err(StudWallError(format!(
-                "stations[{i}] direct top station must coincide with a stud or cripple"
+                "stations[{i}] is a top station between studs: top.ei must be positive and finite (the plate spans between the studs)"
             )));
         }
     }

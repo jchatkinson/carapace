@@ -45,7 +45,11 @@ Contents: [1 Geometry](#1-geometry-and-nodes) · [2 Layout](#2-layout) · [2a Fl
 - **Stations** (`WallStation { chord: Top | Bottom, x, node }`) are extra exterior nodes on a plate, at local
   `x`. Use them where something else connects to the plate between the corners: a floor or the wall above
   (to transfer bearing at each stud), a drag strut, a beam bearing on the top plate, a sill anchor you want to
-  model as a spring. Every station's node must lie at its plate point.
+  model as a spring. Every station's node must lie at its plate point. A top station may lie between studs (an
+  attach point, e.g. a joist or beam bearing between studs): with `Beam` it is a node of the plate beam; with
+  `Direct` the plate segment between the studs either side becomes a simply supported beam (`top_ei` required)
+  through the station(s), so its load reaches those studs by the lever rule. That segment's plate moment is not
+  reported.
 - **Exterior DOFs are `ux` and `uy` only.** The element never connects nodal rotations: plate splices and
   plate-to-floor connections are not moment connections. A node used only by stud walls has no rotational
   equation (Carapace activates only DOFs some element stiffens), so you need not fix `rz`.
@@ -120,8 +124,8 @@ condensed with the other internals (the nonlinear `O86` and `Material` laws keep
   vertical load path. Crushing and hold-downs are the links *between* walls, at coincident nodes on the storey
   grid, so the zone itself has no vertical flexibility.
 
-Every top station must coincide with a stud, jack or cripple position (an error otherwise), since a post stands
-there. Place stations at every stud where the wall above bears. Top loads act on the exterior row (see
+A top station between studs is an attach point (see Stations in Section 1): its rigid post stands on the plate,
+which carries it to the studs either side. Place stations at every stud where the wall above bears. Top loads act on the exterior row (see
 [Section 5](#5-loads)). `moment_top` is at the framing top; `moment_base` uses the true lever.
 
 **Stacking.** The wall above starts on new nodes coincident with the exterior top nodes of the wall below.
@@ -138,7 +142,7 @@ in-plane horizontals with `equal_dof`. The building builder does exactly this ([
 | 2- and 5-storey stacks (254 mm rigid zones) vs the exact hand walk with true levers | 1e-5 (chords, moments 1e-6) |
 | Window wall with a real rim: pier shears sum to the load; pier moments vs `V_p(H+d)` | 1e-8; 1% (0.5% observed) |
 | Rigid translation and rotation: zero element force, bay strain and rim force | 1e-9 of `GA·a` scale |
-| Layout errors named (`floor.depth`, `floor.ga`, `floor.rim_ea`, off-stud top station) | exact |
+| Layout errors named (`floor.depth`, `floor.ga`, `floor.rim_ea`, off-stud top station without `top_ei`) | exact |
 | Equal to the former wall + `FloorBand` + links model (numbers recorded before its removal): one storey, window wall incl. bay flows and rim forces | 1e-8 |
 | Same, 2- and 5-storey stacks | 1e-6 (observed 1e-7: the old model's own statics residual is 3e-8) |
 | Z-up 3D wall equals 2D (bay flows, rim, piers, base, top displacements); Z-up 2-storey stack | 1e-10 |
@@ -532,9 +536,8 @@ very soft or descending `Material` branches.
 - studs not strictly increasing, or not starting at `0` and ending at `L`;
 - openings out of range (`0 < x0 < x1 < L`, `0 < head_height < H`), overlapping, or without a full-height
   stud between them;
-- with `Direct`, a top station not at a stud or cripple; a bottom station inside a door;
-- a floor zone with a non-positive or non-finite `depth` or `ga`, a negative or non-finite `rim_ea`, or (with the
-  zone) a top station not at a stud, jack or cripple position (`Beam` also allows opening edges);
+- with `Direct`, a top station between studs and no positive `top_ei`; a bottom station inside a door;
+- a floor zone with a non-positive or non-finite `depth` or `ga`, or a negative or non-finite `rim_ea`;
 - corners or stations reusing a node; a singular internal stiffness (a layout bug, never regularized);
 - too many exterior nodes (256) or, for `O86`/`Material` walls, more than 16 piers.
 
